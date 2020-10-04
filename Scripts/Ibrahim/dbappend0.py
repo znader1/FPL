@@ -12,7 +12,7 @@ mydir=os.getcwd
 print(mydir)
 print("Current Working Directory " , os. getcwd())
 # print(os.getenv)
-os.chdir("c:/zcn17")
+os.chdir("/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Scripts/Ibrahim")
 print("Current Working Directory " , os. getcwd())
 
         
@@ -36,7 +36,7 @@ try:
   
   
     # read_players = pd.read_csv (r'C:\zcn17\players.csv')
-    read_players = pd.read_csv ('players.csv')
+    read_players = pd.read_csv ('../../Data/2020-08-26_fpl_players.csv')
   # read_players['date'] = datetime.datetime.today().date()
    # read_players['date'] = '2020-08-26'
     read_players['date'] = datetime.datetime(2020,8,26)
@@ -109,7 +109,7 @@ try:
   
   
     # read_players = pd.read_csv (r'C:\zcn17\players.csv')
-    read_teams = pd.read_csv ('teams.csv')
+    read_teams = pd.read_csv ('../../Data/teams.csv')
   # read_players['date'] = datetime.datetime.today().date()
    # read_players['date'] = '2020-08-26'
     read_teams['date'] = datetime.datetime(2020,8,26)
