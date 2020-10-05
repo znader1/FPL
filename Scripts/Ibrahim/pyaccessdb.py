@@ -1,5 +1,6 @@
+import sqlite3
 try:
-  #  print("try debut")
+#  print("try debut")
     sqliteConnection = sqlite3.connect('fpl.db')
     sqlite_create_table_query ='''CREATE TABLE  PLAYERS 
         ([date] text, 
