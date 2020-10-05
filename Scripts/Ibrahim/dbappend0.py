@@ -1,3 +1,4 @@
+#5/10/2020 add comment to test submot + pull request 
 import sqlite3
 import pandas as pd
 import os
@@ -53,10 +54,10 @@ try:
 # find the index no OK
     # index_no = read_players.columns.get_loc(col_name) 
     # print("Index of {} column in given dataframe is : {}".format(col_name, index_no))
-
  
  
    # read_players['date'] =datetime.datetime(2020, 8, 26)
+
 # calling head() method   
 # storing in new variable  
    # data_top = read_players.head()  
