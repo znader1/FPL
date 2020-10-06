@@ -205,7 +205,7 @@ dataset['date'] = datetime.datetime.today().date()
 # Generate a unique filename based on date
 filename = str(datetime.datetime.today().date()) + '_fpl_players'+'.csv'
 # Save the table of data as a CSV
-dataset.to_csv(index=False, path_or_buf=filename)
+dataset.to_csv(index=False, path_or_buf='../../../Data/Files/'+filename)
 
 # %%
 
