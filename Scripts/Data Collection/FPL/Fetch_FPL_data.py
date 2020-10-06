@@ -209,7 +209,7 @@ dataset.to_csv(index=False, path_or_buf='../../../Data/Files/'+filename)
 
 # %%
 
-filename = 'teams.csv'
+filename = str(datetime.datetime.today().date()) + '_teams'+'.csv'
 # Save the table of data as a CSV
-all_teams.to_csv(index=False, path_or_buf=filename)
+all_teams.to_csv(index=False, path_or_buf='../../../Data/Files/'+filename)
 # %%
