@@ -11,7 +11,9 @@ mydir=os.getcwd
 print(mydir)
 print("Current Working Directory " , os. getcwd())
 # print(os.getenv)
-os.chdir("c:/zcn17")
+#os.chdir("c:/zcn17")
+path=r'C:\Users\admin\Desktop\FPL\FPL\DATA'
+os.chdir(path)
 print("Current Working Directory " , os. getcwd())
 
 import sqlite3
@@ -77,6 +79,12 @@ all_teams.columns = ['id' , 'code' , 'name','strength' ,'short_name','strength_o
 #                 'strength_defence_away': all_teams[:, 9]})
 
 all_teams['date'] = datetime.datetime.today().date()
+
+filename =str(datetime.datetime.today().date()) + '_fpl_teams'+'.csv'
+# Save the table of data as a CSV6
+all_teams.to_csv(index=False, path_or_buf=filename)
+# %%
+
 #save to database fpl.db
 try:
     print("try debut")
@@ -275,7 +283,3 @@ finally:
         print("sqlite connection is closed")
 # %%
 
-filename =str(datetime.datetime.today().date()) + '_fpl_teams'+'.csv'
-# Save the table of data as a CSV6
-all_teams.to_csv(index=False, path_or_buf=filename)
-# %%
