@@ -1,26 +1,42 @@
-#####################
 
-# This Script connects to the Fantasy Premier League official website via the following link : 
-# link = "https://fantasy.premierleague.com/api/bootstrap-static/"
-# It returns two dated csv files that contain the following : 
-#### 1. players.csv that has all player information from FPL website : total points , points per game etc..
-#### 2. teams.csv that has all the team information concerning their strength , home and away
-
-#Main Libraries to import
+#%%
 import requests
 import json
 import numpy as np
 import pandas as pd
 import datetime
 
+import os
+mydir=os.getcwd 
+print(mydir)
+print("Current Working Directory " , os. getcwd())
+# print(os.getenv)
+#os.chdir("c:/zcn17")
+path=r'C:\Users\admin\Desktop\FPL\FPL\DATA'
+os.chdir(path)
+print("Current Working Directory " , os. getcwd())
+
+import sqlite3
+
+# %%
 # Make a get request to get the latest player data from the FPL API
 link = "https://fantasy.premierleague.com/api/bootstrap-static/"
 response = requests.get(link)
 
+# %%
 # Convert JSON data to a python object
 data = json.loads(response.text)
 
-#Get team information and store in dataframe
+
+#%%
+#Get teams from the code : 
+#{"code":36,"draw":0,"form":null,"id":3,"loss":0,"name":"Brighton",
+# "played":0,"points":0,"position":0,"short_name":"BHA","strength":2,
+# "team_division":null,"unavailable":false,"win":0,
+# "strength_overall_home":1070,"strength_overall_away":1070,
+# "strength_attack_home":1100,"strength_attack_away":1130,
+# "strength_defence_home":1060,"strength_defence_away":1060,
+# "pulse_id":131}
 
 all_teams = []
 
@@ -43,6 +59,8 @@ for i in data["teams"]:
     # Append the player array to a 2D array of all players
     all_teams.append(team_info)
 
+#%%
+
 # Convert the 2D array to a numpy array
 all_teams = pd.DataFrame(all_teams)
 all_teams.columns = ['id' , 'code' , 'name','strength' ,'short_name','strength_overall_home',
@@ -62,6 +80,37 @@ all_teams.columns = ['id' , 'code' , 'name','strength' ,'short_name','strength_o
 
 all_teams['date'] = datetime.datetime.today().date()
 
+filename =str(datetime.datetime.today().date()) + '_fpl_teams'+'.csv'
+# Save the table of data as a CSV6
+all_teams.to_csv(index=False, path_or_buf=filename)
+# %%
+
+#save to database fpl.db
+try:
+    print("try debut")
+    sqliteConnection = sqlite3.connect('fpl.db')
+    cursor = sqliteConnection.cursor()
+    print("Successfully Connected to SQLite")
+
+    # read_players = pd.read_csv (r'C:\zcn17\players.csv')
+ #inutile mntenant   read_players = pd.read_csv ('players.csv')
+  # read_players['date'] = datetime.datetime.today().date()
+   # read_players['date'] = '2020-08-26'
+ #inutile   read_players['date'] = datetime.datetime(2020,8,26)
+   # read_players.to_sql('PLAYERS', sqliteConnection, if_exists='append', index = False) 
+    all_teams.to_sql('TEAMS', sqliteConnection, if_exists='append', index = False)
+    sqliteConnection.commit()
+    print("SQLite table TEAMS appended")
+
+    cursor.close()
+
+except sqlite3.Error as error:
+    print("Error while appending a sqlite table", error)
+
+finally:
+    if (sqliteConnection):
+        sqliteConnection.close()
+        print("sqlite connection is closed")
 # %%
 # Initialize array to hold ALL player data
 # This will be a 2D array where each row is a different player
@@ -205,11 +254,32 @@ dataset['date'] = datetime.datetime.today().date()
 # Generate a unique filename based on date
 filename = str(datetime.datetime.today().date()) + '_fpl_players'+'.csv'
 # Save the table of data as a CSV
-dataset.to_csv(index=False, path_or_buf='../../../Data/Files/'+filename)
+dataset.to_csv(index=False, path_or_buf=filename)
+#save to database fpl.db
+try:
+    print("try debut")
+    sqliteConnection = sqlite3.connect('fpl.db')
+    cursor = sqliteConnection.cursor()
+    print("Successfully Connected to SQLite")
 
+    # read_players = pd.read_csv (r'C:\zcn17\players.csv')
+ #inutile mntenant   read_players = pd.read_csv ('players.csv')
+  # read_players['date'] = datetime.datetime.today().date()
+   # read_players['date'] = '2020-08-26'
+ #inutile   read_players['date'] = datetime.datetime(2020,8,26)
+   # read_players.to_sql('PLAYERS', sqliteConnection, if_exists='append', index = False) 
+    dataset.to_sql('PLAYERS', sqliteConnection, if_exists='append', index = False)
+    sqliteConnection.commit()
+    print("SQLite table PLAYERS appended")
+
+    cursor.close()
+
+except sqlite3.Error as error:
+    print("Error while appending a sqlite table", error)
+
+finally:
+    if (sqliteConnection):
+        sqliteConnection.close()
+        print("sqlite connection is closed")
 # %%
 
-
-# Save the table of data as a CSV
-all_teams.to_csv(index=False, path_or_buf='../../../Data/Files/'+filename)
-# %%
