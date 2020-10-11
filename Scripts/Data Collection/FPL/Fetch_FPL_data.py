@@ -1,31 +1,31 @@
+#####################
 
-#%%
+# This Script connects to the Fantasy Premier League official website via the following link : 
+# link = "https://fantasy.premierleague.com/api/bootstrap-static/"
+# It returns two dated csv files that contain the following : 
+#### 1. players.csv that has all player information from FPL website : total points , points per game etc..
+#### 2. teams.csv that has all the team information concerning their strength , home and away
+
+#Main Libraries to import
 import requests
 import json
 import numpy as np
 import pandas as pd
 import datetime
 
-# %%
 # Make a get request to get the latest player data from the FPL API
 link = "https://fantasy.premierleague.com/api/bootstrap-static/"
 response = requests.get(link)
 
+<<<<<<< HEAD:Scripts/Fantasy_points.py
 
 # %%
+=======
+>>>>>>> master:Scripts/Data Collection/FPL/Fetch_FPL_data.py
 # Convert JSON data to a python object
 data = json.loads(response.text)
 
-
-#%%
-#Get teams from the code : 
-#{"code":36,"draw":0,"form":null,"id":3,"loss":0,"name":"Brighton",
-# "played":0,"points":0,"position":0,"short_name":"BHA","strength":2,
-# "team_division":null,"unavailable":false,"win":0,
-# "strength_overall_home":1070,"strength_overall_away":1070,
-# "strength_attack_home":1100,"strength_attack_away":1130,
-# "strength_defence_home":1060,"strength_defence_away":1060,
-# "pulse_id":131}
+#Get team information and store in dataframe
 
 all_teams = []
 
@@ -47,8 +47,6 @@ for i in data["teams"]:
     strength_defence_away]
     # Append the player array to a 2D array of all players
     all_teams.append(team_info)
-
-#%%
 
 # Convert the 2D array to a numpy array
 all_teams = pd.DataFrame(all_teams)

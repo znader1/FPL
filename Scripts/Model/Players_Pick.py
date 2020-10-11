@@ -1,3 +1,16 @@
+## Several functions created 
+# Function that calculates the ROI 
+def calculate_roi_players(players_data_df):
+
+
+
+# Function that creates list of players
+ 
+
+
+#Parameters : Dataframe , Price , Limit GK , Limit DF, 
+# Limit ST , limit MF ,Limit Star Player
+
 list_players = []
 total_price = 0
 team_count = []

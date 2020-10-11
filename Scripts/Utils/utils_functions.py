@@ -29,4 +29,6 @@ def compare_two_teams(datadf, team1, team2, key):
 
 # Function that calculates the ROI  = Feature engineering functions
 
+def calculate_index(players_data_df)
+
 def calculate_roi_players(players_data_df, treshold):
