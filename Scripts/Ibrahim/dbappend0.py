@@ -13,7 +13,7 @@ mydir=os.getcwd
 print(mydir)
 print("Current Working Directory " , os. getcwd())
 # print(os.getenv)
-os.chdir("c:/zcn17")
+os.chdir("/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB")
 print("Current Working Directory " , os. getcwd())
 
         
@@ -37,10 +37,10 @@ try:
   
   
     # read_players = pd.read_csv (r'C:\zcn17\players.csv')
-    read_players = pd.read_csv ('players.csv')
+    read_players = pd.read_csv ('../../Data/Files/2020-10-01_fpl_players.csv')
   # read_players['date'] = datetime.datetime.today().date()
-   # read_players['date'] = '2020-08-26'
-    read_players['date'] = datetime.datetime(2020,8,26)
+   # read_players['date'] = '2020-09-09'
+    read_players['date'] = datetime.datetime(2020,10,1)
     read_players.to_sql('PLAYERS', sqliteConnection, if_exists='append', index = False) 
     sqliteConnection.commit()
     print("SQLite table PLAYERS appended")
@@ -108,9 +108,10 @@ try:
 # display  
    # data_top  
   
+ ###### TEAMS
   
     # read_players = pd.read_csv (r'C:\zcn17\players.csv')
-    read_teams = pd.read_csv ('teams.csv')
+    read_teams = pd.read_csv ('../../Data/Files/teams.csv')
   # read_players['date'] = datetime.datetime.today().date()
    # read_players['date'] = '2020-08-26'
     read_teams['date'] = datetime.datetime(2020,8,26)

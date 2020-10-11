@@ -17,11 +17,6 @@ import datetime
 link = "https://fantasy.premierleague.com/api/bootstrap-static/"
 response = requests.get(link)
 
-<<<<<<< HEAD:Scripts/Fantasy_points.py
-
-# %%
-=======
->>>>>>> master:Scripts/Data Collection/FPL/Fetch_FPL_data.py
 # Convert JSON data to a python object
 data = json.loads(response.text)
 
@@ -210,12 +205,11 @@ dataset['date'] = datetime.datetime.today().date()
 # Generate a unique filename based on date
 filename = str(datetime.datetime.today().date()) + '_fpl_players'+'.csv'
 # Save the table of data as a CSV
-dataset.to_csv(index=False, path_or_buf=filename)
+dataset.to_csv(index=False, path_or_buf='../../../Data/Files/'+filename)
 
 # %%
 
-#filename = 'teams.csv'
-filename = str(datetime.datetime.today().date()) + '_fpl_teams'+'.csv'
+
 # Save the table of data as a CSV
-all_teams.to_csv(index=False, path_or_buf=filename)
+all_teams.to_csv(index=False, path_or_buf='../../../Data/Files/'+filename)
 # %%
