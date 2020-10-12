@@ -13,7 +13,9 @@ mydir=os.getcwd
 print(mydir)
 print("Current Working Directory " , os. getcwd())
 # print(os.getenv)
-os.chdir("c:/zcn17")
+#os.chdir("c:/zcn17")
+path=r'C:\Users\admin\Desktop\FPL\FPL\DATA'
+os.chdir(path)
 print("Current Working Directory " , os. getcwd())
 
         
@@ -37,7 +39,7 @@ try:
   
   
     # read_players = pd.read_csv (r'C:\zcn17\players.csv')
-    read_players = pd.read_csv ('players.csv')
+    read_players = pd.read_csv ('2020-08-26_fpl_players.csv')
   # read_players['date'] = datetime.datetime.today().date()
    # read_players['date'] = '2020-08-26'
     read_players['date'] = datetime.datetime(2020,8,26)
@@ -108,9 +110,9 @@ try:
 # display  
    # data_top  
   
-  
+#  filename =str(datetime.datetime.today().date()) + '_fpl_teams'+'.csv'
     # read_players = pd.read_csv (r'C:\zcn17\players.csv')
-    read_teams = pd.read_csv ('teams.csv')
+    read_teams = pd.read_csv ('2020-08-26_fpl_teams.csv')
   # read_players['date'] = datetime.datetime.today().date()
    # read_players['date'] = '2020-08-26'
     read_teams['date'] = datetime.datetime(2020,8,26)

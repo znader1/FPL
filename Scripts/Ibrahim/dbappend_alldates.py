@@ -2,7 +2,7 @@ import sqlite3
 import pandas as pd
 import os
 import datetime 
-import utils_functions
+#import utils_functions
 
 def getdate(filename):
     #import datetime
@@ -17,7 +17,7 @@ def getdate(filename):
     print("in function : " ,datefile,y,m,d,thisdate)
     #return (datetime.datetime(y,m,d))
     return thisdate
-    
+
 #sqlite3._file_
 #utils_functions.file
 
