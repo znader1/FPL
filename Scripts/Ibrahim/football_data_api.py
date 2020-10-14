@@ -4,6 +4,7 @@ import pandas as pd
 import requests 
 import http.client
 import json
+#import os
 #os.chdir("/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB")
 #print("Current Working Directory " , os. getcwd())
 #%%
@@ -22,7 +23,7 @@ connection.request('GET', link , None, headers )
 #connection.request('GET', '/v2/competitions/DED', None, headers )
 #connection.request('GET', '/v2/competitions/PL/matches?matchday=1', None, headers )
 response = json.loads(connection.getresponse().read().decode())
-#print(len(response))
+print(len(response))
 
 #NON matches = response.json()['matches'] 
 #matches = json_decode(response)
@@ -69,16 +70,21 @@ matchday_dataset = pd.DataFrame({'home': home_teams,
              'away':away_teams, 
              'status':status_matches})
 # %%
-filename = 'matchday1.csv'
+#filename = 'matchday1.csv'
+path=r"C:\\Users\\admin\\Desktop\\FPL\\FPL\\DATA\\"
+#print(path)
+filename=path + "2020-10-06" + "_fpl_matchday1.csv"
 # Save the table of data as a CSV
 matchday_dataset.to_csv(index=False, path_or_buf=filename)
-#ok print(matchday_dataset)
+print ("Successfully generated file: " + filename)
+
+#print(matchday_dataset)
 # %%
 ### Improve the file to include all matchdays with dates as well as the
 # round number for the PL matchday 
 
 link_i = 'http://api.football-data.org/v2/competitions/PL/matches?matchday='
-
+print (link_i)
 #link_i = 'https://api.football-data.org/v2/competitions/PL/matches?matchday='
 
 home_teams = []
@@ -90,7 +96,7 @@ for i in range(9):
     #print(link_i+str(i+1))
     connection.request('GET', link_i+str(i+1), None, headers )
     response = json.loads(connection.getresponse().read().decode())
-    print(response)
+   # print(response)
   
     for j in response["matches"]:
         home = j['homeTeam']['name']
@@ -106,15 +112,37 @@ matchday_dataset_nine_rounds = pd.DataFrame({'home': home_teams,
              'away':away_teams, 
              'status':status_matches})
 
+#id	code	name
+#1	3	Arsenal
+#2	7	Aston Villa
+#3	36	Brighton
+#4	90	Burnley
+#5	8	Chelsea
+#6	31	Crystal Palace
+#7	11	Everton
+#8	54	Fulham
+#9	13	Leicester
+#10	2	Leeds
+#11	14	Liverpool
+#12	43	Man City
+#13	1	Man Utd
+#14	4	Newcastle
+#15	49	Sheffield Utd
+#16	20	Southampton
+#17	6	Spurs
+#18	35	West Brom
+#19	21	West Ham
+#20	39	Wolves
 
 #%%
 #Import teams info
 path=r"C:\\Users\\admin\\Desktop\\FPL\\FPL\\DATA\\"
 #print(path)
 teamsfile=path + "2020-10-06" + "_fpl_teams.csv"
-#print (teamsfile)
+
 #teams_data = pd.read_csv('../Data/teams.csv', index_col=False)
 teams_data = pd.read_csv(teamsfile, index_col=False)
+print ("Susccessfully read file: " + teamsfile)
 
 # %%
 dict_team_names = {'Arsenal': 'Arsenal FC', 
@@ -138,7 +166,7 @@ dict_team_names = {'Arsenal': 'Arsenal FC',
                    'West Ham': 'West Ham United FC',
                    'Wolves': 'Wolverhampton Wanderers FC'	}
 
-
+print (dict_team_names)
 # %%
 teams_data['name'] = teams_data['name'].map(dict_team_names)
 # %%
@@ -197,12 +225,12 @@ final_match['attack_diff'] = (final_match['strength_attack_home'] -
 
 final_match['defence_diff'] = (final_match['strength_defence_home'] - 
                                   final_match['strength_attack_away'])
-print(final_match)
+#print(final_match)
 #filename = 'finalmatch.csv'
-filename=path + "2020-10-06" + "_finalmatch.csv"
+filename=path + "2020-10-06" + "_fpl_finalmatch.csv"
 # Save the table of data as a CSV
 final_match.to_csv(index=False, path_or_buf=filename)
-print ("successfully generated file " + filename)
+print ("Successfully generated file: " + filename)
 
 # %%
 #print(final_match)
