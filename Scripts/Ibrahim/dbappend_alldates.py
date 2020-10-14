@@ -141,7 +141,7 @@ def getdate(filename):
 # SELECT (julianday('now') - 2440587.5)*86400.0;
 
 print("Current Working Directory " , os. getcwd())
-path=r'C:\Users\admin\Desktop\FPL\FPL\DATA'
+path=r'/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/Files/Players'
 os.chdir(path)
 print("Current Working Directory changed TO :" , os. getcwd())
 
