@@ -31,26 +31,9 @@ from tqdm import tqdm
 
 # %%
 
-FPL_data = pd.read_csv('2020-07-31_fpl_players.csv')
-
-# %%
-A = matrix([ [-1.0, -1.0, 0.0, 1.0], [1.0, -1.0, -1.0, -2.0] ])
-b = matrix([ 1.0, -2.0, 0.0, 4.0 ])
-c = matrix([ 1.0, 1.0 , 1.0 , 1.0 , 1.0 , 1.0 ,1.0 , 1.0 , 1.0 , 1.0 , 1.0 , 1.0 , 1.0 , 1.0 , 1.0])
+FPL_data = pd.read_csv('2020-08-26_fpl_players.csv')
 
 #%%
-
-#Prepare the FPL_data :
-# 
-
-
-
-
-
-#%%
-
-
- 
 list_players = []
 total_price = 0
 team_count = []

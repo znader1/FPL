@@ -1,3 +1,6 @@
+#Parameters : Dataframe , Price , Limit GK , Limit DF, 
+# Limit ST , limit MF ,Limit Star Player
+
 list_players = []
 total_price = 0
 team_count = []

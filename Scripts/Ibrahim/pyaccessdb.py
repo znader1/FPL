@@ -1,4 +1,4 @@
-import sqlite3
+
 try:
 #  print("try debut")
     sqliteConnection = sqlite3.connect('fpl.db')
@@ -74,7 +74,7 @@ finally:
         sqliteConnection.close()
         print("sqlite connection is closed")
 
-
+#%%
 # Create table - TEAMS      
 try:
     sqliteConnection = sqlite3.connect('fpl.db')
