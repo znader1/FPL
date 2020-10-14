@@ -1,2 +1,5 @@
 FPL_env
 Data/
+.json
+.db
+.xml
