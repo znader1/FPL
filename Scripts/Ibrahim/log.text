@@ -1,0 +1,6 @@
+4
+Successfully generated file: C:\\Users\\admin\\Desktop\\FPL\\FPL\\DATA\\2020-10-06_fpl_matchday1.csv
+http://api.football-data.org/v2/competitions/PL/matches?matchday=
+Susccessfully read file: C:\\Users\\admin\\Desktop\\FPL\\FPL\\DATA\\2020-10-06_fpl_teams.csv
+{'Arsenal': 'Arsenal FC', 'Aston Villa': 'Aston Villa FC', 'Brighton': 'Brighton & Hove Albion FC', 'Burnley': 'Burnley FC', 'Chelsea': 'Chelsea FC', 'Crystal Palace': 'Crystal Palace FC', 'Everton': 'Everton FC', 'Fulham': 'Fulham FC', 'Leicester': 'Leicester City FC', 'Leeds': 'Leeds United FC', 'Liverpool': 'Liverpool FC', 'Man City': 'Manchester City FC', 'Man Utd': 'Manchester United FC', 'Newcastle': 'Newcastle United FC', 'Sheffield Utd': 'Sheffield United FC', 'Southampton': 'Southampton FC', 'Spurs': 'Tottenham Hotspur FC', 'West Brom': 'West Bromwich Albion FC', 'West Ham': 'West Ham United FC', 'Wolves': 'Wolverhampton Wanderers FC'}
+Successfully generated file: C:\\Users\\admin\\Desktop\\FPL\\FPL\\DATA\\2020-10-06_fpl_finalmatch.csv
