@@ -269,7 +269,7 @@ else:
 
 def delete_all_players():
     try:
-        sqliteConnection = sqlite3.connect('fpl.db')
+        sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB/fpl.db')
         cursor = sqliteConnection.cursor()
         print("Connected to SQLite")
 
@@ -292,7 +292,8 @@ delete_all_players()
 
 def delete_all_teams():
     try:
-        sqliteConnection = sqlite3.connect('fpl.db')
+        sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/ \
+        Fantasy Premier League/Data/SQLDB/fpl.db')
         cursor = sqliteConnection.cursor()
         print("Connected to SQLite")
 
@@ -317,7 +318,8 @@ delete_all_teams()
 def append_players_date(filename):   
     try:
         print("try debut")
-        sqliteConnection = sqlite3.connect('fpl.db')
+        sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/ \
+        Fantasy Premier League/Data/SQLDB/fpl.db')
         cursor = sqliteConnection.cursor()
         print("Successfully Connected to SQLite")
     # read_players = pd.read_csv (r'C:\zcn17\players.csv')
@@ -349,7 +351,7 @@ for filename in playersfiles:
 def append_teams_date(filename):   
     try:
         print("try debut")
-        sqliteConnection = sqlite3.connect('fpl.db')
+        sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB/fpl.db')
         cursor = sqliteConnection.cursor()
         print("Successfully Connected to SQLite")
     # read_players = pd.read_csv (r'C:\zcn17\players.csv')
