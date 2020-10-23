@@ -7,8 +7,7 @@ import pandas as pd
 #Creata SQL query
 #%%
 #Establish the conectionCreate your connection.
-cnx = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/ \
-                       Fantasy Premier League/Data/SQLDB/fpl.db')
+cnx = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB/fpl.db')
 players_df = pd.read_sql_query("SELECT * FROM PLAYERS", cnx)
 teams_df = pd.read_sql_query("SELECT * FROM TEAMS", cnx)
 

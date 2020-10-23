@@ -283,6 +283,7 @@ def delete_all_players():
     except sqlite3.Error as error:
         print("Failed to delete record from sqlite table", error)
     finally:
+        #sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB/fpl.db')
         if (sqliteConnection):
             sqliteConnection.close()
             print("the sqlite connection is closed")
@@ -292,8 +293,7 @@ delete_all_players()
 
 def delete_all_teams():
     try:
-        sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/ \
-        Fantasy Premier League/Data/SQLDB/fpl.db')
+        sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB/fpl.db')
         cursor = sqliteConnection.cursor()
         print("Connected to SQLite")
 
@@ -307,6 +307,7 @@ def delete_all_teams():
     except sqlite3.Error as error:
         print("Failed to delete record from sqlite table", error)
     finally:
+        #sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB/fpl.db')
         if (sqliteConnection):
             sqliteConnection.close()
             print("the sqlite connection is closed")
@@ -318,8 +319,7 @@ delete_all_teams()
 def append_players_date(filename):   
     try:
         print("try debut")
-        sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/ \
-        Fantasy Premier League/Data/SQLDB/fpl.db')
+        sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB/fpl.db')
         cursor = sqliteConnection.cursor()
         print("Successfully Connected to SQLite")
     # read_players = pd.read_csv (r'C:\zcn17\players.csv')
@@ -340,6 +340,7 @@ def append_players_date(filename):
         print("Error while creating a sqlite table", error)
     
     finally:
+        #sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB/fpl.db')
         if (sqliteConnection):
             sqliteConnection.close()
             print("sqlite connection is closed")
