@@ -4,7 +4,7 @@ import numpy as np
 
 #%%
 
-next_matches_strength = pd.read_csv('next_matches_strength.csv')
+next_matches_strength = pd.read_csv('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Scripts/Data Collection/Football APIs/next_matches_strength.csv')
 
 #%%
 next_matches_strength['overall_diff_away'] = -1*next_matches_strength['overall_diff']
