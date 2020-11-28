@@ -49,8 +49,8 @@ matchday_vec = []
 date_vec = []
 
 
-start_journey = 8
-numofmatchdays = 8
+start_journey = 10
+numofmatchdays = 5
 
 for i in range(start_journey,start_journey+numofmatchdays):
     headers = { 'X-Auth-Token': 'bd5630f7aa4d4a388b30f130fd3b053e' }
@@ -83,7 +83,7 @@ matchday_dataset_next_rounds = pd.DataFrame({'home': home_teams,
 
 #%%
 #Import teams info
-teams_data = pd.read_csv('../../../Data/Files/Players/2020-11-14_teams.csv', index_col=False)
+teams_data = pd.read_csv('../../../Data/Files/Players/2020-11-27_teams.csv', index_col=False)
 
 # %%
 dict_team_names = {'Arsenal': 'Arsenal FC', 
