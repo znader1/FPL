@@ -2,6 +2,7 @@
 #%%
 #Import Libraries
 #print("start")
+import sys
 import sqlite3
 import pandas as pd
 import datetime
@@ -67,7 +68,7 @@ total_df = pd.merge(total_df, strength_teams,
 #total_df['roi'] = (total_df['points_per_game']*total_df['strength_index']*(1+ total_df['value_form'])
  #                  /total_df['now_cost'])
 
-total_df['roi'] = ((total_df['points_per_game'])*total_df['points_per_game']*total_df['strength_index']*total_df['matchday_selection']*total_df['matchday_selection']*(total_df['total_points']/total_df['points_per_game'])
+total_df['roi'] = ((total_df['points_per_game'])*total_df['points_per_game']*total_df['strength_index']*total_df['matchday_selection']
                   /total_df['now_cost'])
 
 #total_df = pd.merge(players_df, teams_df, how='left',
@@ -90,6 +91,10 @@ sorted_players_df_today = (sorted_players_df_today.drop_duplicates(
 
 sorted_players_df_today = sorted_players_df_today[(sorted_players_df_today['total_points'] !=0)]
 sorted_players_df_today =sorted_players_df_today.sort_values(by='roi', ascending=False).reset_index(drop=True)
+
+
+#%%
+sorted_players_df.to_csv('sorted_players_df.csv')
 #%%
 # list_players = []
 # list_index = []
@@ -241,14 +246,17 @@ def players_pick(budget, num_of_players, GK_limit, DF_limit, MF_limit, ST_limit)
 
     while ((total_now_cost < budget)  & (i <sorted_players_df_today.shape[0])):
     #for i in tqdm(range(FPL_data.shape[0])):
-        if ((sorted_players_df_today.status[i] =='a')  & (sorted_players_df_today.web_name[i]!='Bamford')& (sorted_players_df_today.web_name[i]!='Grealish') & (sorted_players_df_today.web_name[i]!='Son')& (sorted_players_df_today.web_name[i]!='Kane')& (sorted_players_df_today.web_name[i]!='Watkins')& (sorted_players_df_today.web_name[i]!='Mings')):
+        #f (sorted_players_df_today.status[i] =='a') : 
+        # & (sorted_players_df_today.web_name[i]!='Bamford')& (sorted_players_df_today.web_name[i]!='Grealish') & (sorted_players_df_today.web_name[i]!='Son') & (sorted_players_df_today.web_name[i]!='Kane') &(sorted_players_df_today.web_name[i]!='Watkins')& (sorted_players_df_today.web_name[i]!='Mings')):
+        if (sorted_players_df_today.status[i] =='a') & (sorted_players_df_today.web_name[i]!='Son') & (sorted_players_df_today.web_name[i]!='Bamford') & (sorted_players_df_today.web_name[i]!='Grealish') & (sorted_players_df_today.web_name[i]!='Watkins') & (sorted_players_df_today.web_name[i]!='Ward-Prowse'):
+
             if (sorted_players_df_today.iloc[i].web_name in list_players):
                 i = i+1
                 continue
             if (sorted_players_df_today.web_name[i]=='Lundstram'):
                 i = i+1
                 continue
-            if (position.count(1) < GK_limit ) & (sorted_players_df_today.element_type[i] == 1) & (sorted_players_df_today.now_cost[i] < 48) :
+            if (position.count(1) < GK_limit ) & (sorted_players_df_today.element_type[i] == 1) & (sorted_players_df_today.now_cost[i] <47) :
                 position.append(sorted_players_df_today.element_type[i])
                 list_players.append(sorted_players_df_today.iloc[i].web_name)
                 list_index.append(i)
@@ -261,7 +269,7 @@ def players_pick(budget, num_of_players, GK_limit, DF_limit, MF_limit, ST_limit)
                     (sorted_players_df_today.iloc[i].short_name == 'AVL') or 
                     (sorted_players_df_today.iloc[i].short_name == 'BUR')):
                     manchester_factor += 1
-            elif ((position.count(2) < DF_limit) & (sorted_players_df_today.element_type[i] == 2) & (sorted_players_df_today.now_cost[i] < 50)  ):
+            elif ((position.count(2) < DF_limit) & (sorted_players_df_today.element_type[i] == 2)  & (sorted_players_df_today.now_cost[i] <55)):
                 position.append(sorted_players_df_today.element_type[i])
                 list_players.append(sorted_players_df_today.iloc[i].web_name)
                 list_index.append(i)
@@ -327,6 +335,7 @@ def players_pick(budget, num_of_players, GK_limit, DF_limit, MF_limit, ST_limit)
              
             if total_now_cost > budget:
                 total_now_cost = total_now_cost - int(sorted_players_df_today.iloc[list_index[-1]].now_cost)
+                del list_index[-1]
                 del list_players[-1]
                 del position[-1]
                 del cost_players[-1]
@@ -346,6 +355,7 @@ def players_pick(budget, num_of_players, GK_limit, DF_limit, MF_limit, ST_limit)
             
             if ((remaining_budget/num_of_players_remaining) < 45):
                 total_now_cost = total_now_cost - int(sorted_players_df_today.iloc[list_index[-1]].now_cost)
+                del list_index[-1]
                 del list_players[-1]
                 del position[-1]
                 del cost_players[-1]
@@ -367,8 +377,28 @@ def players_pick(budget, num_of_players, GK_limit, DF_limit, MF_limit, ST_limit)
         else:
             i = i+1
             continue
-    return list_players, cost_players, position, total_now_cost, len(list_players)
+    return list_players, cost_players, position, total_now_cost, len(list_players),list_index
 
-print(players_pick(942, 15, 2, 5, 5, 3))
+#print(players_pick(9#42, 15, 2, 5, 5, 3))
 
+# %%
+if __name__ == "__main__":
+    #print(len(sys.argv))
+    #a = int(sys.argv[1])
+    #b = int(sys.argv[2])
+    print(players_pick(987, 15, 2, 5, 5, 3))
+    #modified_data = process_data(data)
+    #print(modified_data)
+    list_index = players_pick(987, 15, 2, 5, 5, 3)[5]
+    list_players = players_pick(987, 15, 2, 5, 5, 3)[0]
+    #list_index = players_pick(942, 15, 2, 5, 5, 3)[5]
+    #list_index = players_pick(942, 15, 2, 5, 5, 3)[5]
+    #list_index = players_pick(942, 15, 2, 5, 5, 3)[5]
+    selected_cols = ['first_name', 'web_name', 'element_type', 
+                  'now_cost', 'total_points', 'name','ep_next', 
+                   'minutes']
+    FPL_picked_players = sorted_players_df_today.iloc[list_index][selected_cols]
+    filename = str(max_date) + '_selected_players'+'.csv'
+    FPL_picked_players.to_csv('/Users/ziadNader/Desktop/Personal Projects/\
+Fantasy Premier League/Data/'+ filename, header=True, index=0)
 # %%
