@@ -94,7 +94,8 @@ sorted_players_df_today =sorted_players_df_today.sort_values(by='roi', ascending
 
 
 #%%
-sorted_players_df.to_csv('sorted_players_df.csv')
+
+sorted_players_df.drop_duplicates(subset=['web_name', 'date']).to_csv('sorted_players_df.csv')
 #%%
 # list_players = []
 # list_index = []
