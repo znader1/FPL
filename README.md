@@ -1,6 +1,6 @@
 # FPL
 
-One Paragraph of project description goes here
+This project is about selecting the best players for the fantasy premier league game (https://fantasy.premierleague.com/)
 
 ## Getting Started
 
