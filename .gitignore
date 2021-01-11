@@ -1,2 +1,9 @@
 FPL_env
 Data/
+.DS_store
+.DS_Store
+*.DS_Store
+*.csv
+*.json
+*.pyc
+README.md
