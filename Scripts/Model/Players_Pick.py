@@ -1,238 +1,118 @@
-
+"""Script that will pick players based on budget , number of players"""
 #%%
-#Import Libraries
-#print("start")
 import sys
+sys.path.append('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League')
+sys.path.append('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Main')
+#sys.path.insert(0, os.path.dirname(os.getcwd()))
 import sqlite3
 import pandas as pd
 import datetime
-
+import importlib
+from Main import used_aliases
+from used_aliases import DATA_DB_FOLDER_PATH, dict_team_names
+from used_aliases import DATA_COLLECTION_PATH
+from used_aliases import DATA_FOLDER_PATH
+#importlib.reload(['used_aliases'])
+#from used_aliases import *
 #Creata SQL query
 #%%
 #Establish the conectionCreate your connection.
-cnx = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB/fpl.db')
+cnx = sqlite3.connect(DATA_DB_FOLDER_PATH + 'fpl.db')
 players_df = pd.read_sql_query("SELECT * FROM PLAYERS", cnx)
 teams_df = pd.read_sql_query("SELECT * FROM TEAMS", cnx)
 
 #%%
-dict_team_names = {'Arsenal': 'Arsenal FC', 
-                   'Aston Villa' : 'Aston Villa FC',
-                   'Brighton' : 'Brighton & Hove Albion FC',
-                   'Burnley' : 'Burnley FC',
-                   'Chelsea' : 'Chelsea FC',
-                   'Crystal Palace' : 'Crystal Palace FC',
-                   'Everton' : 'Everton FC',
-                   'Fulham' : 'Fulham FC',
-                   'Leicester' : 'Leicester City FC',
-                   'Leeds' : 'Leeds United FC',
-                   'Liverpool' : 'Liverpool FC',
-                   'Man City' : 'Manchester City FC',
-                   'Man Utd' : 'Manchester United FC',
-                   'Newcastle' : 'Newcastle United FC',
-                   'Sheffield Utd': 'Sheffield United FC',
-                   'Southampton': 'Southampton FC',
-                   'Spurs': 'Tottenham Hotspur FC',
-                   'West Brom': 'West Bromwich Albion FC',
-                   'West Ham': 'West Ham United FC',
-                   'Wolves': 'Wolverhampton Wanderers FC'	}
-#%%
 start_PL_date = '2020-09-12 00:00:00'
 players_df_2021 = players_df[players_df['date'] > start_PL_date]
-players_df_2021_new = players_df_2021[players_df_2021.date != '2020-11-14 00:00:00']
 
 
 #%%
-players_df_availability = ((players_df_2021_new.groupby(['first_name' , 'web_name'])['minutes'].max() - players_df_2021_new.groupby(['first_name' , 'web_name'])['minutes'].min())/
-((players_df_2021_new[players_df_2021_new['status'].isin(['a' , 'd'])].groupby(['first_name' , 'web_name'])['status'].count()-1))).reset_index()
+players_df_availability = ((players_df_2021
+                           .groupby(
+                               ['first_name',
+                                'web_name'])['minutes']
+                           .max()
+                            - players_df_2021
+                            .groupby(
+                                ['first_name',
+                                 'web_name'])['minutes']
+                           .min()) /
+                           ((players_df_2021[players_df_2021['status']
+                            .isin(['a', 'd'])]
+                            .groupby(['first_name',
+                                     'web_name'])['status']
+                            .count()-1))).reset_index()
 
-players_df_availability.columns = ['first_name', 'web_name', 'minutes_per_game']
+players_df_availability.columns = ['first_name',
+                                   'web_name',
+                                   'minutes_per_game']
+
 players_df_availability = players_df_availability.fillna(0)
-players_df_availability['matchday_selection'] = players_df_availability['minutes_per_game']/90
-players_df_final = pd.merge(players_df_2021_new, players_df_availability, left_on = ['first_name','web_name'] , right_on=['first_name','web_name'])
-players_df_final.at[1640,'matchday_selection']=1
+
+matchday_selection = players_df_availability['minutes_per_game']/90
+players_df_availability['matchday_selection'] = matchday_selection
+
+players_df_final = pd.merge(players_df_2021, players_df_availability,
+                            left_on=['first_name', 'web_name'],
+                            right_on=['first_name', 'web_name'])
+
 #%%
-#Apply feature engineering 
-strength_teams = (pd.read_json('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Scripts/Data Collection/Football APIs/overall_strength_df.json'))
-#print(strength_teams.head(5))
+# Apply feature engineering
+strength_teams = pd.read_json(DATA_COLLECTION_PATH +
+                              '/overall_strength_df_100121.json')
 
-#player_df = pd.merge(players_df, ranking_normalized, left_on = 'name',right_index= True ) 
 total_df = pd.merge(players_df_final, teams_df, how='left',
-                     left_on='team_code', right_on='code')
-
-
+                    left_on='team_code', right_on='code')
 
 total_df.name = total_df.name.map(dict_team_names)
-total_df = pd.merge(total_df, strength_teams, 
-                    left_on='name',right_on='team' ) 
-#total_df['strength_index'] = total_df['0']
-#total_df['roi'] = (total_df['points_per_game']*total_df['strength_index']*(1+ total_df['value_form'])
- #                  /total_df['now_cost'])
+total_df = pd.merge(total_df, strength_teams,
+                    left_on='name', right_on='team')
 
-total_df['roi'] = ((total_df['points_per_game'])*total_df['points_per_game']*total_df['strength_index']*total_df['matchday_selection']
-                  /total_df['now_cost'])
 
-#total_df = pd.merge(players_df, teams_df, how='left',
-#                     left_on='team_code', right_on='code')
+total_df['roi'] = ((total_df['points_per_game'])
+                   * total_df['points_per_game']
+                   * total_df['strength_index']
+                   * total_df['matchday_selection']
+                   * total_df['form']
+                   * total_df['value_form']
+                   / total_df['now_cost'])
 
-sorted_players_df= total_df.sort_values(by='roi', ascending=False)
+sorted_players_df = total_df.sort_values(by='roi', ascending=False)
 
 
 # %%
 sorted_players_df['date'] = pd.to_datetime(sorted_players_df.date_x)
 max_date = sorted_players_df['date'].max()
-#print(max_date)
-sorted_players_df_today = (sorted_players_df[sorted_players_df['date'] == max_date]
-                                .reset_index())
 
-#Drop duplicates
+sorted_players_df_today = (sorted_players_df[sorted_players_df['date'] == max_date]
+                           .reset_index())
+
 sorted_players_df_today = (sorted_players_df_today.drop_duplicates(
                                 subset=['web_name', 'roi']).reset_index())
 
 
-sorted_players_df_today = sorted_players_df_today[(sorted_players_df_today['total_points'] !=0)]
-sorted_players_df_today =sorted_players_df_today.sort_values(by='roi', ascending=False).reset_index(drop=True)
+sorted_players_df_today = (sorted_players_df_today
+                           [(sorted_players_df_today['total_points'] != 0)])
+
+sorted_players_df_today = (sorted_players_df_today
+                           .sort_values(by='roi',
+                                        ascending=False)
+                           .reset_index(drop=True))
 
 
 #%%
-
-sorted_players_df.drop_duplicates(subset=['web_name', 'date']).to_csv('sorted_players_df.csv')
-#%%
-# list_players = []
-# list_index = []
-# total_now_cost = 0
-# team_count = []
-# player_points = 0
-# position = []
-# star_player = 0
-# i=0
-# cost_players = []
-# manchester_factor = 0
-
-# while ((total_now_cost < 1000)  & (i <sorted_players_df_today.shape[0])):
-#     #for i in tqdm(range(FPL_data.shape[0])):
-#     if ((sorted_players_df_today.status[i]=='a')):
-#         if (sorted_players_df_today.iloc[i].web_name in list_players):
-#             i = i+1
-#             continue
-#         if (sorted_players_df_today.web_name[i]=='Lundstram'):
-#             i = i+1
-#             continue
-#         if (position.count(1) < 2 ) & (sorted_players_df_today.element_type[i] == 1):
-#             position.append(sorted_players_df_today.element_type[i])
-#             list_players.append(sorted_players_df_today.iloc[i].web_name)
-#             list_index.append(i)
-#             total_now_cost += sorted_players_df_today.now_cost[i]
-#             cost_players.append(sorted_players_df_today.now_cost[i])
-#             # if (sorted_players_df_today.iloc[i].web_name in star_players):
-#             #     star_player +=1
-#             if ((sorted_players_df_today.iloc[i].short_name == 'MUN') or 
-#                 (sorted_players_df_today.iloc[i].short_name == 'MCI') or 
-#                 (sorted_players_df_today.iloc[i].short_name == 'AVL') or 
-#                 (sorted_players_df_today.iloc[i].short_name == 'BUR')):
-#                 manchester_factor += 1
-#         elif ((position.count(2) < 5 ) & (sorted_players_df_today.element_type[i] == 2)):
-#             position.append(sorted_players_df_today.element_type[i])
-#             list_players.append(sorted_players_df_today.iloc[i].web_name)
-#             list_index.append(i)
-#             total_now_cost += sorted_players_df_today.now_cost[i]
-#             cost_players.append(sorted_players_df_today.now_cost[i])
-#             # if (sorted_players_df_today.iloc[i].web_name in star_players):
-#             #     star_player +=1
-#             if ((sorted_players_df_today.iloc[i].short_name == 'MUN') or 
-#                 (sorted_players_df_today.iloc[i].short_name == 'MCI') or 
-#                 (sorted_players_df_today.iloc[i].short_name == 'AVL') or 
-#                 (sorted_players_df_today.iloc[i].short_name == 'BUR')):
-#                 manchester_factor += 1
-#             #if (sorted_players_df_today.iloc[i].web_name in star_players):
-#                 #star_player +=1
-#         elif (position.count(3) < 5 ) & (sorted_players_df_today.element_type[i] == 3):
-#             position.append(sorted_players_df_today.element_type[i])
-#             list_players.append(sorted_players_df_today.iloc[i].web_name)
-#             list_index.append(i)
-#             total_now_cost += sorted_players_df_today.now_cost[i]
-#             cost_players.append(sorted_players_df_today.now_cost[i])
-#             # if (sorted_players_df_today.iloc[i].web_name in star_players):
-#             #     star_player +=1
-#             if ((sorted_players_df_today.iloc[i].short_name == 'MUN') or 
-#                 (sorted_players_df_today.iloc[i].short_name == 'MCI') or 
-#                 (sorted_players_df_today.iloc[i].short_name == 'AVL') or 
-#                 (sorted_players_df_today.iloc[i].short_name == 'BUR')):
-#                 manchester_factor += 1
-#         elif (position.count(4) < 3 ) & (sorted_players_df_today.element_type[i] == 4):
-#             position.append(sorted_players_df_today.element_type[i])
-#             list_players.append(sorted_players_df_today.iloc[i].web_name)
-#             list_index.append(i)
-#             total_now_cost += sorted_players_df_today.now_cost[i]
-#             cost_players.append(sorted_players_df_today.now_cost[i])
-#             # if (sorted_players_df_today.iloc[i].web_name in star_players):
-#             #     star_player +=1
-#             if ((sorted_players_df_today.iloc[i].short_name == 'MUN') or 
-#                 (sorted_players_df_today.iloc[i].short_name == 'MCI') or 
-#                 (sorted_players_df_today.iloc[i].short_name == 'AVL') or 
-#                 (sorted_players_df_today.iloc[i].short_name == 'BUR')):
-#                 manchester_factor += 1
-#         #total_now_cost += sorted_players_df_today.now_cost[i]
-#         #print(total_now_cost)
-#         #if (sorted_players_df_today.iloc[i].web_name in star_players):
-#             #star_player +=1
-#         #print(list_players)
-#         # if (star_player > 5 ):
-#         #     del list_players[-1]
-#         #     del position[-1]
-#         #     del cost_players[-1]
-#         #     total_now_cost = total_now_cost - sorted_players_df_today.now_cost[i]
-#         #     star_player = star_player - 1
-
-#         # if (manchester_factor > 4 ):
-#         #     total_now_cost = total_now_cost - int(sorted_players_df_today.iloc[list_index[-1]].now_cost)
-#         #     del list_index[-1]
-#         #     del list_players[-1]
-#         #     del position[-1]
-#         #     del cost_players[-1]
-#         #     #total_now_cost = total_now_cost - sorted_players_df_today.now_cost[i]
-#         #     manchester_factor = manchester_factor - 1
-
-
-#         if total_now_cost > 1000:
-#             total_now_cost = total_now_cost - int(sorted_players_df_today.iloc[list_index[-1]].now_cost)
-#             del list_index[-1]
-#             del list_players[-1]
-#             del position[-1]
-#             del cost_players[-1]
-#             #total_now_cost = total_now_cost - sorted_players_df_today.now_cost[i]
-#         elif len(list_players) == 15:
-#             break
-#         elif ((len(list_players) < 15 ) & (i == sorted_players_df_today.shape[0] -1)):
-#             total_now_cost = total_now_cost - int(sorted_players_df_today.iloc[list_index[-1]].now_cost)
-#             del list_index[-1]
-#             del list_players[-1]
-#             del position[-1]
-#             del cost_players[-1]
-#             #total_now_cost = total_now_cost - sorted_players_df_today.now_cost[i]
-#             i = 0
-
-#         i = i + 1
-#     else:
-#         i = i+1
-#         continue
-
-
-
-# #print(list_players)
-# #print(len(list_players))
-# #print(total_now_cost)
-# #print(cost_players)
-# # %%
-# selected_cols = ['first_name', 'web_name', 'element_type', 
-#                   'now_cost', 'total_points', 'name','ep_next', 
-#                   'minutes']
-# FPL_picked_players = sorted_players_df_today.iloc[list_index][selected_cols]
-# filename = str(max_date) + '_selected_players'+'.csv'
-# FPL_picked_players.to_csv('/Users/ziadNader/Desktop/Personal Projects/\
-# Fantasy Premier League/Data/'+ filename, header=True, index=0)
-
+(sorted_players_df.drop_duplicates(subset=['web_name', 'date'])
+                  .to_csv('sorted_players_df.csv'))
 # %%
-def players_pick(budget, num_of_players, GK_limit, DF_limit, MF_limit, ST_limit):
+
+
+def pick_best_players(budget,
+                      num_of_players,
+                      GK_limit,
+                      DF_limit,
+                      MF_limit,
+                      ST_limit):
+
     remaining_budget = 0
     list_players = []
     list_index = []
@@ -241,165 +121,134 @@ def players_pick(budget, num_of_players, GK_limit, DF_limit, MF_limit, ST_limit)
     player_points = 0
     position = []
     star_player = 0
-    i=0
+    i = 0
     cost_players = [] 
-    manchester_factor = 0      
 
-    while ((total_now_cost < budget)  & (i <sorted_players_df_today.shape[0])):
-    #for i in tqdm(range(FPL_data.shape[0])):
-        #f (sorted_players_df_today.status[i] =='a') : 
-        # & (sorted_players_df_today.web_name[i]!='Bamford')& (sorted_players_df_today.web_name[i]!='Grealish') & (sorted_players_df_today.web_name[i]!='Son') & (sorted_players_df_today.web_name[i]!='Kane') &(sorted_players_df_today.web_name[i]!='Watkins')& (sorted_players_df_today.web_name[i]!='Mings')):
-        if (sorted_players_df_today.status[i] =='a') & (sorted_players_df_today.web_name[i]!='Son') & (sorted_players_df_today.web_name[i]!='Bamford') & (sorted_players_df_today.web_name[i]!='Grealish') & (sorted_players_df_today.web_name[i]!='Watkins') & (sorted_players_df_today.web_name[i]!='Ward-Prowse'):
-
+    while ((total_now_cost < budget) & (i < sorted_players_df_today.shape[0])):
+        if (sorted_players_df_today.status[i] == 'a') & (sorted_players_df_today.ep_next[i] > 0) :
             if (sorted_players_df_today.iloc[i].web_name in list_players):
                 i = i+1
                 continue
-            if (sorted_players_df_today.web_name[i]=='Lundstram'):
-                i = i+1
-                continue
-            if (position.count(1) < GK_limit ) & (sorted_players_df_today.element_type[i] == 1) & (sorted_players_df_today.now_cost[i] <47) :
-                position.append(sorted_players_df_today.element_type[i])
-                list_players.append(sorted_players_df_today.iloc[i].web_name)
-                list_index.append(i)
-                total_now_cost += sorted_players_df_today.now_cost[i]
-                cost_players.append(sorted_players_df_today.now_cost[i])
-                # if (sorted_players_df_today.iloc[i].web_name in star_players):
-                #     star_player +=1
-                if ((sorted_players_df_today.iloc[i].short_name == 'MUN') or 
-                    (sorted_players_df_today.iloc[i].short_name == 'MCI') or 
-                    (sorted_players_df_today.iloc[i].short_name == 'AVL') or 
-                    (sorted_players_df_today.iloc[i].short_name == 'BUR')):
-                    manchester_factor += 1
-            elif ((position.count(2) < DF_limit) & (sorted_players_df_today.element_type[i] == 2)  & (sorted_players_df_today.now_cost[i] <55)):
-                position.append(sorted_players_df_today.element_type[i])
-                list_players.append(sorted_players_df_today.iloc[i].web_name)
-                list_index.append(i)
-                total_now_cost += sorted_players_df_today.now_cost[i]
-                cost_players.append(sorted_players_df_today.now_cost[i])
-                # if (sorted_players_df_today.iloc[i].web_name in star_players):
-                #     star_player +=1
-                if ((sorted_players_df_today.iloc[i].short_name == 'MUN') or 
-                    (sorted_players_df_today.iloc[i].short_name == 'MCI') or 
-                    (sorted_players_df_today.iloc[i].short_name == 'AVL') or 
-                    (sorted_players_df_today.iloc[i].short_name == 'BUR')):
-                    manchester_factor += 1
-                #if (sorted_players_df_today.iloc[i].web_name in star_players):
-                    #star_player +=1
-            elif (position.count(3) < MF_limit ) & (sorted_players_df_today.element_type[i] == 3):
-                position.append(sorted_players_df_today.element_type[i])
-                list_players.append(sorted_players_df_today.iloc[i].web_name)
-                list_index.append(i)
-                total_now_cost += sorted_players_df_today.now_cost[i]
-                cost_players.append(sorted_players_df_today.now_cost[i])
-                # if (sorted_players_df_today.iloc[i].web_name in star_players):
-                #     star_player +=1
-                if ((sorted_players_df_today.iloc[i].short_name == 'MUN') or 
-                    (sorted_players_df_today.iloc[i].short_name == 'MCI') or 
-                    (sorted_players_df_today.iloc[i].short_name == 'AVL') or 
-                    (sorted_players_df_today.iloc[i].short_name == 'BUR')):
-                    manchester_factor += 1
-            elif (position.count(4) < ST_limit ) & (sorted_players_df_today.element_type[i] == 4):
-                position.append(sorted_players_df_today.element_type[i])
-                list_players.append(sorted_players_df_today.iloc[i].web_name)
-                list_index.append(i)
-                total_now_cost += sorted_players_df_today.now_cost[i]
-                cost_players.append(sorted_players_df_today.now_cost[i])
-                # if (sorted_players_df_today.iloc[i].web_name in star_players):
-                #     star_player +=1
-                if ((sorted_players_df_today.iloc[i].short_name == 'MUN') or 
-                    (sorted_players_df_today.iloc[i].short_name == 'MCI') or 
-                    (sorted_players_df_today.iloc[i].short_name == 'AVL') or 
-                    (sorted_players_df_today.iloc[i].short_name == 'BUR')):
-                    manchester_factor += 1
-            #total_now_cost += sorted_players_df_today.now_cost[i]
-            #print(total_now_cost)
-            #if (sorted_players_df_today.iloc[i].web_name in star_players):
-                #star_player +=1
-            #print(list_players)
-            # if (star_player > 5 ):
-            #     del list_players[-1]
-            #     del position[-1]
-            #     del cost_players[-1]
-            #     total_now_cost = total_now_cost - sorted_players_df_today.now_cost[i]
-            #     star_player = star_player - 1
+            if ((position.count(1) < GK_limit) &
+               (sorted_players_df_today.element_type[i] == 1) &
+               (sorted_players_df_today.now_cost[i])):
 
-            # if (manchester_factor > 4 ):
-            #     total_now_cost = total_now_cost - int(sorted_players_df_today.iloc[list_index[-1]].now_cost)
-            #     del list_index[-1]
-            #     del list_players[-1]
-            #     del position[-1]
-            #     del cost_players[-1]
-            #     #total_now_cost = total_now_cost - sorted_players_df_today.now_cost[i]
-            #     manchester_factor = manchester_factor - 1
-            
-            #if (budget-total_now_cost)
-             
-            if total_now_cost > budget:
-                total_now_cost = total_now_cost - int(sorted_players_df_today.iloc[list_index[-1]].now_cost)
+                position.append(sorted_players_df_today.element_type[i])
+                list_players.append(sorted_players_df_today.iloc[i].web_name)
+                list_index.append(i)
+                total_now_cost += sorted_players_df_today.now_cost[i]
+                cost_players.append(sorted_players_df_today.now_cost[i])
+                team_count.append(sorted_players_df_today.name[i])
+
+            elif ((position.count(2) < DF_limit) &
+                  (sorted_players_df_today
+                  .element_type[i] == 2)):
+
+                position.append(sorted_players_df_today.element_type[i])
+                list_players.append(sorted_players_df_today.iloc[i].web_name)
+                list_index.append(i)
+                total_now_cost += sorted_players_df_today.now_cost[i]
+                cost_players.append(sorted_players_df_today.now_cost[i])
+                team_count.append(sorted_players_df_today.name[i])
+
+            elif ((position.count(3) < MF_limit) &
+                  (sorted_players_df_today.element_type[i] == 3)):
+
+                position.append(sorted_players_df_today.element_type[i])
+                list_players.append(sorted_players_df_today.iloc[i].web_name)
+                list_index.append(i)
+                total_now_cost += sorted_players_df_today.now_cost[i]
+                cost_players.append(sorted_players_df_today.now_cost[i])
+                team_count.append(sorted_players_df_today.name[i])
+                
+            elif ((position.count(4) < ST_limit) &
+                  (sorted_players_df_today.element_type[i] == 4)):
+                
+                position.append(sorted_players_df_today.element_type[i])
+                list_players.append(sorted_players_df_today.iloc[i].web_name)
+                list_index.append(i)
+                total_now_cost += sorted_players_df_today.now_cost[i]
+                cost_players.append(sorted_players_df_today.now_cost[i])
+                team_count.append(sorted_players_df_today.name[i])
+
+            if (team_count.count(sorted_players_df_today.name[i]) > 3):
+                total_now_cost = total_now_cost - int(sorted_players_df_today
+                                                      .iloc[list_index[-1]]
+                                                      .now_cost)
                 del list_index[-1]
                 del list_players[-1]
                 del position[-1]
                 del cost_players[-1]
-            
-            
-            
-            
+                del team_count[-1]
+                
+            if total_now_cost > budget:
+                total_now_cost = total_now_cost - int(sorted_players_df_today
+                                                      .iloc[list_index[-1]]
+                                                      .now_cost)
+                del list_index[-1]
+                del list_players[-1]
+                del position[-1]
+                del cost_players[-1]
+                del team_count[-1]
+
             if len(list_players) == num_of_players:
                 break
-            
-            
-            
-            
-            #print(list_players)
-            remaining_budget = budget - total_now_cost
-            num_of_players_remaining = num_of_players - len(list_players)
-            
-            if ((remaining_budget/num_of_players_remaining) < 45):
-                total_now_cost = total_now_cost - int(sorted_players_df_today.iloc[list_index[-1]].now_cost)
-                del list_index[-1]
-                del list_players[-1]
-                del position[-1]
-                del cost_players[-1]
 
-           
-                #total_now_cost = total_now_cost - sorted_players_df_today.now_cost[i]
-            #elif len(list_players) == num_of_players:
-                #break
-            elif ((len(list_players) < num_of_players) & (i == sorted_players_df_today.shape[0] -1)):
-                total_now_cost = total_now_cost - int(sorted_players_df_today.iloc[list_index[-1]].now_cost)
+            remaining_budget = budget - total_now_cost
+            #print(remaining_budget)
+            num_of_players_remaining = num_of_players - len(list_players)
+            #print(num_of_players_remaining)
+
+            if ((remaining_budget/num_of_players_remaining) < 45):
+                total_now_cost = total_now_cost - int(sorted_players_df_today
+                                                      .iloc[list_index[-1]]
+                                                      .now_cost)
                 del list_index[-1]
                 del list_players[-1]
                 del position[-1]
                 del cost_players[-1]
-                #total_now_cost = total_now_cost - sorted_players_df_today.now_cost[i]
+                del team_count[-1]
+
+            elif ((len(list_players) < num_of_players) &
+                  (i == sorted_players_df_today.shape[0] - 1)):
+                total_now_cost = total_now_cost - int(sorted_players_df_today
+                                                      .iloc[list_index[-1]]
+                                                      .now_cost)
+                del list_index[-1]
+                del list_players[-1]
+                del position[-1]
+                del cost_players[-1]
+                del team_count[-1]
                 i = 0
 
             i = i + 1
+            #continue
+            
         else:
-            i = i+1
-            continue
-    return list_players, cost_players, position, total_now_cost, len(list_players),list_index
-
-#print(players_pick(9#42, 15, 2, 5, 5, 3))
+            i = i + 1
+    return list_players, cost_players, position, total_now_cost, len(list_players), list_index
 
 # %%
+
+
 if __name__ == "__main__":
     #print(len(sys.argv))
     #a = int(sys.argv[1])
     #b = int(sys.argv[2])
-    print(players_pick(987, 15, 2, 5, 5, 3))
-    #modified_data = process_data(data)
-    #print(modified_data)
-    list_index = players_pick(987, 15, 2, 5, 5, 3)[5]
-    list_players = players_pick(987, 15, 2, 5, 5, 3)[0]
-    #list_index = players_pick(942, 15, 2, 5, 5, 3)[5]
-    #list_index = players_pick(942, 15, 2, 5, 5, 3)[5]
-    #list_index = players_pick(942, 15, 2, 5, 5, 3)[5]
+    print(pick_best_players(1000, 15, 2, 5, 5, 3))
+    print(max_date)
+    list_index = pick_best_players(900, 13, 2, 5, 5, 3)[5]
+    list_players = pick_best_players(1000, 15, 2, 5, 5, 3)[0]
     selected_cols = ['first_name', 'web_name', 'element_type', 
-                  'now_cost', 'total_points', 'name','ep_next', 
-                   'minutes']
-    FPL_picked_players = sorted_players_df_today.iloc[list_index][selected_cols]
+                     'now_cost', 'total_points', 'name','ep_next', 
+                     'minutes']
+
+    FPL_picked_players = (sorted_players_df_today
+                          .iloc[list_index][selected_cols])
+
     filename = str(max_date) + '_selected_players'+'.csv'
-    FPL_picked_players.to_csv('/Users/ziadNader/Desktop/Personal Projects/\
-Fantasy Premier League/Data/'+ filename, header=True, index=0)
+    FPL_picked_players.to_csv(DATA_FOLDER_PATH + '/' + filename,
+                              header=True, index=0)
+
+
 # %%
