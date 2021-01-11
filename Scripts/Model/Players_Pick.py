@@ -70,11 +70,11 @@ total_df = pd.merge(total_df, strength_teams,
 
 
 total_df['roi'] = ((total_df['points_per_game'])
-                   * total_df['points_per_game']
+#                   * total_df['points_per_game']
                    * total_df['strength_index']
                    * total_df['matchday_selection']
                    * total_df['form']
-                   * total_df['value_form']
+                   #* total_df['value_form']
                    / total_df['now_cost'])
 
 sorted_players_df = total_df.sort_values(by='roi', ascending=False)
@@ -126,6 +126,7 @@ def pick_best_players(budget,
 
     while ((total_now_cost < budget) & (i < sorted_players_df_today.shape[0])):
         if (sorted_players_df_today.status[i] == 'a') & (sorted_players_df_today.ep_next[i] > 0) :
+        #if (sorted_players_df_today.status[i] == 'a'):
             if (sorted_players_df_today.iloc[i].web_name in list_players):
                 i = i+1
                 continue
