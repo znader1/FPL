@@ -7,35 +7,35 @@ import json
 
 #%%
 ### Use football data api in order to fetch competitions matches
-link = 'https://api.football-data.org/v2/competitions/PL/matches?matchday=1'
+# link = 'https://api.football-data.org/v2/competitions/PL/matches?matchday=1'
 
-#### API connection and get request
+# #### API connection and get request
 connection = http.client.HTTPConnection('api.football-data.org')
 headers = { 'X-Auth-Token': 'bd5630f7aa4d4a388b30f130fd3b053e' }
-connection.request('GET', link , None, headers )
-response = json.loads(connection.getresponse().read().decode())
+#connection.request('GET', link , None, headers )
+#response = json.loads(connection.getresponse().read().decode())
+# print(response)
+# # %%
 
-# %%
+# home_teams = []
+# away_teams = []
+# status_matches = []
+# for i in response["matches"]:
+#     home = i['homeTeam']['name']
+#     away = i['awayTeam']['name']
+#     status = i['status']
+#     home_teams.append(home)
+#     away_teams.append(away)
+#     status_matches.append(status)
 
-home_teams = []
-away_teams = []
-status_matches = []
-for i in response["matches"]:
-    home = i['homeTeam']['name']
-    away = i['awayTeam']['name']
-    status = i['status']
-    home_teams.append(home)
-    away_teams.append(away)
-    status_matches.append(status)
-
-# %%
-matchday_dataset = pd.DataFrame({'home': home_teams, 
-             'away':away_teams, 
-             'status':status_matches})
-# %%
-filename = 'matchday1.csv'
-# Save the table of data as a CSV
-matchday_dataset.to_csv(index=False, path_or_buf=filename)
+# # %%
+# matchday_dataset = pd.DataFrame({'home': home_teams, 
+#              'away':away_teams, 
+#              'status':status_matches})
+# # %%
+# filename = 'matchday1.csv'
+# # Save the table of data as a CSV
+# matchday_dataset.to_csv(index=False, path_or_buf=filename)
 # %%
 ### Improve the file to include all matchdays with dates as well as the
 # round number for the PL matchday 
@@ -49,7 +49,7 @@ matchday_vec = []
 date_vec = []
 
 
-start_journey = 10
+start_journey = 17
 numofmatchdays = 5
 
 for i in range(start_journey,start_journey+numofmatchdays):
@@ -83,7 +83,7 @@ matchday_dataset_next_rounds = pd.DataFrame({'home': home_teams,
 
 #%%
 #Import teams info
-teams_data = pd.read_csv('../../../Data/Files/Players/2020-11-27_teams.csv', index_col=False)
+teams_data = pd.read_csv('../../../Data/Files/Players/2021-01-10_teams.csv', index_col=False)
 
 # %%
 dict_team_names = {'Arsenal': 'Arsenal FC', 
@@ -168,4 +168,4 @@ final_match['defence_diff'] = (final_match['strength_defence_home'] -
                                   final_match['strength_attack_away'])
 # %%
 
-final_match.to_csv("next_matches_strength.csv")
+final_match.to_csv("next_matches_strength_110121.csv")
