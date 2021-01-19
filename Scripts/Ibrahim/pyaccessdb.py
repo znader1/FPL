@@ -1,4 +1,8 @@
+<<<<<<< Updated upstream
 
+=======
+import sqlite3
+>>>>>>> Stashed changes
 try:
 #  print("try debut")
     sqliteConnection = sqlite3.connect('fpl.db')
