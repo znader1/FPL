@@ -70,11 +70,12 @@ total_df = pd.merge(total_df, strength_teams,
 
 
 total_df['roi'] = ((total_df['points_per_game'])
-#                   * total_df['points_per_game']
+                    * total_df['points_per_game']
                    * total_df['strength_index']
                    * total_df['matchday_selection']
                    * total_df['form']
                    #* total_df['value_form']
+                   * total_df['value_season']
                    / total_df['now_cost'])
 
 sorted_players_df = total_df.sort_values(by='roi', ascending=False)
