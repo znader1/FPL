@@ -12,7 +12,7 @@ session = requests.session()
 url = 'https://users.premierleague.com/accounts/login/'
 payload = {
  'password': PASS,
- 'login': 'ziad.nader88@gmail.com',
+ 'login': email,
  'redirect_uri': 'https://fantasy.premierleague.com/a/login',
  'app': 'plfpl-web'
 }
