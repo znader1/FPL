@@ -11,8 +11,8 @@ session = requests.session()
 
 url = 'https://users.premierleague.com/accounts/login/'
 payload = {
- 'password': 'Thawra2020!!88',
- 'login': 'ziad.nader88@gmail.com',
+ 'password': PASS,
+ 'login': email,
  'redirect_uri': 'https://fantasy.premierleague.com/a/login',
  'app': 'plfpl-web'
 }
