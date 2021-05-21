@@ -141,11 +141,7 @@ def getdate(filename):
 # SELECT (julianday('now') - 2440587.5)*86400.0;
 
 print("Current Working Directory " , os. getcwd())
-<<<<<<< Updated upstream
 path=r'/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/Files/Players/'
-=======
-path=r'C:\Users\admin\Desktop\FPL\FPL\DATA'
->>>>>>> Stashed changes
 os.chdir(path)
 print("Current Working Directory changed TO :" , os. getcwd())
 
@@ -174,12 +170,9 @@ for filename in playersfiles:
     #print("after call : ." , thisdate)
 
 #=========================================================#
-<<<<<<< Updated upstream
 
 #path=r'/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/Files/Teams'
 #os.chdir(path)
-=======
->>>>>>> Stashed changes
 try:
     teamsfiles=[]
     for filename in os.listdir('.'):
@@ -279,11 +272,7 @@ else:
 
 def delete_all_players():
     try:
-<<<<<<< Updated upstream
         sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB/fpl.db')
-=======
-        sqliteConnection = sqlite3.connect('fpl.db')
->>>>>>> Stashed changes
         cursor = sqliteConnection.cursor()
         print("Connected to SQLite")
 
@@ -297,10 +286,7 @@ def delete_all_players():
     except sqlite3.Error as error:
         print("Failed to delete record from sqlite table", error)
     finally:
-<<<<<<< Updated upstream
         #sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB/fpl.db')
-=======
->>>>>>> Stashed changes
         if (sqliteConnection):
             sqliteConnection.close()
             print("the sqlite connection is closed")
@@ -310,11 +296,7 @@ delete_all_players()
 
 def delete_all_teams():
     try:
-<<<<<<< Updated upstream
         sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB/fpl.db')
-=======
-        sqliteConnection = sqlite3.connect('fpl.db')
->>>>>>> Stashed changes
         cursor = sqliteConnection.cursor()
         print("Connected to SQLite")
 
@@ -328,10 +310,7 @@ def delete_all_teams():
     except sqlite3.Error as error:
         print("Failed to delete record from sqlite table", error)
     finally:
-<<<<<<< Updated upstream
         #sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB/fpl.db')
-=======
->>>>>>> Stashed changes
         if (sqliteConnection):
             sqliteConnection.close()
             print("the sqlite connection is closed")
@@ -343,11 +322,7 @@ delete_all_teams()
 def append_players_date(filename):   
     try:
         print("try debut")
-<<<<<<< Updated upstream
         sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB/fpl.db')
-=======
-        sqliteConnection = sqlite3.connect('fpl.db')
->>>>>>> Stashed changes
         cursor = sqliteConnection.cursor()
         print("Successfully Connected to SQLite")
     # read_players = pd.read_csv (r'C:\zcn17\players.csv')
@@ -368,10 +343,7 @@ def append_players_date(filename):
         print("Error while creating a sqlite table", error)
     
     finally:
-<<<<<<< Updated upstream
         #sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB/fpl.db')
-=======
->>>>>>> Stashed changes
         if (sqliteConnection):
             sqliteConnection.close()
             print("sqlite connection is closed")
@@ -383,11 +355,7 @@ for filename in playersfiles:
 def append_teams_date(filename):   
     try:
         print("try debut")
-<<<<<<< Updated upstream
         sqliteConnection = sqlite3.connect('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Data/SQLDB/fpl.db')
-=======
-        sqliteConnection = sqlite3.connect('fpl.db')
->>>>>>> Stashed changes
         cursor = sqliteConnection.cursor()
         print("Successfully Connected to SQLite")
     # read_players = pd.read_csv (r'C:\zcn17\players.csv')
