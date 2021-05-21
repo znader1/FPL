@@ -1,9 +1,12 @@
-"""Script that will pick players based on budget , number of players"""
-#%%
+"""Script that will pick players based on budget , number of players, players pick"""
+# %%
+# Import Libraries and internal scripts
 import sys
+# Add the paths appended in order sript and launch the players pick
 sys.path.append('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League')
+# Add the paths appended in order to script and launch the players pick
 sys.path.append('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Main')
-#sys.path.insert(0, os.path.dirname(os.getcwd()))
+# sys.path.insert(0, os.path.dirname(os.getcwd()))
 import sqlite3
 import pandas as pd
 import datetime
@@ -12,21 +15,21 @@ from Main import used_aliases
 from used_aliases import DATA_DB_FOLDER_PATH, dict_team_names
 from used_aliases import DATA_COLLECTION_PATH
 from used_aliases import DATA_FOLDER_PATH
-#importlib.reload(['used_aliases'])
-#from used_aliases import *
-#Creata SQL query
-#%%
-#Establish the conectionCreate your connection.
+# importlib.reload(['used_aliases'])
+# from used_aliases import *
+# Create an SQL query
+# %%
+# Establish the conectionCreate your connection.
 cnx = sqlite3.connect(DATA_DB_FOLDER_PATH + 'fpl.db')
 players_df = pd.read_sql_query("SELECT * FROM PLAYERS", cnx)
 teams_df = pd.read_sql_query("SELECT * FROM TEAMS", cnx)
 
-#%%
+# %%
 start_PL_date = '2020-09-12 00:00:00'
 players_df_2021 = players_df[players_df['date'] > start_PL_date]
 
 
-#%%
+# %%
 players_df_availability = ((players_df_2021
                            .groupby(
                                ['first_name',
@@ -101,7 +104,7 @@ sorted_players_df_today = (sorted_players_df_today
                            .reset_index(drop=True))
 
 
-#%%
+# %%
 (sorted_players_df.drop_duplicates(subset=['web_name', 'date'])
                   .to_csv('sorted_players_df.csv'))
 # %%
@@ -127,7 +130,7 @@ def pick_best_players(budget,
 
     while ((total_now_cost < budget) & (i < sorted_players_df_today.shape[0])):
         if (sorted_players_df_today.status[i] == 'a') & (sorted_players_df_today.ep_next[i] > 0) :
-        #if (sorted_players_df_today.status[i] == 'a'):
+        # if (sorted_players_df_today.status[i] == 'a'):
             if (sorted_players_df_today.iloc[i].web_name in list_players):
                 i = i+1
                 continue
@@ -197,9 +200,9 @@ def pick_best_players(budget,
                 break
 
             remaining_budget = budget - total_now_cost
-            #print(remaining_budget)
+            # print(remaining_budget)
             num_of_players_remaining = num_of_players - len(list_players)
-            #print(num_of_players_remaining)
+            # print(num_of_players_remaining)
 
             if ((remaining_budget/num_of_players_remaining) < 45):
                 total_now_cost = total_now_cost - int(sorted_players_df_today
@@ -224,8 +227,7 @@ def pick_best_players(budget,
                 i = 0
 
             i = i + 1
-            #continue
-            
+            # continue
         else:
             i = i + 1
     return list_players, cost_players, position, total_now_cost, len(list_players), list_index
@@ -234,15 +236,15 @@ def pick_best_players(budget,
 
 
 if __name__ == "__main__":
-    #print(len(sys.argv))
-    #a = int(sys.argv[1])
-    #b = int(sys.argv[2])
+    # print(len(sys.argv))
+    # a = int(sys.argv[1])
+    # b = int(sys.argv[2])
     print(pick_best_players(1000, 15, 2, 5, 5, 3))
     print(max_date)
     list_index = pick_best_players(900, 13, 2, 5, 5, 3)[5]
     list_players = pick_best_players(1000, 15, 2, 5, 5, 3)[0]
-    selected_cols = ['first_name', 'web_name', 'element_type', 
-                     'now_cost', 'total_points', 'name','ep_next', 
+    selected_cols = ['first_name', 'web_name', 'element_type',
+                     'now_cost', 'total_points', 'name','ep_next',
                      'minutes']
 
     FPL_picked_players = (sorted_players_df_today
@@ -251,6 +253,3 @@ if __name__ == "__main__":
     filename = str(max_date) + '_selected_players'+'.csv'
     FPL_picked_players.to_csv(DATA_FOLDER_PATH + '/' + filename,
                               header=True, index=0)
-
-
-# %%

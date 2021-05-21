@@ -89,7 +89,7 @@ list_players = pick_best_players(budget, num_of_players, num_of_gk,
 print(pick_best_players(budget, num_of_players, num_of_gk, num_of_df,
                         num_of_mf, num_of_st))
 
-# Get the selected columns => can be also added as a static variable 
+# Get the selected columns => can be also added as a static variable
 # in the definition
 selected_cols = ['first_name', 'web_name', 'element_type',
                  'now_cost', 'total_points', 'name', 'ep_next',
