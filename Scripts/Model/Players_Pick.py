@@ -2,11 +2,14 @@
 # %%
 # Import Libraries and internal scripts
 import sys
-# Add the paths appended in order sript and launch the players pick
-sys.path.append('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League')
-# Add the paths appended in order to script and launch the players pick
-sys.path.append('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Main')
-# sys.path.insert(0, os.path.dirname(os.getcwd()))
+
+import os
+import numpy as np
+sys.path.append('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/')
+sys.path.append('/Users/ziadNader/Desktop/Personal Projects/Fantasy Premier League/Main/')
+#sys.path.append('../Main')
+sys.path.insert(0, os.path.dirname(os.getcwd()))
+
 import sqlite3
 import pandas as pd
 import datetime
@@ -95,6 +98,8 @@ sorted_players_df_today = (sorted_players_df_today.drop_duplicates(
                                 subset=['web_name', 'roi']).reset_index())
 
 
+sorted_players_df_today = sorted_players_df_today.replace([np.inf, -np.inf], 0)
+
 sorted_players_df_today = (sorted_players_df_today
                            [(sorted_players_df_today['total_points'] != 0)])
 
@@ -103,11 +108,18 @@ sorted_players_df_today = (sorted_players_df_today
                                         ascending=False)
                            .reset_index(drop=True))
 
+#%%
+selected_cols = ['first_name', 'web_name', 'element_type', 
+                     'now_cost', 'total_points', 'name','ep_next', 
+                     'minutes', 'roi']
 
-# %%
+#%%
+sorted_players_df_today[selected_cols].to_csv('sorted_players_df_today.csv')
+
+
 (sorted_players_df.drop_duplicates(subset=['web_name', 'date'])
                   .to_csv('sorted_players_df.csv'))
-# %%
+
 
 
 def pick_best_players(budget,
@@ -236,12 +248,9 @@ def pick_best_players(budget,
 
 
 if __name__ == "__main__":
-    # print(len(sys.argv))
-    # a = int(sys.argv[1])
-    # b = int(sys.argv[2])
     print(pick_best_players(1000, 15, 2, 5, 5, 3))
     print(max_date)
-    list_index = pick_best_players(900, 13, 2, 5, 5, 3)[5]
+    list_index = pick_best_players(1000, 15, 2, 5, 5, 3)[5]
     list_players = pick_best_players(1000, 15, 2, 5, 5, 3)[0]
     selected_cols = ['first_name', 'web_name', 'element_type',
                      'now_cost', 'total_points', 'name','ep_next',

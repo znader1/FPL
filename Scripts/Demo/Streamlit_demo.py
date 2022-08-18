@@ -14,12 +14,14 @@ from Players_Pick import pick_best_players
 # import Players_Pick
 # importlib.reload(Players_Pick)
 
+
 # %%
 # choose a budget in the sidebar between 1 and 1000
 budget = st.sidebar.number_input('Choose a budget',
                                  min_value=1,
                                  max_value=1000,
                                  step=1)
+
 
 # choose a number of total players
 num_of_players = st.sidebar.number_input('Number of Players',
@@ -50,8 +52,7 @@ num_of_st = st.sidebar.number_input('Strikers',
                                     max_value=3,
                                     step=1)
 
-# Need to add warnings in for compliance reasons:
-# check that the number of players is equal to the total number of gk,df,mf,st
+
 
 if not num_of_gk:
     st.warning('Please input a name.')
@@ -111,6 +112,7 @@ st.text(sum(FPL_picked_players['points_per_game']))
 # Show the best players in a text as the dashboard
 st.text(pick_best_players(budget, num_of_players, num_of_gk,
                           num_of_df, num_of_mf, num_of_st)[3])
+
 
 # Show the text of FPl picked players
 st.text(FPL_picked_players.shape[0])
