@@ -1,6 +1,7 @@
 import datetime
 
-def affich_date(y,m,d):
+
+def affich_date(y, m, d):
     print(datetime.datetime(y,m,d))
 
 # y=2020
@@ -17,10 +18,13 @@ def affich_date(y,m,d):
 #def calculate_roi_players(players_data_df):
 
 ########## Analysis Functions
+
+
 def top_statistics(datadf, key, n):
     """get the n largest rows for a specific variable in dataframe """
     return datadf.nlargest(n, key)
 
+    
 def compare_two_teams(datadf, team1, team2, key):
     """compare team 1 and team 2 according to a single valye"""
     team1_value = sum(pd.Series(team1)\

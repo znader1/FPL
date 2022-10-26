@@ -1,11 +1,11 @@
 import sqlite3
-
 import os
-mydir=os.getcwd 
+
+mydir = os.getcwd 
 print(mydir)
 print("Current Working Directory " , os. getcwd())
 # print(os.getenv)
-os.chdir("c:/zcn17")
+os.chdir("/Users/ziadNader/OneDrive - Capgemini/Personal Projects/Fantasy Premier League/Data/SQLDB/")
 print("Current Working Directory " , os. getcwd())
 
 # Create table - PLAYERS
@@ -31,7 +31,7 @@ print("Current Working Directory " , os. getcwd())
         
 try:
     print("try debut")
-    sqliteConnection = sqlite3.connect('fpl.db')
+    sqliteConnection = sqlite3.connect('fpl1.db')
     sqlite_create_table_query ='''CREATE TABLE  PLAYERS 
         ([date] text, 
         [i_d] integer,
@@ -107,7 +107,7 @@ finally:
 
 # Create table - TEAMS      
 try:
-    sqliteConnection = sqlite3.connect('fpl.db')
+    sqliteConnection = sqlite3.connect('fpl1.db')
     sqlite_create_table_query ='''CREATE TABLE  TEAMS 
       ([date] text, [id] integer,
       [code] integer,
