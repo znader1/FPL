@@ -186,7 +186,7 @@ def append_teams_date(filename):
         cursor = sqliteConnection.cursor()
         print("Successfully Connected to SQLite")
     # read_players = pd.read_csv (r'C:\zcn17\players.csv')
-        read_teams = pd.read_csv (filename)
+        read_teams = pd.read_csv(filename)
         #thisdate=utils_functions.getdate(filename)
         thisdate=getdate(filename)
         read_teams['date']=thisdate
