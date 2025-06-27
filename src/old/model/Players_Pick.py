@@ -128,6 +128,7 @@ def pick_best_players(budget,
                       DF_limit,
                       MF_limit,
                       ST_limit):
+                    
 
     remaining_budget = 0
     list_players = []
@@ -248,17 +249,45 @@ def pick_best_players(budget,
 
 
 if __name__ == "__main__":
-    print(pick_best_players(1000, 15, 2, 5, 5, 3))
-    print(max_date)
-    list_index = pick_best_players(1000, 15, 2, 5, 5, 3)[5]
-    list_players = pick_best_players(1000, 15, 2, 5, 5, 3)[0]
-    selected_cols = ['first_name', 'web_name', 'element_type',
-                     'now_cost', 'total_points', 'name','ep_next',
-                     'minutes']
+    def jls_extract_def(header: str, index: int) -> str:
+        """
+        Extracts selected player data from a DataFrame and saves it to a CSV file.
 
-    FPL_picked_players = (sorted_players_df_today
-                          .iloc[list_index][selected_cols])
+        Args:
+            header: The header of the DataFrame.
+            index: The index of the DataFrame.
 
-    filename = str(max_date) + '_selected_players'+'.csv'
-    FPL_picked_players.to_csv(DATA_FOLDER_PATH + '/' + filename,
-                              header=True, index=0)
+        Returns:
+            The name of the CSV file where the selected player data is saved.
+        """
+        # Call pick_best_players function with specific arguments and print the result
+        print(pick_best_players(1000, 15, 2, 5, 5, 3))
+
+        # Print the value of the max_date variable
+        print(max_date)
+
+        # Assign the index of the selected players to the list_index variable
+        list_index = pick_best_players(1000, 15, 2, 5, 5, 3)[5]
+
+        # Assign the selected players to the list_players variable
+        list_players = pick_best_players(1000, 15, 2, 5, 5, 3)[0]
+
+        # Define a list of selected columns
+        selected_cols = ['first_name', 'web_name', 'element_type',
+                         'now_cost', 'total_points', 'name', 'ep_next',
+                         'minutes']
+
+        # Select the rows and columns from the DataFrame based on list_index and selected_cols variables
+        FPL_picked_players = sorted_players_df_today.iloc[list_index][selected_cols]
+
+        # Construct a filename based on the max_date variable
+        filename = str(max_date) + '_selected_players.csv'
+
+        # Save the FPL_picked_players DataFrame to a CSV file with the constructed filename
+        FPL_picked_players.to_csv(DATA_FOLDER_PATH + '/' + filename, header=True, index=False)
+
+        return filename
+
+
+    filename = jls_extract_def(header, index)
+
