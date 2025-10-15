@@ -12,4 +12,7 @@ if st.button("Refresh Now"):
     st.write(f"Players file: {info['players_path']}")
     print(info)
     players_gw = pd.read_csv(info['players_path'])
-    st.table(players_gw)
+    st.table(players_gw.sort_values(by='total_points', ascending=False))
+
+    # Idea is to have a table that shows the players with the highest total points and the highest points per game
+    
