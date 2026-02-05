@@ -2,6 +2,14 @@
 
 This project aims to predict next-gameweek player points in the Fantasy Premier League (FPL) using historical match data (2016–2024), player stats, and match context such as odds and fixture difficulty.
 
+## Recommended “Production-Ready” Direction
+
+Build a **single Python core** (data → features → projections → optimizer), then expose it via:
+- **Streamlit** (fast MVP UI for you)
+- **HTTP API** (later) for a simple website + iOS app
+
+This repo currently focuses on the Streamlit MVP while keeping the logic in `src/` so it can be reused by a future API server.
+
 ## Project Goals
 
 - Predict FPL player points for upcoming gameweeks
@@ -14,6 +22,23 @@ This project aims to predict next-gameweek player points in the Fantasy Premier 
 - Archived match odds from Football-Data.co.uk: https://www.football-data.co.uk/englandm.php
 - Official FPL API for current squads
 
+## Quickstart
+
+From the `FPL/` directory:
+
+- Install deps: `python3 -m pip install -r requirements.txt`
+- Run the app: `streamlit run fpl_app_v1.py`
+
+### Scrape 2025–26 match history (FPL-only)
+
+This builds a **player × fixture** dataset for the current season using `/api/element-summary/{id}/`:
+
+- `python3 -m src.season_history --resume`
+
+Outputs:
+- Raw JSON snapshots: `data/raw/fpl/<season>/`
+- Aggregated table: `data/processed/fpl/<season>/player_match_history_<season>.csv` (and `.parquet` if available)
+
 ## Main Features
 
 - Rolling averages and player form by position
@@ -25,9 +50,10 @@ This project aims to predict next-gameweek player points in the Fantasy Premier 
 
 ## Next Steps
 
-- Expand feature engineering for advanced roles
-- Finalize model evaluation and deploy for live predictions
-- Publish results and share with the FPL/data science community
+- Train a baseline xPts model on the scraped current-season dataset (minutes + points model)
+- Add 3-GW horizon transfer planning (hits, roll/hold logic)
+- Add external sources (injuries, xG providers, coach changes) as a second stage
+- Deploy as an API for web/iOS clients
 
 ---
 
