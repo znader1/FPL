@@ -1,12 +1,30 @@
-FPL_env
+# Python
+__pycache__/
+*.pyc
+
+# Virtual env
+.venv/
+venv/
+FPL_env/
+
+# Secrets (never commit)
+.env
+.streamlit/secrets.toml
+
+# Data / outputs
+data/
 Data/
-.DS_store
-.DS_Store
-*.DS_Store
+cache/
+logs/
 *.csv
 *.json
-*.pyc
-README.md
-*.db
-myfantasy.py
+*.parquet
+
+# OS
+.DS_Store
+
+# Jupyter
 **/.ipynb_checkpoints/
+
+# Misc
+*.db
