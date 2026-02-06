@@ -1,23 +1,32 @@
 # app.py
-from __future__ import annotations
-
 import os, json, time
 from datetime import datetime
 from pathlib import Path
-from typing import Tuple, Optional
 
 import pandas as pd
 import streamlit as st
 from requests.utils import dict_from_cookiejar, cookiejar_from_dict
 
 # import your package modules
-from src import config, fpl_client, transforms, recommender
+from src import config, fpl_client, transforms, recommender, projections, optimizer
 
 # -----------------------------
 # Streamlit page
 # -----------------------------
 st.set_page_config(page_title="FPL Assistant", layout="wide")
 
+def _event_id(bootstrap, flag):
+    for ev in bootstrap.get("events", []):
+        if ev.get(flag):
+            try:
+                return int(ev.get("id"))
+            except Exception:
+                return None
+    return None
+
+def _default_picks_event_id(bootstrap):
+    # Prefer upcoming GW before deadline; fallback to current.
+    return _event_id(bootstrap, "is_next") or _event_id(bootstrap, "is_current") or 1
 
 # -----------------------------
 # Cache wrappers
@@ -30,11 +39,15 @@ def _bootstrap():
 def _fixtures_df():
     return transforms.fixtures_df(fpl_client.get_fixtures())
 
+@st.cache_data(ttl=config.FIXTURES_TTL)
+def _projections_df(elements, fixtures, teams_short_map, gw_start):
+    return projections.project_elements_next_gws(elements, fixtures, teams_short_map, int(gw_start), horizon_gws=3)
+
 
 # -----------------------------
 # Session helpers (auth + squad)
 # -----------------------------
-def _save_auth(sess, entry_id: int, email: str):
+def _save_auth(sess, entry_id, email):
     st.session_state["auth"] = {
         "cookies": dict_from_cookiejar(sess.cookies),
         "entry_id": int(entry_id),
@@ -42,7 +55,7 @@ def _save_auth(sess, entry_id: int, email: str):
         "ts": time.time(),
     }
 
-def _restore_session() -> Tuple[Optional[object], Optional[int]]:
+def _restore_session():
     a = st.session_state.get("auth")
     if not a:
         return None, None
@@ -50,33 +63,41 @@ def _restore_session() -> Tuple[Optional[object], Optional[int]]:
     s.cookies = cookiejar_from_dict(a["cookies"])
     return s, int(a["entry_id"])
 
-def _persist_squad_json(payload: dict, path="cache/squad_latest.json"):
+def _persist_squad_json(payload, path="cache/squad_latest.json"):
     Path("cache").mkdir(exist_ok=True)
     with open(path, "w") as f:
         json.dump(payload, f)
 
-def refresh_squad(force_relogin: bool = False) -> pd.DataFrame:
+def refresh_squad(force_relogin=False):
     """Refresh the current user's squad and store it in session_state."""
     # 1) try existing session
     sess, entry_id = (None, None) if force_relogin else _restore_session()
 
-    # 2) re-login if needed using stored creds/env
-    if sess is None or entry_id is None:
-        email = st.session_state.get("email") or os.environ.get("FPL_EMAIL", "")
-        pwd   = st.session_state.get("password") or os.environ.get("FPL_PASSWORD", "")
-        if not email or not pwd:
-            st.warning("No stored login. Please use Squad → Login once first.")
-            return st.session_state.get("squad_df", pd.DataFrame())
-        sess, entry_id, msg = fpl_client.login(email, pwd)
-        if not sess:
-            st.error(f"Re-login failed: {msg}")
-            return st.session_state.get("squad_df", pd.DataFrame())
-        _save_auth(sess, entry_id, email)
+    bootstrap = _bootstrap()
+    picks_event_id = _default_picks_event_id(bootstrap)
 
-    # 3) fetch + join
+    # 2) if not logged in, try public entry id first (no login required)
+    if sess is None or entry_id is None:
+        entry_fallback = st.session_state.get("entry_id") or os.environ.get("FPL_ENTRY_ID", "")
+        if str(entry_fallback).strip():
+            entry_id = int(entry_fallback)
+            sess = None
+        else:
+            # 3) re-login if needed using stored creds/env
+            email = st.session_state.get("email") or os.environ.get("FPL_EMAIL", "")
+            pwd   = st.session_state.get("password") or os.environ.get("FPL_PASSWORD", "")
+            if not email or not pwd:
+                st.warning("No entry id or stored login. Use Squad → Entry ID (recommended) or login once.")
+                return st.session_state.get("squad_df", pd.DataFrame())
+            sess, entry_id, msg = fpl_client.login(email, pwd)
+            if not sess:
+                st.error(f"Re-login failed: {msg}")
+                return st.session_state.get("squad_df", pd.DataFrame())
+            _save_auth(sess, entry_id, email)
+
+    # 4) fetch + join
     try:
-        myteam = fpl_client.get_my_team(sess, entry_id)
-        bootstrap = _bootstrap()
+        myteam = fpl_client.get_entry_picks(entry_id, picks_event_id, session=sess)
         elements, _, _ = transforms.tables_from_bootstrap(bootstrap)
         df = transforms.picks_to_df(myteam, elements)
 
@@ -97,8 +118,20 @@ bootstrap = _bootstrap()
 elements, teams, etypes = transforms.tables_from_bootstrap(bootstrap)
 fixtures = _fixtures_df()
 teams_short = teams.set_index("id")["short_name"].to_dict()
-gw_now = transforms.current_event(bootstrap)
-st.caption(f"GW: {gw_now if gw_now else '?'}")
+gw_current = _event_id(bootstrap, "is_current")
+gw_next = _event_id(bootstrap, "is_next")
+if gw_current and gw_next:
+    st.caption(f"Current GW: {gw_current} • Next GW: {gw_next}")
+elif gw_current:
+    st.caption(f"Current GW: {gw_current}")
+elif gw_next:
+    st.caption(f"Next GW: {gw_next}")
+else:
+    st.caption("GW: ?")
+
+gw_proj_start = gw_next or gw_current or 1
+proj_all = _projections_df(elements, fixtures, teams_short, gw_proj_start)
+score_col_next = f"xpts_gw{int(gw_proj_start)}"
 
 
 # -----------------------------
@@ -136,11 +169,7 @@ with st.sidebar:
 
     # next GW controls
     st.subheader("Next GW list")
-    _next = None
-    for ev in bootstrap.get("events", []):
-        if ev.get("is_next"):
-            _next = ev["id"]; break
-    default_gw = _next or gw_now or 1
+    default_gw = gw_next or gw_current or 1
     gw_choice = st.number_input("Gameweek", min_value=1, max_value=len(bootstrap.get("events", [])) or 38,
                                 value=int(default_gw), step=1)
     sort_metric = st.selectbox("Sort by", ["ep_next", "total_points", "form", "points_per_game"])
@@ -152,8 +181,8 @@ with st.sidebar:
 # -----------------------------
 # Tabs
 # -----------------------------
-tab_squad, tab_perf, tab_transfers, tab_next = st.tabs(
-    ["🧑‍🤝‍🧑 Squad", "⭐ Top performers", "🔁 Transfers (beta)", "📅 Next GW players"]
+tab_squad, tab_perf, tab_transfers, tab_next, tab_plan = st.tabs(
+    ["🧑‍🤝‍🧑 Squad", "⭐ Top performers", "🔁 Transfers (3GW)", "📅 Next GW players", "📈 Planner (3GW)"]
 )
 
 # -----------------------------
@@ -162,10 +191,32 @@ tab_squad, tab_perf, tab_transfers, tab_next = st.tabs(
 with tab_squad:
     st.subheader("Your squad")
 
-    mode = st.radio("Source", ["Login to FPL", "Manual input"], index=0, horizontal=True)
+    mode = st.radio(
+        "Load method",
+        ["Entry ID (recommended)", "Email/password (may break)", "Browser cookie (pl_profile)", "Manual input"],
+        index=0,
+        horizontal=True,
+    )
     squad_df = st.session_state.get("squad_df", pd.DataFrame())
 
-    if mode == "Login to FPL":
+    if mode == "Entry ID (recommended)":
+        entry_id_txt = st.text_input("ENTRY ID", value=str(st.session_state.get("entry_id") or os.environ.get("FPL_ENTRY_ID", "")))
+        st.caption("Find it in your FPL URL: fantasy.premierleague.com/entry/<ENTRY_ID>/event/<GW>")
+        if st.button("📥 Load squad"):
+            try:
+                entry_id = int(entry_id_txt)
+                picks_event_id = _default_picks_event_id(bootstrap)
+                myteam = fpl_client.get_entry_picks(entry_id, picks_event_id)
+                squad_df = transforms.picks_to_df(myteam, elements)
+                st.session_state["squad_df"] = squad_df
+                st.session_state["entry_id"] = entry_id
+                st.session_state["squad_last_refreshed"] = time.time()
+                _persist_squad_json(myteam)
+                st.success("Loaded squad ✅")
+            except Exception as e:
+                st.error(f"Loading by entry id failed: {e}")
+
+    elif mode == "Email/password (may break)":
         c1, c2, c3 = st.columns([1,1,1])
         with c1:
             email = st.text_input("FPL email", os.environ.get("FPL_EMAIL",""), autocomplete="username")
@@ -173,6 +224,7 @@ with tab_squad:
             pwd = st.text_input("FPL password", os.environ.get("FPL_PASSWORD",""), type="password")
         with c3:
             entry_override = st.text_input("ENTRY ID (optional)", os.environ.get("FPL_ENTRY_ID",""))
+        st.caption("If login breaks (bot protection/holding/proxy), use Entry ID or Browser cookie instead.")
 
         if st.button("🔐 Login & Load"):
             with st.spinner("Logging in…"):
@@ -180,19 +232,49 @@ with tab_squad:
             if not sess:
                 st.error(f"Login failed: {msg}")
             else:
-                entry_id = int(entry_override) if entry_override.strip() else int(entry)
+                entry_id = int(entry_override) if str(entry_override).strip() else int(entry)
                 try:
-                    myteam = fpl_client.get_my_team(sess, entry_id)
+                    picks_event_id = _default_picks_event_id(bootstrap)
+                    myteam = fpl_client.get_entry_picks(entry_id, picks_event_id, session=sess)
                     squad_df = transforms.picks_to_df(myteam, elements)
                     st.session_state["squad_df"] = squad_df
                     st.session_state["email"] = email
                     st.session_state["password"] = pwd
+                    st.session_state["entry_id"] = entry_id
                     _save_auth(sess, entry_id, email)
                     st.session_state["squad_last_refreshed"] = time.time()
                     _persist_squad_json(myteam)
                     st.success("Loaded squad ✅")
                 except Exception as e:
                     st.error(f"Fetching squad failed: {e}")
+
+    elif mode == "Browser cookie (pl_profile)":
+        cookie_val = st.text_input("pl_profile cookie value", value="", type="password")
+        entry_override = st.text_input("ENTRY ID (optional)", os.environ.get("FPL_ENTRY_ID",""))
+        st.caption("Use when password login is blocked. Copy `pl_profile` from browser DevTools → Application → Cookies.")
+
+        if st.button("🍪 Load via cookie"):
+            try:
+                sess = fpl_client.session_from_browser_cookie(cookie_val.strip())
+                if str(entry_override).strip():
+                    entry_id = int(entry_override)
+                else:
+                    me = fpl_client.get_me(sess)
+                    entry_id = int((me.get("player") or {}).get("entry") or 0)
+                    if not entry_id:
+                        raise RuntimeError("Could not read entry id from /api/me. Provide ENTRY ID.")
+
+                picks_event_id = _default_picks_event_id(bootstrap)
+                myteam = fpl_client.get_entry_picks(entry_id, picks_event_id, session=sess)
+                squad_df = transforms.picks_to_df(myteam, elements)
+                st.session_state["squad_df"] = squad_df
+                st.session_state["entry_id"] = entry_id
+                _save_auth(sess, entry_id, "cookie")
+                st.session_state["squad_last_refreshed"] = time.time()
+                _persist_squad_json(myteam)
+                st.success("Loaded squad ✅")
+            except Exception as e:
+                st.error(f"Cookie load failed: {e}")
 
     else:
         st.write("Paste your picks JSON or upload a CSV with columns: element/element_id, is_captain, is_vice_captain, multiplier.")
@@ -231,8 +313,35 @@ with tab_squad:
 
     # render squad
     if not squad_df.empty:
-        show = squad_df[squad_df["pos"].isin(pos_filter)].copy()
+        squad_scored = squad_df.merge(
+            proj_all[["id", score_col_next, "xpts_horizon"]].rename(columns={"id": "player_id"}),
+            on="player_id",
+            how="left",
+        )
+        squad_scored[score_col_next] = pd.to_numeric(squad_scored[score_col_next], errors="coerce").fillna(0.0)
+        squad_scored["xpts_horizon"] = pd.to_numeric(squad_scored["xpts_horizon"], errors="coerce").fillna(0.0)
+
+        show = squad_scored[squad_scored["pos"].isin(pos_filter)].copy()
         st.dataframe(show, use_container_width=True, hide_index=True)
+
+        if st.button("⚡ Suggest best XI (proj)"):
+            res = optimizer.optimize_lineup(squad_df, proj_all, score_col=score_col_next)
+            if not res:
+                st.warning("Could not build a suggested XI for this squad.")
+            else:
+                d, m, f = res["formation"]
+                st.markdown(f"**Suggested formation:** {d}-{m}-{f}")
+                st.metric("Projected points (with captain)", f"{res['projected_points_with_captain']:.2f}")
+
+                st.subheader("Suggested Starting XI")
+                st.dataframe(
+                    res["starting_xi"][["pos", "web_name", "team_short", "xpts", "is_captain_suggested", "is_vice_suggested"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                st.subheader("Suggested Bench Order")
+                bench_cols = ["bench_order", "pos", "web_name", "team_short", "xpts"]
+                st.dataframe(res["bench"][bench_cols], use_container_width=True, hide_index=True)
 
         ts = st.session_state.get("squad_last_refreshed")
         if ts:
@@ -247,7 +356,7 @@ with tab_perf:
     st.subheader("Best picks right now")
     dfp = transforms.top_performers(
         elements=elements, pos_filter=pos_filter, metric_label=metric, topn=topn,
-        fx=fixtures, teams_short_map=teams_short, gw_from=gw_now, nfx=nfx
+        fx=fixtures, teams_short_map=teams_short, gw_from=gw_current, nfx=nfx
     )
     st.dataframe(dfp, use_container_width=True, hide_index=True)
 
@@ -266,7 +375,7 @@ with tab_transfers:
 
     if st.button("⚙️ Build suggestions"):
         sq = st.session_state.get("squad_df", pd.DataFrame())
-        rec = recommender.suggest_transfers(sq, elements, itb, int(ft), int(hit))
+        rec = recommender.suggest_transfers(sq, proj_all, itb, int(ft), int(hit), score_col="xpts_horizon")
         if rec["moves"]:
             st.success(f"Remaining ITB: £{rec['remaining_itb']}m")
             st.dataframe(pd.DataFrame(rec["moves"]), use_container_width=True, hide_index=True)
@@ -311,3 +420,32 @@ with tab_next:
         csv = df_next.to_csv(index=False).encode("utf-8")
         st.download_button("⬇️ Download CSV", data=csv,
                            file_name=f"players_gw{int(gw_choice)}.csv", mime="text/csv")
+
+# -----------------------------
+# Planner tab
+# -----------------------------
+with tab_plan:
+    st.subheader(f"3-GW planner (starting GW{int(gw_proj_start)})")
+    st.caption("Baseline: ep_next for the next GW (if available), otherwise ppg+form. Adjusted for fixture difficulty and doubles/blanks.")
+
+    # Global planner view
+    df_plan = proj_all.copy()
+    if pos_filter:
+        df_plan = df_plan[df_plan["pos"].isin(pos_filter)]
+    if "price_m" in df_plan.columns:
+        df_plan = df_plan[df_plan["price_m"] <= float(price_max)]
+    st.dataframe(df_plan.head(int(limit_n)), use_container_width=True, hide_index=True)
+
+    # Squad planner view (if loaded)
+    sq = st.session_state.get("squad_df", pd.DataFrame())
+    if not sq.empty:
+        st.subheader("Your squad – 3GW projection")
+        sqp = sq.merge(
+            proj_all[["id", score_col_next, "xpts_horizon"]].rename(columns={"id": "player_id"}),
+            on="player_id",
+            how="left",
+        )
+        sqp[score_col_next] = pd.to_numeric(sqp[score_col_next], errors="coerce").fillna(0.0)
+        sqp["xpts_horizon"] = pd.to_numeric(sqp["xpts_horizon"], errors="coerce").fillna(0.0)
+        sqp = sqp.sort_values("xpts_horizon", ascending=False)
+        st.dataframe(sqp, use_container_width=True, hide_index=True)
