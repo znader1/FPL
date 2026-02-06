@@ -37,7 +37,9 @@ This builds a **player × fixture** dataset for the current season using `/api/e
 
 Outputs:
 - Raw JSON snapshots: `data/raw/fpl/<season>/`
-- Aggregated table: `data/processed/fpl/<season>/player_match_history_<season>.csv` (and `.parquet` if available)
+- Aggregated tables:
+  - `data/processed/fpl/<season>/player_match_history_<season>.csv` (player × fixture)
+  - `data/processed/fpl/<season>/player_gw_history_<season>.csv` (player × gameweek, handles doubles)
 
 ## Main Features
 
