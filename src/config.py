@@ -1,6 +1,4 @@
 # config.py
-from dataclasses import dataclass
-
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
 
@@ -14,7 +12,13 @@ FIXTURES_TTL  = 300
 # Elements features you care about
 ELEMENTS_KEEP = [
     "id","web_name","team","element_type","total_points","form",
-    "points_per_game","now_cost","selected_by_percent"
+    "points_per_game","now_cost","selected_by_percent",
+    # Useful for projections / risk
+    "ep_next","ep_this","minutes",
+    "status","news",
+    "chance_of_playing_this_round","chance_of_playing_next_round",
+    # UI icons
+    "photo","code",
 ]
 
 # Position labels to show
@@ -33,7 +37,5 @@ SQUAD_COLUMNS = [
     "is_captain","is_vice_captain","multiplier"
 ]
 
-@dataclass
-class UIConfig:
-    topn_default: int = 15
-    fixtures_to_show: int = 3
+UI_TOPN_DEFAULT = 15
+UI_FIXTURES_TO_SHOW = 3
