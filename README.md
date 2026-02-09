@@ -41,6 +41,11 @@ Outputs:
   - `data/processed/fpl/<season>/player_match_history_<season>.csv` (player × fixture)
   - `data/processed/fpl/<season>/player_gw_history_<season>.csv` (player × gameweek, handles doubles)
 
+### Quick baseline backtest (sanity check)
+
+After scraping, run:
+- `python scripts/backtest_baseline.py`
+
 ## Main Features
 
 - Rolling averages and player form by position
