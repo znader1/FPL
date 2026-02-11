@@ -1,13 +1,14 @@
 # recommender.py
 import pandas as pd
 
-def naive_score(row: pd.Series) -> float:
+def naive_score(row):
     form = float(pd.to_numeric(row.get("form",0), errors="coerce") or 0)
     ppg  = float(pd.to_numeric(row.get("points_per_game",0), errors="coerce") or 0)
     return 0.6*ppg + 0.4*form
 
-def suggest_transfers(squad_df: pd.DataFrame, elements_all: pd.DataFrame,
-                      itb_m: float, free_transfers: int, hit_cap: int = 0):
+def suggest_transfers(squad_df, elements_all,
+                      itb_m, free_transfers, hit_cap=0,
+                      score_col=None):
     if squad_df.empty:
         return {"note":"No squad loaded.","moves":[],"remaining_itb":itb_m}
 
@@ -15,7 +16,10 @@ def suggest_transfers(squad_df: pd.DataFrame, elements_all: pd.DataFrame,
     for c in ["now_cost","form","points_per_game"]:
         el[c] = pd.to_numeric(el[c], errors="coerce")
     el["price_m"] = el["now_cost"]/10.0
-    el["score"] = el.apply(naive_score, axis=1)
+    if score_col and score_col in el.columns:
+        el["score"] = pd.to_numeric(el[score_col], errors="coerce").fillna(0.0)
+    else:
+        el["score"] = el.apply(naive_score, axis=1)
 
     starters = squad_df.sort_values("multiplier", ascending=False).head(11).copy()
     starters = starters.merge(el[["id","price_m","score","pos","web_name","team_short"]],

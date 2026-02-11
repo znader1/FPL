@@ -1,7 +1,6 @@
 import os
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 import requests
@@ -14,40 +13,40 @@ BASE = "https://fantasy.premierleague.com/api"
 
 # ---------- HTTP helpers ----------
 @retry(wait=wait_exponential(multiplier=1, min=1, max=10), stop=stop_after_attempt(5), reraise=True)
-def _get_json(url: str):
+def _get_json(url):
     r = requests.get(url, timeout=30, verify=certifi.where())
     r.raise_for_status()
     return r.json()
 
-def _ensure_dir(path: str) -> None:
+def _ensure_dir(path):
     os.makedirs(path, exist_ok=True)
 
-def _stamp_folder(base: str = "data/processed") -> str:
+def _stamp_folder(base="data/processed"):
     d = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     path = os.path.join(base, d)
     _ensure_dir(path)
     return path
 
-def _save_table(df: pd.DataFrame, path_no_ext: str) -> None:
+def _save_table(df, path_no_ext):
     df.to_csv(path_no_ext + ".csv", index=False)
     try:
         df.to_parquet(path_no_ext + ".parquet", index=False)
     except Exception:
         pass
 
-def _save_json(obj: Any, path: str) -> None:
+def _save_json(obj, path):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(obj, f, ensure_ascii=False, indent=2)
 
 # ---------- FPL endpoints ----------
-def fetch_bootstrap() -> Dict[str, Any]:
+def fetch_bootstrap():
     return _get_json(f"{BASE}/bootstrap-static/")
 
-def fetch_fixtures() -> List[Dict[str, Any]]:
+def fetch_fixtures():
     return _get_json(f"{BASE}/fixtures/")
 
 # ---------- Builders ----------
-def normalize_bootstrap(boot: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def normalize_bootstrap(boot):
     players = pd.DataFrame(boot.get("elements", []))
     teams   = pd.DataFrame(boot.get("teams", []))
     types   = pd.DataFrame(boot.get("element_types", []))
@@ -59,7 +58,7 @@ def normalize_bootstrap(boot: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFram
         events["deadline_time"] = pd.to_datetime(events["deadline_time"], errors="coerce", utc=True)
     return players, teams, types, events
 
-def get_next_event_id(events: pd.DataFrame) -> int | None:
+def get_next_event_id(events):
     # Prefer 'is_next' if present, else choose first with is_current==False and finished==False and deadline in future
     if "is_next" in events.columns and events["is_next"].any():
         return int(events.loc[events["is_next"] == True, "id"].iloc[0])
@@ -68,7 +67,7 @@ def get_next_event_id(events: pd.DataFrame) -> int | None:
     cand = events[(events.get("finished", False) == False) & (events["deadline_time"] > now)]
     return int(cand["id"].iloc[0]) if not cand.empty else None
 
-def build_next_gw_fixtures(fixtures_json: List[Dict[str, Any]], next_event_id: int) -> pd.DataFrame:
+def build_next_gw_fixtures(fixtures_json, next_event_id):
     fx = pd.DataFrame(fixtures_json)
     if "kickoff_time" in fx.columns:
         fx["kickoff_time"] = pd.to_datetime(fx["kickoff_time"], errors="coerce", utc=True)
@@ -78,7 +77,7 @@ def build_next_gw_fixtures(fixtures_json: List[Dict[str, Any]], next_event_id: i
     cols = [c for c in keep if c in fx_next.columns]
     return fx_next[cols].sort_values("kickoff_time")
 
-def build_players_table(players: pd.DataFrame, teams: pd.DataFrame, types: pd.DataFrame) -> pd.DataFrame:
+def build_players_table(players, teams, types):
     out_cols = [
         "id","web_name","first_name","second_name","team","now_cost","status",
         "chance_of_playing_this_round","chance_of_playing_next_round","news","news_added","element_type"
@@ -95,7 +94,7 @@ def build_players_table(players: pd.DataFrame, teams: pd.DataFrame, types: pd.Da
     return p.sort_values(["pos","team_name","web_name"])
 
 # ---------- Main task ----------
-def refresh_next_gw_snapshot(out_base: str = "data/processed") -> Dict[str,str]:
+def refresh_next_gw_snapshot(out_base="data/processed"):
     out_dir = _stamp_folder(out_base)
 
     boot = fetch_bootstrap()

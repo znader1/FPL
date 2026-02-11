@@ -1,7 +1,5 @@
 # src/fpl_client.py
-from __future__ import annotations
 import os, time
-from typing import Optional, Tuple, Dict, Any, List
 import requests
 from requests.exceptions import RequestException
 from urllib.parse import urlparse, parse_qs
@@ -10,13 +8,13 @@ from urllib.parse import urlparse, parse_qs
 def _verify():
     return os.environ.get("REQUESTS_CA_BUNDLE") or True
 
-# Try a couple of UAs. FPL's community wrapper uses a Dalvik (Android) UA & /a/login redirect. :contentReference[oaicite:0]{index=0}
+# Try a couple of UAs. Some setups work better with an Android UA + /a/login redirect.
 UA_PC = os.getenv("FPL_HTTP_UA",
                   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
 UA_ANDROID = "Dalvik/2.1.0 (Linux; U; Android 5.1; Nexus 5 Build/LMY47D)"
 
-def new_session(ua: str = UA_PC) -> requests.Session:
+def new_session(ua=UA_PC):
     s = requests.Session()
     s.headers.update({
         "User-Agent": ua,
@@ -26,7 +24,7 @@ def new_session(ua: str = UA_PC) -> requests.Session:
     })
     return s
 
-def _is_holding(resp: requests.Response) -> bool:
+def _is_holding(resp):
     try:
         if "holding.html" in (resp.url or "").lower(): return True
         if b"holding" in (resp.content or b"").lower(): return True
@@ -34,7 +32,7 @@ def _is_holding(resp: requests.Response) -> bool:
         pass
     return False
 
-def _json_dict(resp: requests.Response) -> Optional[dict]:
+def _json_dict(resp):
     ctype = (resp.headers.get("Content-Type") or "").lower()
     if "application/json" not in ctype:
         return None
@@ -44,7 +42,7 @@ def _json_dict(resp: requests.Response) -> Optional[dict]:
     except ValueError:
         return None
 
-def _do_login_once(s: requests.Session, email: str, password: str, redirect_uri: str) -> requests.Response:
+def _do_login_once(s, email, password, redirect_uri):
     payload = {
         "login": email,
         "password": password,
@@ -53,19 +51,20 @@ def _do_login_once(s: requests.Session, email: str, password: str, redirect_uri:
     }
     headers = {
         "Content-Type": "application/x-www-form-urlencoded",
-        "Origin": "https://fantasy.premierleague.com",
-        "Referer": "https://fantasy.premierleague.com/",
+        "Origin": "https://users.premierleague.com",
+        "Referer": "https://users.premierleague.com/accounts/login/",
         "User-Agent": s.headers.get("User-Agent", UA_PC),
     }
     return s.post("https://users.premierleague.com/accounts/login/",
                   data=payload, headers=headers, allow_redirects=True,
                   verify=_verify(), timeout=20)
 
-def login(email: str, password: str) -> Tuple[Optional[requests.Session], Optional[int], str]:
+def login(email, password):
     """
     Returns (session, entry_id, msg). Robust against holding page, non-JSON /api/me/,
     and missing cookies. Tries a desktop UA, then Android UA + /a/login redirect.
     """
+    last_err = None
     for attempt in (("PC", UA_PC, "https://fantasy.premierleague.com/"),
                     ("Android", UA_ANDROID, "https://fantasy.premierleague.com/a/login")):
         label, ua, redirect = attempt
@@ -74,14 +73,15 @@ def login(email: str, password: str) -> Tuple[Optional[requests.Session], Option
             # Warm-ups
             s.get("https://fantasy.premierleague.com/", verify=_verify(), timeout=20)
             s.get(redirect, verify=_verify(), timeout=20)
+            # Warm up the users domain too (helps with CSRF/cookies if the flow changed)
+            s.get("https://users.premierleague.com/accounts/login/", verify=_verify(), timeout=20)
             time.sleep(1.0)
-
             r = _do_login_once(s, email, password, redirect)
             if _is_holding(r):
                 time.sleep(2.5)
                 r = _do_login_once(s, email, password, redirect)
 
-            # If redirect carried a state=fail, expose reason (pattern borrowed from community lib). :contentReference[oaicite:1]{index=1}
+            # If redirect carried a state=fail, expose reason
             try:
                 q = parse_qs(urlparse(r.url).query)
                 if q.get("state", [""])[0] == "fail":
@@ -114,34 +114,82 @@ def login(email: str, password: str) -> Tuple[Optional[requests.Session], Option
 
         except RequestException as e:
             # Try the next attempt combo
-            last_err = str(e)
+            last_err = f"{type(e).__name__}: {e}"
             continue
 
     # If we got here, both attempts produced no entry/cookies
+    if last_err:
+        return None, None, f"Login produced no cookies/entry. Last error: {last_err}"
     return None, None, "Login produced no cookies/entry (holding/proxy/CA). Try cookie login."
 
-def get_bootstrap() -> Dict[str, Any]:
+
+def get_me(session=None):
+    """
+    Returns JSON from /api/me (requires auth cookies).
+    Useful for cookie-based login flows.
+    """
+    s = session or new_session()
+    r = s.get(
+        "https://fantasy.premierleague.com/api/me/",
+        headers={"Accept": "application/json"},
+        verify=_verify(),
+        timeout=20,
+    )
+    if r.status_code == 403:
+        raise RuntimeError("403 /api/me (cookies missing/expired or blocked).")
+    r.raise_for_status()
+    data = _json_dict(r)
+    if not data:
+        snip = (r.text or "")[:160].replace("\n", " ")
+        raise RuntimeError(f"/api/me non-JSON. snippet='{snip}…'")
+    return data
+
+def get_bootstrap():
     r = requests.get("https://fantasy.premierleague.com/api/bootstrap-static/",
                      verify=_verify(), timeout=20)
     r.raise_for_status()
     return r.json()
 
-def get_fixtures() -> List[dict]:
+def get_fixtures():
     r = requests.get("https://fantasy.premierleague.com/api/fixtures/",
                      verify=_verify(), timeout=20)
     r.raise_for_status()
     return r.json()
 
-def get_my_team(session: requests.Session, entry_id: int) -> Dict[str, Any]:
-    r = session.get(f"https://fantasy.premierleague.com/api/entry/{entry_id}/event/4/picks/",
-                    verify=_verify(), timeout=20)
+def get_entry_picks(
+    entry_id,
+    event_id,
+    session=None,
+):
+    """
+    Fetch an entry's picks for a specific GW (event).
+
+    Notes:
+    - This endpoint is generally public for any `entry_id`.
+    - Some networks / bot protections may still require a warmed session and
+      realistic User-Agent, hence the optional `session`.
+    """
+    s = session or new_session()
+    r = s.get(
+        f"https://fantasy.premierleague.com/api/entry/{int(entry_id)}/event/{int(event_id)}/picks/",
+        verify=_verify(),
+        timeout=20,
+    )
     if r.status_code == 403:
-        raise RuntimeError("403 /api/my-team (cookies expired or blocked).")
+        raise RuntimeError("403 /api/entry/.../picks (blocked by network/bot protection).")
     r.raise_for_status()
     return r.json()
 
+
+def get_my_team(session, entry_id, event_id):
+    """
+    Backwards-compatible wrapper (older code called this 'my team').
+    Prefer `get_entry_picks(entry_id, event_id, session=...)`.
+    """
+    return get_entry_picks(entry_id=entry_id, event_id=event_id, session=session)
+
 # -------- Optional: allow logging in with an existing browser cookie ----------
-def session_from_browser_cookie(pl_profile_value: str) -> requests.Session:
+def session_from_browser_cookie(pl_profile_value):
     """
     Build a session using a pl_profile cookie copied from your browser.
     Use when POST login is blocked by corp proxy/holding page.

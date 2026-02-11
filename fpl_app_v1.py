@@ -28,6 +28,137 @@ def _default_picks_event_id(bootstrap):
     # Prefer upcoming GW before deadline; fallback to current.
     return _event_id(bootstrap, "is_next") or _event_id(bootstrap, "is_current") or 1
 
+
+def _safe_int(x):
+    try:
+        return int(x)
+    except Exception:
+        return None
+
+
+def team_badge_url(team_code, size=50):
+    """
+    Best-effort PL badge URL. Not official API; may change.
+    """
+    team_code = _safe_int(team_code)
+    if not team_code:
+        return None
+    return f"https://resources.premierleague.com/premierleague/badges/{int(size)}/t{team_code}.png"
+
+
+def player_photo_url(player_code=None, photo=None, size="110x140"):
+    """
+    Best-effort player photo URL. Not official API; may change.
+    """
+    pid = _safe_int(player_code)
+    if not pid and photo:
+        try:
+            raw = str(photo).split(".")[0]
+            digits = "".join(ch for ch in raw if ch.isdigit())
+            pid = int(digits) if digits else None
+        except Exception:
+            pid = None
+    if not pid:
+        return None
+    return f"https://resources.premierleague.com/premierleague/photos/players/{size}/p{pid}.png"
+
+
+def render_player_tile(row, teams_code_map):
+    """
+    Small UI card for a single player.
+    Expects columns like: web_name, team_short, team, xpts, is_captain_suggested, is_vice_suggested, code/photo.
+    """
+    name = row.get("web_name", "")
+    team_short = row.get("team_short", "")
+    team_id = _safe_int(row.get("team"))
+    team_code = teams_code_map.get(team_id) if team_id else None
+
+    badge = team_badge_url(team_code, size=50)
+    photo = player_photo_url(row.get("code"), row.get("photo"), size="110x140")
+
+    cap = ""
+    if bool(row.get("is_captain_suggested")):
+        cap = " (C)"
+    elif bool(row.get("is_vice_suggested")):
+        cap = " (VC)"
+
+    # Images (optional)
+    if photo:
+        st.image(photo, width=70)
+    if badge:
+        st.image(badge, width=24)
+
+    st.markdown(f"**{name}{cap}**")
+    xpts = row.get("xpts")
+    try:
+        xpts_txt = f"{float(xpts):.2f}"
+    except Exception:
+        xpts_txt = ""
+    if xpts_txt:
+        st.caption(f"{team_short} • xPts {xpts_txt}")
+    else:
+        st.caption(f"{team_short}")
+
+
+def render_lineup(res, elements, teams, title="Suggested XI"):
+    """
+    Render a pitch-like lineup layout in Streamlit.
+    """
+    if not res:
+        return
+
+    team_code_map = {}
+    if teams is not None and not teams.empty and "id" in teams.columns and "code" in teams.columns:
+        team_code_map = teams.set_index("id")["code"].to_dict()
+
+    el_img = elements.copy()
+    cols = [c for c in ["id", "team", "code", "photo"] if c in el_img.columns]
+    el_img = el_img[cols].rename(columns={"id": "player_id"})
+
+    starting = res["starting_xi"].merge(el_img, on="player_id", how="left")
+    bench = res["bench"].merge(el_img, on="player_id", how="left")
+
+    d, m, f = res["formation"]
+
+    st.subheader(title)
+    st.caption(f"Formation: {d}-{m}-{f}")
+
+    # GK
+    gk = starting[starting["pos"] == "GKP"].sort_values("xpts", ascending=False).head(1)
+    cols = st.columns(1)
+    for _, r in gk.iterrows():
+        with cols[0]:
+            render_player_tile(r, team_code_map)
+
+    # DEF
+    st.divider()
+    defs = starting[starting["pos"] == "DEF"].sort_values("xpts", ascending=False).head(int(d))
+    cols = st.columns(int(d) if int(d) else 1)
+    for i, (_, r) in enumerate(defs.iterrows()):
+        with cols[i]:
+            render_player_tile(r, team_code_map)
+
+    # MID
+    st.divider()
+    mids = starting[starting["pos"] == "MID"].sort_values("xpts", ascending=False).head(int(m))
+    cols = st.columns(int(m) if int(m) else 1)
+    for i, (_, r) in enumerate(mids.iterrows()):
+        with cols[i]:
+            render_player_tile(r, team_code_map)
+
+    # FWD
+    st.divider()
+    fwds = starting[starting["pos"] == "FWD"].sort_values("xpts", ascending=False).head(int(f))
+    cols = st.columns(int(f) if int(f) else 1)
+    for i, (_, r) in enumerate(fwds.iterrows()):
+        with cols[i]:
+            render_player_tile(r, team_code_map)
+
+    st.subheader("Bench")
+    bench_cols = ["bench_order", "pos", "web_name", "team_short", "xpts"]
+    show = bench[bench_cols] if all(c in bench.columns for c in bench_cols) else bench
+    st.dataframe(show, use_container_width=True, hide_index=True)
+
 # -----------------------------
 # Cache wrappers
 # -----------------------------
@@ -333,15 +464,7 @@ with tab_squad:
                 st.markdown(f"**Suggested formation:** {d}-{m}-{f}")
                 st.metric("Projected points (with captain)", f"{res['projected_points_with_captain']:.2f}")
 
-                st.subheader("Suggested Starting XI")
-                st.dataframe(
-                    res["starting_xi"][["pos", "web_name", "team_short", "xpts", "is_captain_suggested", "is_vice_suggested"]],
-                    use_container_width=True,
-                    hide_index=True,
-                )
-                st.subheader("Suggested Bench Order")
-                bench_cols = ["bench_order", "pos", "web_name", "team_short", "xpts"]
-                st.dataframe(res["bench"][bench_cols], use_container_width=True, hide_index=True)
+                render_lineup(res, elements, teams, title="Suggested XI (with icons)")
 
         ts = st.session_state.get("squad_last_refreshed")
         if ts:

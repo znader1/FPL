@@ -1,9 +1,4 @@
 # transforms.py
-from __future__ import annotations
-
-import math
-from typing import Dict, Any, Optional, List, Tuple
-
 import pandas as pd
 
 # Support both package and flat script usage
@@ -16,7 +11,7 @@ except Exception:  # pragma: no cover
 # -----------------------------
 # Bootstrap / elements wrangling
 # -----------------------------
-def tables_from_bootstrap(bootstrap: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def tables_from_bootstrap(bootstrap):
     """
     Returns (elements, teams, element_types) with handy derived columns on elements:
     - team_name, team_short, pos
@@ -49,7 +44,7 @@ def tables_from_bootstrap(bootstrap: Dict[str, Any]) -> Tuple[pd.DataFrame, pd.D
     return el, teams, etypes
 
 
-def current_event(bootstrap: Dict[str, Any]) -> Optional[int]:
+def current_event(bootstrap):
     """
     Returns the current event id if available, otherwise the next event id, else None.
     """
@@ -65,7 +60,7 @@ def current_event(bootstrap: Dict[str, Any]) -> Optional[int]:
 # -----------------------------
 # My team → DataFrame
 # -----------------------------
-def picks_to_df(myteam: Dict[str, Any], elements: pd.DataFrame) -> pd.DataFrame:
+def picks_to_df(myteam, elements):
     """
     Convert /api/my-team/{entry}/ JSON into a tidy squad DataFrame joined to element info.
     """
@@ -90,7 +85,7 @@ def picks_to_df(myteam: Dict[str, Any], elements: pd.DataFrame) -> pd.DataFrame:
 # -----------------------------
 # Fixtures helpers
 # -----------------------------
-def fixtures_df(raw_fixtures: List[dict]) -> pd.DataFrame:
+def fixtures_df(raw_fixtures):
     """
     Normalize fixtures list into a DataFrame; keep only rows with an event (scheduled).
     """
@@ -102,12 +97,12 @@ def fixtures_df(raw_fixtures: List[dict]) -> pd.DataFrame:
 
 
 def fixtures_string(
-    fx: pd.DataFrame,
-    team_id: int,
-    teams_short_map: Dict[int, str],
-    gw_from: Optional[int],
-    n: int,
-) -> str:
+    fx,
+    team_id,
+    teams_short_map,
+    gw_from,
+    n,
+):
     """
     Compact string of the next n fixtures for a team starting at gw_from.
     Example: 'GW6 H-AVL(D2) | GW7 A-MCI(D5)'
@@ -116,7 +111,7 @@ def fixtures_string(
         return ""
     view = fx[(fx["team_h"] == team_id) | (fx["team_a"] == team_id)].copy()
     view = view[view["event"] >= gw_from].sort_values("event").head(n)
-    labels: List[str] = []
+    labels = []
     for _, r in view.iterrows():
         home = int(r["team_h"]) == int(team_id)
         opp = int(r["team_a"] if home else r["team_h"])
@@ -128,15 +123,15 @@ def fixtures_string(
 
 
 def top_performers(
-    elements: pd.DataFrame,
-    pos_filter: List[str],
-    metric_label: str,
-    topn: int,
-    fx: pd.DataFrame,
-    teams_short_map: Dict[int, str],
-    gw_from: Optional[int],
-    nfx: int,
-) -> pd.DataFrame:
+    elements,
+    pos_filter,
+    metric_label,
+    topn,
+    fx,
+    teams_short_map,
+    gw_from,
+    nfx,
+):
     """
     Rank players by a chosen metric and append a compact next-fixtures string.
     metric_label must exist in config.METRIC_MAP; falls back safely.
@@ -171,12 +166,12 @@ def top_performers(
 # -----------------------------
 # Next-GW players utilities
 # -----------------------------
-def fixtures_by_team_for_gw(fx: pd.DataFrame, gw: int) -> Dict[int, List[dict]]:
+def fixtures_by_team_for_gw(fx, gw):
     """
     Returns {team_id: [ {opp,is_home,diff,event}, ... ]} for the given GW.
     Handles doubles by returning multiple entries per team.
     """
-    out: Dict[int, List[dict]] = {}
+    out = {}
     if fx.empty:
         return out
     g = fx[fx["event"] == int(gw)]
@@ -203,11 +198,11 @@ def fixtures_by_team_for_gw(fx: pd.DataFrame, gw: int) -> Dict[int, List[dict]]:
 
 
 def annotate_elements_with_gw_fixtures(
-    elements: pd.DataFrame,
-    fx: pd.DataFrame,
-    gw: int,
-    teams_short_map: Dict[int, str],
-) -> pd.DataFrame:
+    elements,
+    fx,
+    gw,
+    teams_short_map,
+):
     """
     Adds per-player, team-based GW annotations:
       - gw_fixtures (e.g., 'H-AVL(D2) & A-MCI(D5)')
@@ -218,7 +213,7 @@ def annotate_elements_with_gw_fixtures(
     by_team = fixtures_by_team_for_gw(fx, int(gw))
     df = elements.copy()
 
-    def label(team_id: int) -> str:
+    def label(team_id):
         lst = by_team.get(int(team_id), [])
         if not lst:
             return ""
@@ -228,10 +223,10 @@ def annotate_elements_with_gw_fixtures(
             parts.append(f"{'H' if it['is_home'] else 'A'}-{opp}(D{int(it['diff'])})")
         return " & ".join(parts)
 
-    def dsum(team_id: int) -> int:
+    def dsum(team_id):
         return int(sum(int(it["diff"]) for it in by_team.get(int(team_id), [])))
 
-    def dcnt(team_id: int) -> int:
+    def dcnt(team_id):
         return int(len(by_team.get(int(team_id), [])))
 
     df["gw_fixtures"] = df["team"].map(label)
@@ -255,15 +250,15 @@ def annotate_elements_with_gw_fixtures(
 
 
 def players_for_gw(
-    elements: pd.DataFrame,
-    fx: pd.DataFrame,
-    gw: int,
-    teams_short_map: Dict[int, str],
-    pos_filter: Optional[List[str]] = None,
-    only_with_fixture: bool = True,
-    sort_by: str = "ep_next",
-    topn: Optional[int] = None,
-) -> pd.DataFrame:
+    elements,
+    fx,
+    gw,
+    teams_short_map,
+    pos_filter=None,
+    only_with_fixture=True,
+    sort_by="ep_next",
+    topn=None,
+):
     """
     Build a player table for the requested GW with fixture annotations.
     - Filters to players whose team has a fixture (or doubles) if only_with_fixture=True.
