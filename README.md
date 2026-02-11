@@ -46,6 +46,23 @@ Outputs:
 After scraping, run:
 - `python scripts/backtest_baseline.py`
 
+## Chat (RAG beta)
+
+The app includes a **Chat** tab that can:
+- Answer questions using your **loaded squad + projections + optimizer** (tool-based)
+- Optionally retrieve snippets from local docs in `kb/` (RAG)
+
+To enable LLM answers, set:
+- `OPENAI_API_KEY`
+- (optional) `OPENAI_MODEL` (default: `gpt-4o-mini`)
+
+Example:
+- `export OPENAI_API_KEY="..." && streamlit run fpl_app_v1.py`
+
+Docs for retrieval:
+- Put `.md` / `.txt` files in `kb/`
+- Use the sidebar “Clear cache” button if you add new docs and want to rebuild the index
+
 ## Main Features
 
 - Rolling averages and player form by position
@@ -53,7 +70,10 @@ After scraping, run:
 - Set-piece taker flags (penalty, corner, free kick)
 
 ## Repo Structure
-
+- `fpl_app_v1.py` – Streamlit UI (Squad / Transfers / Planner / Chat)
+- `src/` – core logic (FPL API client, projections, optimizer, season scraping)
+- `scripts/` – runnable scripts (refresh/backtest)
+- `kb/` – optional knowledge base for RAG
 
 ## Next Steps
 

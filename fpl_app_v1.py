@@ -8,7 +8,7 @@ import streamlit as st
 from requests.utils import dict_from_cookiejar, cookiejar_from_dict
 
 # import your package modules
-from src import config, fpl_client, transforms, recommender, projections, optimizer
+from src import config, fpl_client, transforms, recommender, projections, optimizer, rag, llm
 
 # -----------------------------
 # Streamlit page
@@ -174,6 +174,11 @@ def _fixtures_df():
 def _projections_df(elements, fixtures, teams_short_map, gw_start):
     return projections.project_elements_next_gws(elements, fixtures, teams_short_map, int(gw_start), horizon_gws=3)
 
+@st.cache_data(ttl=3600)
+def _rag_index(docs_dir, max_chars=1200, overlap=200):
+    docs = rag.load_docs_from_dir(docs_dir)
+    return rag.build_index(docs, max_chars=max_chars, overlap=overlap)
+
 
 # -----------------------------
 # Session helpers (auth + squad)
@@ -312,8 +317,8 @@ with st.sidebar:
 # -----------------------------
 # Tabs
 # -----------------------------
-tab_squad, tab_perf, tab_transfers, tab_next, tab_plan = st.tabs(
-    ["🧑‍🤝‍🧑 Squad", "⭐ Top performers", "🔁 Transfers (3GW)", "📅 Next GW players", "📈 Planner (3GW)"]
+tab_squad, tab_perf, tab_transfers, tab_next, tab_plan, tab_chat = st.tabs(
+    ["🧑‍🤝‍🧑 Squad", "⭐ Top performers", "🔁 Transfers (3GW)", "📅 Next GW players", "📈 Planner (3GW)", "🤖 Chat (RAG beta)"]
 )
 
 # -----------------------------
@@ -572,3 +577,120 @@ with tab_plan:
         sqp["xpts_horizon"] = pd.to_numeric(sqp["xpts_horizon"], errors="coerce").fillna(0.0)
         sqp = sqp.sort_values("xpts_horizon", ascending=False)
         st.dataframe(sqp, use_container_width=True, hide_index=True)
+
+
+# -----------------------------
+# Chat tab (RAG beta)
+# -----------------------------
+with tab_chat:
+    st.subheader("Chat (RAG beta)")
+    st.caption("Answers use your loaded squad + projections + optimizer. Optional doc retrieval from `kb/`. Set OPENAI_API_KEY to enable the LLM call.")
+
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        docs_dir = st.text_input("Docs folder", value="kb")
+    with c2:
+        top_k = st.number_input("Docs top-k", min_value=1, max_value=10, value=5, step=1)
+    with c3:
+        max_ctx = st.number_input("Max context chars", min_value=1000, max_value=10000, value=3500, step=500)
+
+    index = _rag_index(docs_dir)
+    st.caption(f"Docs chunks indexed: {len(index.get('chunks', []))}")
+
+    if "chat_messages" not in st.session_state:
+        st.session_state["chat_messages"] = []
+
+    c1, c2 = st.columns([1, 3])
+    with c1:
+        if st.button("🧹 Clear chat"):
+            st.session_state["chat_messages"] = []
+    with c2:
+        st.caption("Tip: ask 'who to captain', 'best XI', 'is a hit worth it', or 'plan next 3 GWs'.")
+
+    # render existing messages
+    for m in st.session_state["chat_messages"]:
+        with st.chat_message(m.get("role", "assistant")):
+            st.markdown(m.get("content", ""))
+
+    prompt = st.chat_input("Ask a question about your squad, transfers, captain, or planning…")
+    if prompt:
+        st.session_state["chat_messages"].append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        # Tool context (deterministic)
+        sq = st.session_state.get("squad_df", pd.DataFrame())
+        tool_lines = []
+        if sq is None or sq.empty:
+            tool_lines.append("SQUAD: (not loaded)")
+        else:
+            res = optimizer.optimize_lineup(sq, proj_all, score_col=score_col_next)
+            tool_lines.append(f"SQUAD: loaded players={len(sq)}")
+            if res:
+                d, m, f = res["formation"]
+                tool_lines.append(f"BEST_XI_FORMATION: {d}-{m}-{f}")
+                tool_lines.append(f"BEST_XI_XPTS_WITH_CAPTAIN: {res['projected_points_with_captain']:.2f}")
+                try:
+                    cap_id = int(res["captain_player_id"])
+                    cap_row = res["starting_xi"][res["starting_xi"]["player_id"] == cap_id].head(1)
+                    if not cap_row.empty:
+                        tool_lines.append(f"CAPTAIN_SUGGESTED: {cap_row.iloc[0]['web_name']}")
+                except Exception:
+                    pass
+
+            # quick transfer suggestions (3GW horizon)
+            try:
+                rec = recommender.suggest_transfers(sq, proj_all, itb_m=0.5, free_transfers=1, hit_cap=0, score_col="xpts_horizon")
+                if rec and rec.get("moves"):
+                    tool_lines.append("TRANSFER_SUGGESTIONS:")
+                    for mv in rec["moves"][:3]:
+                        tool_lines.append(f"- SELL {mv['sell']['name']} -> BUY {mv['buy']['name']} (gain {mv['score_gain']})")
+            except Exception:
+                pass
+
+        tool_ctx = "\n".join(tool_lines)
+
+        # RAG context (optional)
+        doc_results = rag.search(index, prompt, top_k=int(top_k)) if index else []
+        doc_ctx = rag.format_context(doc_results, max_chars=int(max_ctx)) if doc_results else ""
+
+        system = (
+            "You are an FPL assistant. Use ONLY the provided tool context and retrieved doc context. "
+            "If you don't have enough info, say what is missing. Don't invent injuries/news/lineups. "
+            "Be concrete (captain, bench order, transfers). If you use doc context, cite the SOURCE paths."
+        )
+
+        augmented_user = (
+            prompt
+            + "\n\nTOOL_CONTEXT:\n"
+            + tool_ctx
+            + "\n\nDOC_CONTEXT:\n"
+            + (doc_ctx if doc_ctx else "(none)")
+        )
+
+        # Build messages: keep last few turns, but augment the last user message
+        history = st.session_state["chat_messages"][-10:]
+        msgs = [{"role": "system", "content": system}]
+        for i, m in enumerate(history):
+            if i == len(history) - 1 and m.get("role") == "user":
+                msgs.append({"role": "user", "content": augmented_user})
+            else:
+                msgs.append({"role": m.get("role", "user"), "content": m.get("content", "")})
+
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking…"):
+                try:
+                    answer = llm.openai_chat(msgs)
+                    st.markdown(answer)
+                except Exception as e:
+                    answer = f"LLM not available: {e}\n\nYou can still use the app tabs (Squad / Transfers / Planner)."
+                    st.markdown(answer)
+
+            with st.expander("Show retrieval / tool context"):
+                st.text("TOOL_CONTEXT\n" + tool_ctx)
+                if doc_ctx:
+                    st.text("\n\nDOC_CONTEXT\n" + doc_ctx)
+                else:
+                    st.text("\n\nDOC_CONTEXT\n(none)")
+
+        st.session_state["chat_messages"].append({"role": "assistant", "content": answer})
