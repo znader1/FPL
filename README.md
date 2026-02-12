@@ -29,6 +29,17 @@ From the `FPL/` directory:
 - Install deps: `python3 -m pip install -r requirements.txt`
 - Run the app: `streamlit run fpl_app_v1.py`
 
+### FastAPI (for Lovable / web / iOS clients)
+
+Run locally:
+- `uvicorn api.main:app --reload --port 8000`
+
+Example call:
+- `curl "http://127.0.0.1:8000/recommendations?entry_id=1234567"`
+
+If you deploy publicly, set `FPL_API_KEY` and pass it from your frontend as:
+- Header `X-API-Key: <FPL_API_KEY>` (or `Authorization: Bearer <FPL_API_KEY>`)
+
 ### Scrape 2025–26 match history (FPL-only)
 
 This builds a **player × fixture** dataset for the current season using `/api/element-summary/{id}/`:
