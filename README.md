@@ -32,10 +32,19 @@ From the `FPL/` directory:
 ### FastAPI (for Lovable / web / iOS clients)
 
 Run locally:
-- `uvicorn api.main:app --reload --port 8000`
+- `uvicorn api.main:app --reload --port 8001`
 
-Example call:
-- `curl "http://127.0.0.1:8000/recommendations?entry_id=1234567"`
+Useful URLs:
+- `http://127.0.0.1:8001/docs` (Swagger UI)
+- `http://127.0.0.1:8001/health`
+
+Example calls:
+- `curl "http://127.0.0.1:8001/squad?entry_id=1234567"`
+- `curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&horizon_gws=3"`
+
+Browser frontend note (CORS):
+- Local dev CORS is enabled for common localhost ports by default (8080/5173/3000).
+- For production, set `FPL_API_CORS_ORIGINS` to your real frontend domain(s).
 
 If you deploy publicly, set `FPL_API_KEY` and pass it from your frontend as:
 - Header `X-API-Key: <FPL_API_KEY>` (or `Authorization: Bearer <FPL_API_KEY>`)

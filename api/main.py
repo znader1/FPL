@@ -22,14 +22,23 @@ def _csv_env(name):
 
 
 cors_origins = _csv_env("FPL_API_CORS_ORIGINS")
-if cors_origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+if not cors_origins:
+    cors_origins = [
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 _bootstrap_cache = {"ts": 0.0, "data": None}
@@ -199,16 +208,15 @@ def _attach_media(records, teams_code_map):
     return records
 
 
-def build_recommendations(payload):
-    entry_id = payload.get("entry_id") or os.environ.get("FPL_ENTRY_ID")
-    event_id = payload.get("event_id")
-    horizon_gws = payload.get("horizon_gws", 3)
-    include_transfers = _parse_bool(payload.get("include_transfers"), default=False)
-    itb_m = payload.get("itb_m", 0.5)
-    free_transfers = payload.get("free_transfers", 1)
-    hit_cap = payload.get("hit_cap", 0)
-
-    entry_id = _safe_int(entry_id)
+def load_fpl_context(entry_id, event_id, with_fixtures=True):
+    """
+    Fetches + normalizes the minimum context needed for any endpoint:
+    - bootstrap (cached), fixtures (cached)
+    - elements/teams tables and team maps
+    - entry picks for the given event
+    - a tidy squad_df (picks joined to elements)
+    """
+    entry_id = _safe_int(entry_id or os.environ.get("FPL_ENTRY_ID"))
     if not entry_id:
         raise HTTPException(status_code=400, detail="Missing/invalid entry_id.")
 
@@ -219,10 +227,7 @@ def build_recommendations(payload):
     if not event_id:
         raise HTTPException(status_code=400, detail="Missing/invalid event_id.")
 
-    horizon_gws = _safe_int(horizon_gws) or 3
-    horizon_gws = max(1, min(8, int(horizon_gws)))
-
-    fixtures = get_fixtures_cached()
+    fixtures = get_fixtures_cached() if with_fixtures else None
     elements, teams, _ = transforms.tables_from_bootstrap(bootstrap)
     teams_short = teams.set_index("id")["short_name"].to_dict()
     teams_code = teams.set_index("id")["code"].to_dict() if "code" in teams.columns else {}
@@ -235,6 +240,99 @@ def build_recommendations(payload):
     squad_df = transforms.picks_to_df(myteam, elements)
     if squad_df is None or squad_df.empty:
         raise HTTPException(status_code=404, detail="No picks returned for that entry/event.")
+
+    return {
+        "entry_id": int(entry_id),
+        "event_id": int(event_id),
+        "bootstrap": bootstrap,
+        "fixtures": fixtures,
+        "elements": elements,
+        "teams": teams,
+        "teams_short": teams_short,
+        "teams_code": teams_code,
+        "myteam": myteam,
+        "squad_df": squad_df,
+    }
+
+
+def build_squad(payload):
+    ctx = load_fpl_context(payload.get("entry_id"), payload.get("event_id"), with_fixtures=False)
+
+    elements = ctx["elements"]
+    teams_code = ctx["teams_code"]
+    myteam = ctx["myteam"]
+
+    picks = pd.DataFrame(myteam.get("picks", []))
+    if picks.empty:
+        raise HTTPException(status_code=404, detail="No picks in response.")
+
+    picks = picks.rename(columns={"element": "player_id"})
+    for c in ["player_id", "position", "multiplier"]:
+        if c in picks.columns:
+            picks[c] = pd.to_numeric(picks[c], errors="coerce")
+
+    el_cols = [c for c in ["id", "web_name", "team", "team_short", "team_name", "pos", "code", "photo"] if c in elements.columns]
+    el_small = elements[el_cols].rename(columns={"id": "player_id"})
+    picks = picks.merge(el_small, on="player_id", how="left")
+
+    if "position" in picks.columns:
+        picks["bench_order"] = picks["position"].apply(lambda p: int(p) - 11 if pd.notna(p) and int(p) > 11 else None)
+        picks = picks.sort_values("position")
+
+    records = _attach_media(_df_records(picks), teams_code)
+
+    starting = []
+    bench = []
+    for r in records:
+        pos = _safe_int(r.get("position"))
+        if pos is not None and pos > 11:
+            bench.append(r)
+        else:
+            starting.append(r)
+
+    bench.sort(key=lambda r: _safe_int(r.get("bench_order")) or 99)
+
+    captain_id = None
+    vice_id = None
+    for r in records:
+        if r.get("is_captain") is True:
+            captain_id = _safe_int(r.get("player_id"))
+        if r.get("is_vice_captain") is True:
+            vice_id = _safe_int(r.get("player_id"))
+
+    return {
+        "entry_id": ctx["entry_id"],
+        "event_id": ctx["event_id"],
+        "captain_player_id": captain_id,
+        "vice_player_id": vice_id,
+        "starting_xi": starting,
+        "bench": bench,
+        "entry_history": myteam.get("entry_history"),
+        "active_chip": myteam.get("active_chip"),
+    }
+
+
+def build_recommendations(payload):
+    entry_id = payload.get("entry_id") or os.environ.get("FPL_ENTRY_ID")
+    event_id = payload.get("event_id")
+    horizon_gws = payload.get("horizon_gws", 3)
+    include_transfers = _parse_bool(payload.get("include_transfers"), default=False)
+    itb_m = payload.get("itb_m", 0.5)
+    free_transfers = payload.get("free_transfers", 1)
+    hit_cap = payload.get("hit_cap", 0)
+
+    ctx = load_fpl_context(entry_id, event_id, with_fixtures=True)
+    entry_id = ctx["entry_id"]
+    event_id = ctx["event_id"]
+
+    horizon_gws = _safe_int(horizon_gws) or 3
+    horizon_gws = max(1, min(8, int(horizon_gws)))
+
+    fixtures = ctx["fixtures"]
+    elements = ctx["elements"]
+    teams_short = ctx["teams_short"]
+    teams_code = ctx["teams_code"]
+    squad_df = ctx["squad_df"]
 
     try:
         proj_all = projections.project_elements_next_gws(
@@ -293,6 +391,36 @@ def build_recommendations(payload):
 @app.get("/health")
 def health():
     return {"ok": True, "ts": datetime.utcnow().isoformat() + "Z"}
+
+
+@app.get("/squad")
+def squad_get(
+    entry_id=None,
+    event_id=None,
+    api_key=None,
+    x_api_key=Header(None),
+    authorization=Header(None),
+):
+    err = _check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
+    if err:
+        return err
+    payload = {"entry_id": entry_id, "event_id": event_id}
+    out = build_squad(payload)
+    return JSONResponse(content=jsonable_encoder(out))
+
+
+@app.post("/squad")
+def squad_post(
+    payload=Body(None),
+    api_key=None,
+    x_api_key=Header(None),
+    authorization=Header(None),
+):
+    err = _check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key or (payload or {}).get("api_key"))
+    if err:
+        return err
+    out = build_squad(payload or {})
+    return JSONResponse(content=jsonable_encoder(out))
 
 
 @app.get("/recommendations")
