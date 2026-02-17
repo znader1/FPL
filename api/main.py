@@ -86,6 +86,13 @@ def _event_id(bootstrap, flag):
 
 
 def _default_picks_event_id(bootstrap):
+    # "Squad GW": use the currently active GW first (more likely to have picks),
+    # then fallback to next.
+    return _event_id(bootstrap, "is_current") or _event_id(bootstrap, "is_next") or 1
+
+
+def _default_optimize_event_id(bootstrap):
+    # "Optimize GW": usually the next GW you want to plan for.
     return _event_id(bootstrap, "is_next") or _event_id(bootstrap, "is_current") or 1
 
 
@@ -221,38 +228,56 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
     max_event_id = _max_event_id(bootstrap)
 
     explicit_squad_event = squad_event_id is not None and str(squad_event_id).strip() != ""
-    squad_event_id_int = _safe_int(squad_event_id)
-    if explicit_squad_event and not squad_event_id_int:
-        notes.append("Invalid squad_event_id; using default (is_next/is_current).")
-        squad_event_id_int = None
-    if squad_event_id_int is None:
-        squad_event_id_int = _default_picks_event_id(bootstrap)
+    requested_squad_event_id = _safe_int(squad_event_id) if explicit_squad_event else None
+    if explicit_squad_event and not requested_squad_event_id:
+        notes.append("Invalid squad_event_id; using defaults.")
 
-    if int(squad_event_id_int) < 1:
-        notes.append("squad_event_id < 1; clamped to 1.")
-        squad_event_id_int = 1
-    if int(squad_event_id_int) > int(max_event_id):
-        notes.append(f"squad_event_id > {int(max_event_id)}; clamped to {int(max_event_id)}.")
-        squad_event_id_int = int(max_event_id)
+    current_event_id = _event_id(bootstrap, "is_current")
+    next_event_id = _event_id(bootstrap, "is_next")
+    default_squad_event_id = _default_picks_event_id(bootstrap)
+
+    candidates = []
+    for cand in [
+        requested_squad_event_id,
+        default_squad_event_id,
+        current_event_id,
+        (int(current_event_id) - 1) if current_event_id and int(current_event_id) > 1 else None,
+        next_event_id,
+    ]:
+        if cand is None:
+            continue
+        cand = _safe_int(cand)
+        if not cand:
+            continue
+        if int(cand) < 1:
+            cand = 1
+        if int(cand) > int(max_event_id):
+            cand = int(max_event_id)
+        if cand not in candidates:
+            candidates.append(int(cand))
 
     fixtures = get_fixtures_cached() if with_fixtures else None
     elements, teams, _ = transforms.tables_from_bootstrap(bootstrap)
     teams_short = teams.set_index("id")["short_name"].to_dict()
     teams_code = teams.set_index("id")["code"].to_dict() if "code" in teams.columns else {}
 
-    try:
-        myteam = fpl_client.get_entry_picks(entry_id, int(squad_event_id_int))
-    except Exception as e:
-        fallback_event_id = _default_picks_event_id(bootstrap)
-        if explicit_squad_event and _safe_int(fallback_event_id) and int(fallback_event_id) != int(squad_event_id_int):
-            try:
-                myteam = fpl_client.get_entry_picks(entry_id, int(fallback_event_id))
-                notes.append(f"squad_event_id {int(squad_event_id_int)} not available; used {int(fallback_event_id)}.")
-                squad_event_id_int = int(fallback_event_id)
-            except Exception:
-                raise HTTPException(status_code=502, detail=f"Failed to fetch entry picks: {e}")
-        else:
-            raise HTTPException(status_code=502, detail=f"Failed to fetch entry picks: {e}")
+    myteam = None
+    used_event_id = None
+    last_err = None
+    for cand in candidates:
+        try:
+            myteam = fpl_client.get_entry_picks(entry_id, int(cand))
+            used_event_id = int(cand)
+            break
+        except Exception as e:
+            last_err = e
+            continue
+
+    if not myteam or not used_event_id:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch entry picks. Last error: {last_err}")
+
+    if explicit_squad_event and requested_squad_event_id and int(used_event_id) != int(requested_squad_event_id):
+        notes.append(f"squad_event_id {int(requested_squad_event_id)} not available; used {int(used_event_id)}.")
 
     squad_df = transforms.picks_to_df(myteam, elements)
     if squad_df is None or squad_df.empty:
@@ -260,7 +285,7 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
 
     return {
         "entry_id": int(entry_id),
-        "squad_event_id": int(squad_event_id_int),
+        "squad_event_id": int(used_event_id),
         "max_event_id": int(max_event_id),
         "bootstrap": bootstrap,
         "fixtures": fixtures,
@@ -352,10 +377,12 @@ def build_recommendations(payload):
     explicit_optimize_event = optimize_event_id_raw is not None and str(optimize_event_id_raw).strip() != ""
     optimize_event_id = _safe_int(optimize_event_id_raw)
     if explicit_optimize_event and not optimize_event_id:
-        notes.append("Invalid event_id; using squad_event_id.")
+        notes.append("Invalid event_id; using default optimize GW.")
         optimize_event_id = None
     if optimize_event_id is None:
-        optimize_event_id = int(squad_event_id)
+        optimize_event_id = _default_optimize_event_id(ctx["bootstrap"])
+        if not optimize_event_id:
+            optimize_event_id = int(squad_event_id)
 
     if int(optimize_event_id) < 1:
         notes.append("event_id < 1; clamped to 1.")
@@ -555,4 +582,3 @@ def recommendations_post(
         return err
     out = build_recommendations(payload)
     return JSONResponse(content=jsonable_encoder(out))
-

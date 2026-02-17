@@ -44,7 +44,8 @@ Example calls:
 
 Notes:
 - `event_id` = the GW you want to optimize for (can be future).
-- `squad_event_id` (optional) = which GW to load your saved squad from. If omitted, the API uses `is_next` (or `is_current`).
+- `squad_event_id` (optional) = which GW to load your saved squad from. If omitted, the API uses `is_current` (or `is_next`).
+- If `squad_event_id` is in the future and not available yet, the API falls back to a valid GW and returns a message in `notes[]`.
 - Each player in `starting_xi` / `bench` includes `fixtures_horizon[]` and `next_fixtures` to show upcoming opponents across the horizon.
 
 Browser frontend note (CORS):
