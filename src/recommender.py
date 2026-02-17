@@ -22,13 +22,17 @@ def suggest_transfers(squad_df, elements_all,
         el["score"] = el.apply(naive_score, axis=1)
 
     starters = squad_df.sort_values("multiplier", ascending=False).head(11).copy()
+    starters = starters.drop(columns=["pos", "web_name", "team_short"], errors="ignore")
     starters = starters.merge(el[["id","price_m","score","pos","web_name","team_short"]],
                               left_on="player_id", right_on="id", how="left")
     weakest = starters.sort_values("score").head(max(1, min(2, int(free_transfers or 1))))
-
+    print(weakest)
     moves=[]; remain=itb_m
     for _,w in weakest.iterrows():
-        sell=w["price_m"]; pos=w["pos"]
+        sell=w["price_m"]
+        print(sell)
+        pos=w["pos"]
+        print(pos)
         cand = el[(el["pos"]==pos) & (el["price_m"]<=sell+remain)].sort_values("score", ascending=False).head(1)
         if not cand.empty and int(cand.iloc[0]["id"])!=int(w["player_id"]):
             t=cand.iloc[0]; delta=float(t["price_m"]-sell); remain-=max(delta,0)
