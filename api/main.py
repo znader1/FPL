@@ -1,12 +1,9 @@
 import os
 import time
 from datetime import datetime
-import logging
-
-logger = logging.getLogger(__name__)
 
 import pandas as pd
-from fastapi import Body, FastAPI, HTTPException, Header
+from fastapi import Body, FastAPI, Header, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -14,7 +11,7 @@ from fastapi.responses import JSONResponse
 from src import config, fpl_client, optimizer, projections, recommender, transforms
 
 
-app = FastAPI(title="FPL Assistant API", version="0.1.0")
+app = FastAPI(title="FPL Assistant API", version="0.2.0")
 
 
 def _csv_env(name):
@@ -25,14 +22,23 @@ def _csv_env(name):
 
 
 cors_origins = _csv_env("FPL_API_CORS_ORIGINS")
-if cors_origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["http://localhost:8080"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+if not cors_origins:
+    cors_origins = [
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 _bootstrap_cache = {"ts": 0.0, "data": None}
@@ -81,6 +87,14 @@ def _event_id(bootstrap, flag):
 
 def _default_picks_event_id(bootstrap):
     return _event_id(bootstrap, "is_next") or _event_id(bootstrap, "is_current") or 1
+
+
+def _max_event_id(bootstrap):
+    try:
+        ev_ids = [int(ev.get("id")) for ev in bootstrap.get("events", []) if ev.get("id") is not None]
+        return max(ev_ids) if ev_ids else 38
+    except Exception:
+        return 38
 
 
 def _safe_int(x):
@@ -134,9 +148,6 @@ def _check_api_key(x_api_key=None, authorization=None, api_key=None):
 
 
 def team_badge_url(team_code, size=50):
-    """
-    Best-effort PL badge URL. Not official API; may change.
-    """
     team_code = _safe_int(team_code)
     if not team_code:
         return None
@@ -144,9 +155,6 @@ def team_badge_url(team_code, size=50):
 
 
 def player_photo_url(player_code=None, photo=None, size="110x140"):
-    """
-    Best-effort player photo URL. Not official API; may change.
-    """
     pid = _safe_int(player_code)
     if not pid and photo:
         try:
@@ -202,59 +210,190 @@ def _attach_media(records, teams_code_map):
     return records
 
 
-def build_recommendations(payload):
-    entry_id = payload.get("entry_id") or os.environ.get("FPL_ENTRY_ID")
-    event_id = payload.get("event_id")
-    horizon_gws = payload.get("horizon_gws", 3)
-    include_transfers = _parse_bool(payload.get("include_transfers"), default=False)
-    itb_m = payload.get("itb_m", 0.5)
-    free_transfers = payload.get("free_transfers", 1)
-    hit_cap = payload.get("hit_cap", 0)
+def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
+    notes = []
 
-    entry_id = _safe_int(entry_id)
+    entry_id = _safe_int(entry_id or os.environ.get("FPL_ENTRY_ID"))
     if not entry_id:
         raise HTTPException(status_code=400, detail="Missing/invalid entry_id.")
 
     bootstrap = get_bootstrap_cached()
-    if event_id is None or str(event_id).strip() == "":
-        event_id = _default_picks_event_id(bootstrap)
-    event_id = _safe_int(event_id)
-    if not event_id:
-        raise HTTPException(status_code=400, detail="Missing/invalid event_id.")
+    max_event_id = _max_event_id(bootstrap)
 
-    horizon_gws = _safe_int(horizon_gws) or 3
-    horizon_gws = max(1, min(8, int(horizon_gws)))
+    explicit_squad_event = squad_event_id is not None and str(squad_event_id).strip() != ""
+    squad_event_id_int = _safe_int(squad_event_id)
+    if explicit_squad_event and not squad_event_id_int:
+        notes.append("Invalid squad_event_id; using default (is_next/is_current).")
+        squad_event_id_int = None
+    if squad_event_id_int is None:
+        squad_event_id_int = _default_picks_event_id(bootstrap)
 
-    fixtures = get_fixtures_cached()
+    if int(squad_event_id_int) < 1:
+        notes.append("squad_event_id < 1; clamped to 1.")
+        squad_event_id_int = 1
+    if int(squad_event_id_int) > int(max_event_id):
+        notes.append(f"squad_event_id > {int(max_event_id)}; clamped to {int(max_event_id)}.")
+        squad_event_id_int = int(max_event_id)
+
+    fixtures = get_fixtures_cached() if with_fixtures else None
     elements, teams, _ = transforms.tables_from_bootstrap(bootstrap)
     teams_short = teams.set_index("id")["short_name"].to_dict()
     teams_code = teams.set_index("id")["code"].to_dict() if "code" in teams.columns else {}
 
     try:
-        myteam = fpl_client.get_entry_picks(entry_id, event_id)
+        myteam = fpl_client.get_entry_picks(entry_id, int(squad_event_id_int))
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Failed to fetch entry picks: {e}")
+        fallback_event_id = _default_picks_event_id(bootstrap)
+        if explicit_squad_event and _safe_int(fallback_event_id) and int(fallback_event_id) != int(squad_event_id_int):
+            try:
+                myteam = fpl_client.get_entry_picks(entry_id, int(fallback_event_id))
+                notes.append(f"squad_event_id {int(squad_event_id_int)} not available; used {int(fallback_event_id)}.")
+                squad_event_id_int = int(fallback_event_id)
+            except Exception:
+                raise HTTPException(status_code=502, detail=f"Failed to fetch entry picks: {e}")
+        else:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch entry picks: {e}")
 
     squad_df = transforms.picks_to_df(myteam, elements)
     if squad_df is None or squad_df.empty:
         raise HTTPException(status_code=404, detail="No picks returned for that entry/event.")
+
+    return {
+        "entry_id": int(entry_id),
+        "squad_event_id": int(squad_event_id_int),
+        "max_event_id": int(max_event_id),
+        "bootstrap": bootstrap,
+        "fixtures": fixtures,
+        "elements": elements,
+        "teams": teams,
+        "teams_short": teams_short,
+        "teams_code": teams_code,
+        "myteam": myteam,
+        "squad_df": squad_df,
+        "notes": notes,
+    }
+
+
+def build_squad(payload):
+    ctx = load_fpl_context(payload.get("entry_id"), payload.get("event_id"), with_fixtures=False)
+
+    elements = ctx["elements"]
+    teams_code = ctx["teams_code"]
+    myteam = ctx["myteam"]
+
+    picks = pd.DataFrame(myteam.get("picks", []))
+    if picks.empty:
+        raise HTTPException(status_code=404, detail="No picks in response.")
+
+    picks = picks.rename(columns={"element": "player_id"})
+    for c in ["player_id", "position", "multiplier"]:
+        if c in picks.columns:
+            picks[c] = pd.to_numeric(picks[c], errors="coerce")
+
+    el_cols = [c for c in ["id", "web_name", "team", "team_short", "team_name", "pos", "code", "photo"] if c in elements.columns]
+    el_small = elements[el_cols].rename(columns={"id": "player_id"})
+    picks = picks.merge(el_small, on="player_id", how="left")
+
+    if "position" in picks.columns:
+        picks["bench_order"] = picks["position"].apply(lambda p: int(p) - 11 if pd.notna(p) and int(p) > 11 else None)
+        picks = picks.sort_values("position")
+
+    records = _attach_media(_df_records(picks), teams_code)
+
+    starting = []
+    bench = []
+    for r in records:
+        pos = _safe_int(r.get("position"))
+        if pos is not None and pos > 11:
+            bench.append(r)
+        else:
+            starting.append(r)
+    bench.sort(key=lambda r: _safe_int(r.get("bench_order")) or 99)
+
+    captain_id = None
+    vice_id = None
+    for r in records:
+        if r.get("is_captain") is True:
+            captain_id = _safe_int(r.get("player_id"))
+        if r.get("is_vice_captain") is True:
+            vice_id = _safe_int(r.get("player_id"))
+
+    return {
+        "entry_id": ctx["entry_id"],
+        "event_id": ctx["squad_event_id"],
+        "notes": ctx.get("notes") or [],
+        "captain_player_id": captain_id,
+        "vice_player_id": vice_id,
+        "starting_xi": starting,
+        "bench": bench,
+        "entry_history": myteam.get("entry_history"),
+        "active_chip": myteam.get("active_chip"),
+    }
+
+
+def build_recommendations(payload):
+    entry_id = payload.get("entry_id") or os.environ.get("FPL_ENTRY_ID")
+    optimize_event_id_raw = payload.get("event_id")
+    squad_event_id_raw = payload.get("squad_event_id")
+    horizon_gws_raw = payload.get("horizon_gws", 3)
+
+    include_transfers = _parse_bool(payload.get("include_transfers"), default=False)
+    itb_m = payload.get("itb_m", 0.5)
+    free_transfers = payload.get("free_transfers", 1)
+    hit_cap = payload.get("hit_cap", 0)
+
+    ctx = load_fpl_context(entry_id, squad_event_id_raw, with_fixtures=True)
+    notes = list(ctx.get("notes") or [])
+
+    entry_id = ctx["entry_id"]
+    squad_event_id = ctx["squad_event_id"]
+    max_event_id = ctx["max_event_id"]
+
+    explicit_optimize_event = optimize_event_id_raw is not None and str(optimize_event_id_raw).strip() != ""
+    optimize_event_id = _safe_int(optimize_event_id_raw)
+    if explicit_optimize_event and not optimize_event_id:
+        notes.append("Invalid event_id; using squad_event_id.")
+        optimize_event_id = None
+    if optimize_event_id is None:
+        optimize_event_id = int(squad_event_id)
+
+    if int(optimize_event_id) < 1:
+        notes.append("event_id < 1; clamped to 1.")
+        optimize_event_id = 1
+    if int(optimize_event_id) > int(max_event_id):
+        notes.append(f"event_id > {int(max_event_id)}; clamped to {int(max_event_id)}.")
+        optimize_event_id = int(max_event_id)
+
+    horizon_gws = _safe_int(horizon_gws_raw)
+    if horizon_gws is None:
+        notes.append("Invalid horizon_gws; using 3.")
+        horizon_gws = 3
+    horizon_gws = max(1, min(8, int(horizon_gws)))
+    remaining = int(max_event_id) - int(optimize_event_id) + 1
+    if remaining < 1:
+        remaining = 1
+    if int(horizon_gws) > int(remaining):
+        notes.append(f"horizon_gws trimmed to {int(remaining)} (season end).")
+        horizon_gws = int(remaining)
+
+    fixtures = ctx["fixtures"]
+    elements = ctx["elements"]
+    teams_short = ctx["teams_short"]
+    teams_code = ctx["teams_code"]
+    squad_df = ctx["squad_df"]
 
     try:
         proj_all = projections.project_elements_next_gws(
             elements=elements,
             fixtures=fixtures,
             teams_short_map=teams_short,
-            gw_start=event_id,
+            gw_start=optimize_event_id,
             horizon_gws=horizon_gws,
         )
-        logger.info(f"proj_all shape: {proj_all.shape if hasattr(proj_all, 'shape') else 'N/A'}")
-        logger.info(f"proj_all columns: {list(proj_all.columns) if hasattr(proj_all, 'columns') else 'N/A'}")
-        logger.info(f"proj_all sample:\n{proj_all.head()}")
-        
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Projection failed: {e}")
-    
-    score_col = f"xpts_gw{int(event_id)}"
+
+    score_col = f"xpts_gw{int(optimize_event_id)}"
     try:
         res = optimizer.optimize_lineup(squad_df, proj_all, score_col=score_col)
     except Exception as e:
@@ -262,19 +401,54 @@ def build_recommendations(payload):
     if not res:
         raise HTTPException(status_code=500, detail="Could not optimize lineup for this squad.")
 
+    gws = [int(optimize_event_id) + i for i in range(int(horizon_gws))]
+
     el_img = elements.copy()
     cols = [c for c in ["id", "team", "code", "photo"] if c in el_img.columns]
     el_img = el_img[cols].rename(columns={"id": "player_id"})
 
-    starting = res["starting_xi"].merge(el_img, on="player_id", how="left")
-    bench = res["bench"].merge(el_img, on="player_id", how="left")
+    proj_cols = ["id"]
+    if "xpts_horizon" in proj_all.columns:
+        proj_cols.append("xpts_horizon")
+    for gw in gws:
+        for c in [f"xpts_gw{gw}", f"fixtures_gw{gw}", f"fixture_count_gw{gw}", f"diff_avg_gw{gw}"]:
+            if c in proj_all.columns:
+                proj_cols.append(c)
+    proj_small = proj_all[list(dict.fromkeys(proj_cols))].copy().rename(columns={"id": "player_id"})
+
+    starting = res["starting_xi"].merge(el_img, on="player_id", how="left").merge(proj_small, on="player_id", how="left")
+    bench = res["bench"].merge(el_img, on="player_id", how="left").merge(proj_small, on="player_id", how="left")
     starting_records = _attach_media(_df_records(starting), teams_code)
     bench_records = _attach_media(_df_records(bench), teams_code)
 
+    drop_keys = []
+    for gw in gws:
+        drop_keys.extend([f"xpts_gw{gw}", f"fixtures_gw{gw}", f"fixture_count_gw{gw}", f"diff_avg_gw{gw}"])
+    for rec in starting_records + bench_records:
+        fixtures_h = []
+        for gw in gws:
+            fixtures_h.append(
+                {
+                    "event_id": int(gw),
+                    "fixtures": (rec.get(f"fixtures_gw{gw}") or ""),
+                    "fixture_count": int(_safe_int(rec.get(f"fixture_count_gw{gw}")) or 0),
+                    "diff_avg": float(_safe_float(rec.get(f"diff_avg_gw{gw}"), default=0.0) or 0.0),
+                    "xpts": float(_safe_float(rec.get(f"xpts_gw{gw}"), default=0.0) or 0.0),
+                }
+            )
+        rec["fixtures_horizon"] = fixtures_h
+        rec["next_fixtures"] = fixtures_h[0]["fixtures"] if fixtures_h else ""
+        for k in drop_keys:
+            if k in rec:
+                rec.pop(k, None)
+
     out = {
         "entry_id": int(entry_id),
-        "event_id": int(event_id),
+        "squad_event_id": int(squad_event_id),
+        "event_id": int(optimize_event_id),
         "horizon_gws": int(horizon_gws),
+        "gws": gws,
+        "notes": notes,
         "formation": list(res["formation"]),
         "captain_player_id": int(res["captain_player_id"]),
         "vice_player_id": int(res["vice_player_id"]),
@@ -297,15 +471,51 @@ def build_recommendations(payload):
     return out
 
 
+@app.get("/")
+def root():
+    return {"ok": True, "docs": "/docs", "health": "/health"}
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "ts": datetime.utcnow().isoformat() + "Z"}
+
+
+@app.get("/squad")
+def squad_get(
+    entry_id=None,
+    event_id=None,
+    api_key=None,
+    x_api_key=Header(None),
+    authorization=Header(None),
+):
+    err = _check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
+    if err:
+        return err
+    out = build_squad({"entry_id": entry_id, "event_id": event_id})
+    return JSONResponse(content=jsonable_encoder(out))
+
+
+@app.post("/squad")
+def squad_post(
+    payload=Body(None),
+    api_key=None,
+    x_api_key=Header(None),
+    authorization=Header(None),
+):
+    payload = payload or {}
+    err = _check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key or payload.get("api_key"))
+    if err:
+        return err
+    out = build_squad(payload)
+    return JSONResponse(content=jsonable_encoder(out))
 
 
 @app.get("/recommendations")
 def recommendations_get(
     entry_id=None,
     event_id=None,
+    squad_event_id=None,
     horizon_gws=3,
     include_transfers=False,
     itb_m=0.5,
@@ -321,6 +531,7 @@ def recommendations_get(
     payload = {
         "entry_id": entry_id,
         "event_id": event_id,
+        "squad_event_id": squad_event_id,
         "horizon_gws": horizon_gws,
         "include_transfers": include_transfers,
         "itb_m": itb_m,
@@ -338,8 +549,10 @@ def recommendations_post(
     x_api_key=Header(None),
     authorization=Header(None),
 ):
-    err = _check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key or (payload or {}).get("api_key"))
+    payload = payload or {}
+    err = _check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key or payload.get("api_key"))
     if err:
         return err
-    out = build_recommendations(payload or {})
+    out = build_recommendations(payload)
     return JSONResponse(content=jsonable_encoder(out))
+

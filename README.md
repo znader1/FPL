@@ -40,7 +40,12 @@ Useful URLs:
 
 Example calls:
 - `curl "http://127.0.0.1:8001/squad?entry_id=1234567"`
-- `curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&horizon_gws=3"`
+- `curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=30&horizon_gws=3"`
+
+Notes:
+- `event_id` = the GW you want to optimize for (can be future).
+- `squad_event_id` (optional) = which GW to load your saved squad from. If omitted, the API uses `is_next` (or `is_current`).
+- Each player in `starting_xi` / `bench` includes `fixtures_horizon[]` and `next_fixtures` to show upcoming opponents across the horizon.
 
 Browser frontend note (CORS):
 - Local dev CORS is enabled for common localhost ports by default (8080/5173/3000).
