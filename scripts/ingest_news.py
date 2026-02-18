@@ -3,12 +3,18 @@ import hashlib
 import json
 import os
 import re
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+
+# Allow running this script from any working directory.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from src import llm
 
@@ -494,4 +500,3 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
