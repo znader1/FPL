@@ -18,6 +18,14 @@ if str(ROOT) not in sys.path:
 
 from src import llm
 
+# Load .env early so NEWS_FEEDS can come from there too.
+try:
+    f = getattr(llm, "_load_dotenv", None)
+    if callable(f):
+        f()
+except Exception:
+    pass
+
 
 UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
