@@ -30,6 +30,8 @@ def _load_dotenv():
                     continue
                 k, v = s.split("=", 1)
                 k = (k or "").strip()
+                if k.lower().startswith("export "):
+                    k = k.split(" ", 1)[1].strip()
                 v = (v or "").strip().strip("'").strip('"')
                 if k and k not in os.environ:
                     os.environ[k] = v
