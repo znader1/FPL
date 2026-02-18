@@ -1,5 +1,59 @@
 import os
+from pathlib import Path
+
 import requests
+
+
+def _load_dotenv():
+    """
+    Minimal .env loader (no extra deps).
+    - Loads from the current working directory and from the FPL/ folder (one level above src/).
+    - Does NOT override already-set environment variables.
+    """
+    paths = []
+    try:
+        paths.append(Path.cwd() / ".env")
+    except Exception:
+        pass
+    try:
+        paths.append(Path(__file__).resolve().parents[1] / ".env")
+    except Exception:
+        pass
+
+    for p in paths:
+        try:
+            if not p.exists() or not p.is_file():
+                continue
+            for line in p.read_text(encoding="utf-8", errors="ignore").splitlines():
+                s = (line or "").strip()
+                if not s or s.startswith("#") or "=" not in s:
+                    continue
+                k, v = s.split("=", 1)
+                k = (k or "").strip()
+                v = (v or "").strip().strip("'").strip('"')
+                if k and k not in os.environ:
+                    os.environ[k] = v
+        except Exception:
+            continue
+
+
+def _get_openai_api_key():
+    _load_dotenv()
+
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if api_key:
+        return api_key
+
+    try:
+        import streamlit as st
+
+        api_key = str(st.secrets.get("OPENAI_API_KEY", "")).strip()
+        if api_key:
+            return api_key
+    except Exception:
+        pass
+
+    return ""
 
 
 def openai_chat(messages, model=None, temperature=0.2, max_tokens=800, timeout_s=60):
@@ -11,9 +65,9 @@ def openai_chat(messages, model=None, temperature=0.2, max_tokens=800, timeout_s
       - OPENAI_MODEL
       - OPENAI_BASE_URL (default: https://api.openai.com/v1)
     """
-    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    api_key = _get_openai_api_key()
     if not api_key:
-        raise RuntimeError("Missing OPENAI_API_KEY (set it in env or Streamlit secrets).")
+        raise RuntimeError("Missing OPENAI_API_KEY (set it in env, .env, or Streamlit secrets).")
 
     base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
     url = base + "/chat/completions"
@@ -39,4 +93,3 @@ def openai_chat(messages, model=None, temperature=0.2, max_tokens=800, timeout_s
         return data["choices"][0]["message"]["content"]
     except Exception:
         raise RuntimeError(f"Unexpected OpenAI response: {str(data)[:500]}")
-
