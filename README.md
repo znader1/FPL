@@ -46,6 +46,16 @@ Outputs:
 After scraping, run:
 - `python scripts/backtest_baseline.py`
 
+### Train first xPts model (GW history → ridge)
+
+Use the latest scraped `player_gw_history_*.csv` and train up to a GW cap (default `26`):
+- `python3 scripts/train_xpts_model.py --train-max-gw 26 --valid-gws 3`
+
+What it writes:
+- `data/models/xpts_ridge_<season>_gw<used_gw>.json` (model + metrics)
+- `data/models/xpts_ridge_<season>_gw<used_gw>_valid_predictions.csv`
+- `data/models/xpts_ridge_<season>_gw<used_gw>_valid_metrics_per_gw.csv`
+
 ## Chat (RAG beta)
 
 The app includes a **Chat** tab that can:
@@ -72,7 +82,7 @@ Docs for retrieval:
 ## Repo Structure
 - `fpl_app_v1.py` – Streamlit UI (Squad / Transfers / Planner / Chat)
 - `src/` – core logic (FPL API client, projections, optimizer, season scraping)
-- `scripts/` – runnable scripts (refresh/backtest)
+- `scripts/` – runnable scripts (refresh/backtest/train)
 - `kb/` – optional knowledge base for RAG
 
 ## Next Steps
