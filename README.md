@@ -41,12 +41,14 @@ Useful URLs:
 Example calls:
 - `curl "http://127.0.0.1:8001/squad?entry_id=1234567"`
 - `curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=30&horizon_gws=3"`
+- `curl "http://127.0.0.1:8001/events/next"`
 
 Notes:
 - `event_id` = the GW you want to optimize for (can be future).
 - `squad_event_id` (optional) = which GW to load your saved squad from. If omitted, the API uses `is_current` (or `is_next`).
 - If `squad_event_id` is in the future and not available yet, the API falls back to a valid GW and returns a message in `notes[]`.
 - Each player in `starting_xi` / `bench` includes `fixtures_horizon[]` and `next_fixtures` to show upcoming opponents across the horizon.
+- `recommendations` includes `position_panels` with top candidates per position (`all` and `not_owned`) for your frontend insights panel.
 
 Browser frontend note (CORS):
 - Local dev CORS is enabled for common localhost ports by default (8080/5173/3000).
@@ -54,6 +56,19 @@ Browser frontend note (CORS):
 
 If you deploy publicly, set `FPL_API_KEY` and pass it from your frontend as:
 - Header `X-API-Key: <FPL_API_KEY>` (or `Authorization: Bearer <FPL_API_KEY>`)
+
+Admin refresh endpoint:
+- `POST /admin/refresh` (requires `FPL_ADMIN_KEY` or `FPL_API_KEY`)
+- Use this for scheduled cache warmup + snapshot refresh.
+
+### Production (always-on backend)
+
+- Docker image is provided via `Dockerfile`.
+- Deploy backend on Azure App Service (Web App for Containers) or Azure Container Apps.
+- Use GitHub Actions:
+  - `.github/workflows/api-ci.yml` for CI checks.
+  - `.github/workflows/refresh-backend.yml` to trigger `/admin/refresh` every 6 hours.
+- For Azure setup and CI/CD steps, see `docs/production_azure.md`.
 
 ### Scrape 2025–26 match history (FPL-only)
 

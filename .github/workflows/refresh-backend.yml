@@ -1,0 +1,42 @@
+name: Refresh Backend Cache
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check required secrets
+        env:
+          FPL_API_BASE_URL: ${{ secrets.FPL_API_BASE_URL }}
+          FPL_ADMIN_KEY: ${{ secrets.FPL_ADMIN_KEY }}
+        run: |
+          if [ -z "$FPL_API_BASE_URL" ]; then
+            echo "Missing secret: FPL_API_BASE_URL"
+            exit 1
+          fi
+          if [ -z "$FPL_ADMIN_KEY" ]; then
+            echo "Missing secret: FPL_ADMIN_KEY"
+            exit 1
+          fi
+
+      - name: Refresh API caches and snapshot
+        env:
+          FPL_API_BASE_URL: ${{ secrets.FPL_API_BASE_URL }}
+          FPL_ADMIN_KEY: ${{ secrets.FPL_ADMIN_KEY }}
+        run: |
+          curl -fsS -X POST "${FPL_API_BASE_URL%/}/admin/refresh" \
+            -H "Content-Type: application/json" \
+            -H "X-API-Key: ${FPL_ADMIN_KEY}" \
+            -d '{"run_snapshot": true}' | tee refresh-response.json
+
+      - name: Print next deadline summary
+        env:
+          FPL_API_BASE_URL: ${{ secrets.FPL_API_BASE_URL }}
+          FPL_ADMIN_KEY: ${{ secrets.FPL_ADMIN_KEY }}
+        run: |
+          curl -fsS "${FPL_API_BASE_URL%/}/events/next" \
+            -H "X-API-Key: ${FPL_ADMIN_KEY}" | tee next-event.json

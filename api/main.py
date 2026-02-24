@@ -1,6 +1,6 @@
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 from fastapi import Body, FastAPI, Header, HTTPException
@@ -8,10 +8,10 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src import config, fpl_client, optimizer, projections, recommender, transforms
+from src import config, fpl_client, fpl_refresh_next_gw, optimizer, projections, recommender, transforms
 
 
-app = FastAPI(title="FPL Assistant API", version="0.2.0")
+app = FastAPI(title="FPL Assistant API", version="0.3.0")
 
 
 def _csv_env(name):
@@ -76,6 +76,60 @@ def get_fixtures_cached():
     return _cache_set(_fixtures_cache, fx)
 
 
+def build_next_event_summary(bootstrap=None, fixtures=None):
+    bootstrap = bootstrap or get_bootstrap_cached()
+    fixtures = fixtures if fixtures is not None else get_fixtures_cached()
+
+    events = pd.DataFrame(bootstrap.get("events", []))
+    if events.empty or "id" not in events.columns:
+        return {
+            "event_id": None,
+            "deadline_time_utc": None,
+            "first_fixture_time_utc": None,
+            "hours_to_deadline": None,
+            "hours_to_first_fixture": None,
+            "fixture_count": 0,
+        }
+
+    if "deadline_time" in events.columns:
+        events["deadline_time"] = pd.to_datetime(events["deadline_time"], errors="coerce", utc=True)
+
+    event_id = _event_id(bootstrap, "is_next")
+    if not event_id:
+        now = datetime.now(timezone.utc)
+        unfinished = events[events.get("finished") != True].copy()
+        if "deadline_time" in unfinished.columns:
+            future = unfinished[unfinished["deadline_time"] >= now].sort_values("deadline_time")
+            if not future.empty:
+                event_id = _safe_int(future.iloc[0]["id"])
+        if not event_id and not unfinished.empty:
+            event_id = _safe_int(unfinished["id"].min())
+        if not event_id:
+            event_id = _safe_int(events["id"].max()) or 1
+
+    deadline_value = None
+    ev_row = events[events["id"] == int(event_id)]
+    if not ev_row.empty and "deadline_time" in ev_row.columns:
+        deadline_value = ev_row.iloc[0]["deadline_time"]
+
+    first_fixture = None
+    fixture_count = 0
+    if fixtures is not None and not fixtures.empty and "event" in fixtures.columns:
+        fx = fixtures[fixtures["event"] == int(event_id)].copy()
+        fixture_count = int(len(fx))
+        if not fx.empty and "kickoff_time" in fx.columns:
+            first_fixture = pd.to_datetime(fx["kickoff_time"], errors="coerce", utc=True).min()
+
+    return {
+        "event_id": int(event_id),
+        "deadline_time_utc": _to_iso_utc(deadline_value),
+        "first_fixture_time_utc": _to_iso_utc(first_fixture),
+        "hours_to_deadline": _hours_until_utc(deadline_value),
+        "hours_to_first_fixture": _hours_until_utc(first_fixture),
+        "fixture_count": fixture_count,
+    }
+
+
 def _event_id(bootstrap, flag):
     for ev in bootstrap.get("events", []):
         if ev.get(flag):
@@ -119,6 +173,30 @@ def _safe_float(x, default=None):
         return default
 
 
+def _to_iso_utc(value):
+    if value is None:
+        return None
+    try:
+        dt = pd.to_datetime(value, errors="coerce", utc=True)
+        if pd.isna(dt):
+            return None
+        return dt.to_pydatetime().replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+    except Exception:
+        return None
+
+
+def _hours_until_utc(value):
+    iso = _to_iso_utc(value)
+    if not iso:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        delta_h = (dt - datetime.now(timezone.utc)).total_seconds() / 3600.0
+        return float(round(delta_h, 2))
+    except Exception:
+        return None
+
+
 def _parse_bool(x, default=False):
     if isinstance(x, bool):
         return x
@@ -153,6 +231,18 @@ def _check_api_key(x_api_key=None, authorization=None, api_key=None):
         return None
 
     return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+
+
+def _check_admin_key(x_api_key=None, authorization=None, api_key=None):
+    required = (os.environ.get("FPL_ADMIN_KEY") or os.environ.get("FPL_API_KEY") or "").strip()
+    if not required:
+        return None
+
+    got = _extract_api_key(x_api_key, authorization, api_key)
+    if got == required:
+        return None
+
+    return JSONResponse(status_code=401, content={"error": "Unauthorized (admin key required)"})
 
 
 def team_badge_url(team_code, size=50):
@@ -216,6 +306,57 @@ def _attach_media(records, teams_code_map):
         d["badge_url"] = team_badge_url(team_code, size=50)
         d["photo_url"] = player_photo_url(d.get("code"), d.get("photo"), size="110x140")
     return records
+
+
+def _build_position_panels(proj_all, gws, teams_code, owned_ids=None, limit_per_pos=5):
+    if proj_all is None or proj_all.empty:
+        return {"all": {}, "not_owned": {}}
+
+    owned_ids = set([int(x) for x in (owned_ids or []) if _safe_int(x) is not None])
+    limit_per_pos = max(1, int(limit_per_pos))
+
+    base_cols = ["id", "web_name", "pos", "team", "team_short", "team_name", "price_m", "code", "photo", "xpts_horizon"]
+    gw_cols = []
+    for gw in gws:
+        for c in [f"xpts_gw{gw}", f"fixtures_gw{gw}", f"fixture_count_gw{gw}", f"diff_avg_gw{gw}"]:
+            if c in proj_all.columns:
+                gw_cols.append(c)
+    keep_cols = [c for c in base_cols + gw_cols if c in proj_all.columns]
+
+    pool = proj_all[keep_cols].copy().rename(columns={"id": "player_id"})
+    pool = pool.sort_values("xpts_horizon", ascending=False)
+
+    def pack(df):
+        out = {"GKP": [], "DEF": [], "MID": [], "FWD": []}
+        for pos in out.keys():
+            chunk = df[df["pos"] == pos].head(limit_per_pos)
+            recs = _attach_media(_df_records(chunk), teams_code)
+            for rec in recs:
+                fixtures_h = []
+                for gw in gws:
+                    fixtures_h.append(
+                        {
+                            "event_id": int(gw),
+                            "fixtures": (rec.get(f"fixtures_gw{gw}") or ""),
+                            "fixture_count": int(_safe_int(rec.get(f"fixture_count_gw{gw}")) or 0),
+                            "diff_avg": float(_safe_float(rec.get(f"diff_avg_gw{gw}"), default=0.0) or 0.0),
+                            "xpts": float(_safe_float(rec.get(f"xpts_gw{gw}"), default=0.0) or 0.0),
+                        }
+                    )
+                    rec.pop(f"fixtures_gw{gw}", None)
+                    rec.pop(f"fixture_count_gw{gw}", None)
+                    rec.pop(f"diff_avg_gw{gw}", None)
+                    rec.pop(f"xpts_gw{gw}", None)
+                rec["fixtures_horizon"] = fixtures_h
+                rec["next_fixtures"] = fixtures_h[0]["fixtures"] if fixtures_h else ""
+            out[pos] = recs
+        return out
+
+    not_owned_df = pool[~pool["player_id"].astype(int).isin(owned_ids)] if owned_ids else pool.copy()
+    return {
+        "all": pack(pool),
+        "not_owned": pack(not_owned_df),
+    }
 
 
 def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
@@ -367,6 +508,9 @@ def build_recommendations(payload):
     itb_m = payload.get("itb_m", 0.5)
     free_transfers = payload.get("free_transfers", 1)
     hit_cap = payload.get("hit_cap", 0)
+    panel_limit = _safe_int(payload.get("panel_limit"))
+    if panel_limit is None:
+        panel_limit = 5
 
     ctx = load_fpl_context(entry_id, squad_event_id_raw, with_fixtures=True)
     notes = list(ctx.get("notes") or [])
@@ -470,6 +614,17 @@ def build_recommendations(payload):
             if k in rec:
                 rec.pop(k, None)
 
+    owned_ids = []
+    if "player_id" in squad_df.columns:
+        owned_ids = [int(x) for x in pd.to_numeric(squad_df["player_id"], errors="coerce").dropna().astype(int).tolist()]
+    position_panels = _build_position_panels(
+        proj_all=proj_all,
+        gws=gws,
+        teams_code=teams_code,
+        owned_ids=owned_ids,
+        limit_per_pos=panel_limit,
+    )
+
     out = {
         "entry_id": int(entry_id),
         "squad_event_id": int(squad_event_id),
@@ -483,6 +638,7 @@ def build_recommendations(payload):
         "projected_points_with_captain": float(res["projected_points_with_captain"]),
         "starting_xi": starting_records,
         "bench": bench_records,
+        "position_panels": position_panels,
     }
 
     if include_transfers:
@@ -507,6 +663,59 @@ def root():
 @app.get("/health")
 def health():
     return {"ok": True, "ts": datetime.utcnow().isoformat() + "Z"}
+
+
+@app.get("/events/next")
+def next_event():
+    bootstrap = get_bootstrap_cached()
+    fixtures = get_fixtures_cached()
+    summary = build_next_event_summary(bootstrap=bootstrap, fixtures=fixtures)
+    return JSONResponse(content=jsonable_encoder(summary))
+
+
+@app.post("/admin/refresh")
+def admin_refresh(
+    payload=Body(None),
+    api_key=None,
+    x_api_key=Header(None),
+    authorization=Header(None),
+):
+    payload = payload or {}
+    err = _check_admin_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key or payload.get("api_key"))
+    if err:
+        return err
+
+    run_snapshot = _parse_bool(payload.get("run_snapshot"), default=True)
+    out_base = payload.get("out_base") or os.environ.get("FPL_SNAPSHOT_OUT_BASE") or "data/processed"
+
+    _bootstrap_cache["ts"] = 0.0
+    _bootstrap_cache["data"] = None
+    _fixtures_cache["ts"] = 0.0
+    _fixtures_cache["data"] = None
+
+    bootstrap = get_bootstrap_cached()
+    fixtures = get_fixtures_cached()
+    next_ev = build_next_event_summary(bootstrap=bootstrap, fixtures=fixtures)
+
+    snapshot_info = None
+    snapshot_error = None
+    if run_snapshot:
+        try:
+            snapshot_info = fpl_refresh_next_gw.refresh_next_gw_snapshot(out_base=out_base)
+        except Exception as exc:
+            snapshot_error = str(exc)
+
+    return JSONResponse(
+        content=jsonable_encoder(
+            {
+                "ok": True,
+                "next_event": next_ev,
+                "cache_refreshed_at_utc": datetime.utcnow().isoformat() + "Z",
+                "snapshot_info": snapshot_info,
+                "snapshot_error": snapshot_error,
+            }
+        )
+    )
 
 
 @app.get("/squad")
@@ -549,6 +758,7 @@ def recommendations_get(
     itb_m=0.5,
     free_transfers=1,
     hit_cap=0,
+    panel_limit=5,
     api_key=None,
     x_api_key=Header(None),
     authorization=Header(None),
@@ -565,6 +775,7 @@ def recommendations_get(
         "itb_m": itb_m,
         "free_transfers": free_transfers,
         "hit_cap": hit_cap,
+        "panel_limit": panel_limit,
     }
     out = build_recommendations(payload)
     return JSONResponse(content=jsonable_encoder(out))
