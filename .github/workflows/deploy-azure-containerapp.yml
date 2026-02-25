@@ -47,9 +47,15 @@ jobs:
       - name: Ensure Container Apps extension
         run: |
           az extension add --name containerapp --upgrade --allow-preview
-          az provider register --namespace Microsoft.App
-          az provider register --namespace Microsoft.OperationalInsights
-          az provider register --namespace Microsoft.ContainerRegistry
+          for ns in Microsoft.App Microsoft.OperationalInsights Microsoft.ContainerRegistry; do
+            state=$(az provider show --namespace "$ns" --query registrationState -o tsv || echo "Unknown")
+            if [ "$state" = "Registered" ]; then
+              echo "$ns already registered."
+            else
+              echo "Trying to register $ns (may require subscription-level rights)..."
+              az provider register --namespace "$ns" || echo "WARN: Could not register $ns in workflow. If first-time setup, register it once with Owner rights."
+            fi
+          done
 
       - name: Ensure ACR exists and fetch credentials
         id: acr
