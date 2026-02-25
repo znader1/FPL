@@ -44,9 +44,19 @@ In GitHub repo settings, add:
 
 - `FPL_API_BASE_URL` (for example `https://your-api.azurewebsites.net`)
 - `FPL_ADMIN_KEY` (must match backend setting)
+- `AZURE_CREDENTIALS` (service principal JSON for `azure/login`)
+- `AZURE_RESOURCE_GROUP`
+- `AZURE_LOCATION` (for example `francecentral`)
+- `AZURE_CONTAINERAPP_NAME`
+- `AZURE_CONTAINERAPP_ENVIRONMENT`
+- `AZURE_ACR_NAME` (globally unique, lowercase)
+- `FPL_ENTRY_ID` (optional but recommended)
+- `FPL_API_KEY` (optional but recommended)
+- `FPL_API_CORS_ORIGINS` (optional but recommended)
 
 Then enable workflow:
 - `.github/workflows/refresh-backend.yml`
+- `.github/workflows/deploy-azure-containerapp.yml`
 
 It runs every 6 hours and calls:
 - `POST /admin/refresh`

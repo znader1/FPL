@@ -1,0 +1,134 @@
+name: Deploy API to Azure Container Apps
+
+on:
+  push:
+    branches: ["main", "codex/api-fastapi"]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-azure-containerapp
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+      AZURE_LOCATION: ${{ secrets.AZURE_LOCATION }}
+      AZURE_CONTAINERAPP_NAME: ${{ secrets.AZURE_CONTAINERAPP_NAME }}
+      AZURE_CONTAINERAPP_ENVIRONMENT: ${{ secrets.AZURE_CONTAINERAPP_ENVIRONMENT }}
+      AZURE_ACR_NAME: ${{ secrets.AZURE_ACR_NAME }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        run: |
+          for v in AZURE_RESOURCE_GROUP AZURE_LOCATION AZURE_CONTAINERAPP_NAME AZURE_CONTAINERAPP_ENVIRONMENT AZURE_ACR_NAME; do
+            if [ -z "${!v}" ]; then
+              echo "Missing secret: $v"
+              exit 1
+            fi
+          done
+          if [ -z "${{ secrets.AZURE_CREDENTIALS }}" ]; then
+            echo "Missing secret: AZURE_CREDENTIALS"
+            exit 1
+          fi
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Ensure Container Apps extension
+        run: |
+          az extension add --name containerapp --upgrade --allow-preview
+          az provider register --namespace Microsoft.App
+          az provider register --namespace Microsoft.OperationalInsights
+          az provider register --namespace Microsoft.ContainerRegistry
+
+      - name: Ensure ACR exists and fetch credentials
+        id: acr
+        run: |
+          if ! az acr show -n "$AZURE_ACR_NAME" -g "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
+            az acr create -n "$AZURE_ACR_NAME" -g "$AZURE_RESOURCE_GROUP" -l "$AZURE_LOCATION" --sku Basic --admin-enabled true
+          fi
+          LOGIN_SERVER=$(az acr show -n "$AZURE_ACR_NAME" -g "$AZURE_RESOURCE_GROUP" --query loginServer -o tsv)
+          USERNAME=$(az acr credential show -n "$AZURE_ACR_NAME" --query username -o tsv)
+          PASSWORD=$(az acr credential show -n "$AZURE_ACR_NAME" --query passwords[0].value -o tsv)
+          echo "login_server=$LOGIN_SERVER" >> "$GITHUB_OUTPUT"
+          echo "username=$USERNAME" >> "$GITHUB_OUTPUT"
+          echo "password=$PASSWORD" >> "$GITHUB_OUTPUT"
+
+      - name: Login to ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.acr.outputs.login_server }}
+          username: ${{ steps.acr.outputs.username }}
+          password: ${{ steps.acr.outputs.password }}
+
+      - name: Build and push image
+        id: image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.acr.outputs.login_server }}/fpl-assistant-api:${{ github.sha }}
+            ${{ steps.acr.outputs.login_server }}/fpl-assistant-api:latest
+
+      - name: Deploy image to Container App
+        env:
+          IMAGE: ${{ steps.acr.outputs.login_server }}/fpl-assistant-api:${{ github.sha }}
+        run: |
+          if az containerapp show -n "$AZURE_CONTAINERAPP_NAME" -g "$AZURE_RESOURCE_GROUP" >/dev/null 2>&1; then
+            az containerapp registry set \
+              -n "$AZURE_CONTAINERAPP_NAME" \
+              -g "$AZURE_RESOURCE_GROUP" \
+              --server "${{ steps.acr.outputs.login_server }}" \
+              --username "${{ steps.acr.outputs.username }}" \
+              --password "${{ steps.acr.outputs.password }}"
+
+            az containerapp update \
+              -n "$AZURE_CONTAINERAPP_NAME" \
+              -g "$AZURE_RESOURCE_GROUP" \
+              --image "$IMAGE" \
+              --min-replicas 1 \
+              --max-replicas 2
+          else
+            az containerapp create \
+              -n "$AZURE_CONTAINERAPP_NAME" \
+              -g "$AZURE_RESOURCE_GROUP" \
+              --environment "$AZURE_CONTAINERAPP_ENVIRONMENT" \
+              --ingress external \
+              --target-port 8000 \
+              --min-replicas 1 \
+              --max-replicas 2 \
+              --registry-server "${{ steps.acr.outputs.login_server }}" \
+              --registry-username "${{ steps.acr.outputs.username }}" \
+              --registry-password "${{ steps.acr.outputs.password }}" \
+              --image "$IMAGE"
+          fi
+
+      - name: Set runtime environment variables
+        run: |
+          ENV_VARS=""
+          [ -n "${{ secrets.FPL_ENTRY_ID }}" ] && ENV_VARS="$ENV_VARS FPL_ENTRY_ID=${{ secrets.FPL_ENTRY_ID }}"
+          [ -n "${{ secrets.FPL_API_KEY }}" ] && ENV_VARS="$ENV_VARS FPL_API_KEY=${{ secrets.FPL_API_KEY }}"
+          [ -n "${{ secrets.FPL_ADMIN_KEY }}" ] && ENV_VARS="$ENV_VARS FPL_ADMIN_KEY=${{ secrets.FPL_ADMIN_KEY }}"
+          [ -n "${{ secrets.FPL_API_CORS_ORIGINS }}" ] && ENV_VARS="$ENV_VARS FPL_API_CORS_ORIGINS=${{ secrets.FPL_API_CORS_ORIGINS }}"
+          ENV_VARS="$ENV_VARS BOOTSTRAP_TTL=300 FIXTURES_TTL=300 FPL_SNAPSHOT_OUT_BASE=data/processed"
+
+          az containerapp update \
+            -n "$AZURE_CONTAINERAPP_NAME" \
+            -g "$AZURE_RESOURCE_GROUP" \
+            --set-env-vars $ENV_VARS
+
+      - name: Show deployed URL
+        run: |
+          FQDN=$(az containerapp show -n "$AZURE_CONTAINERAPP_NAME" -g "$AZURE_RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)
+          echo "API URL: https://$FQDN"

@@ -67,6 +67,7 @@ Admin refresh endpoint:
 - Deploy backend on Azure App Service (Web App for Containers) or Azure Container Apps.
 - Use GitHub Actions:
   - `.github/workflows/api-ci.yml` for CI checks.
+  - `.github/workflows/deploy-azure-containerapp.yml` for build + deploy to Azure Container Apps.
   - `.github/workflows/refresh-backend.yml` to trigger `/admin/refresh` every 6 hours.
 - For Azure setup and CI/CD steps, see `docs/production_azure.md`.
 
