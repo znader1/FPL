@@ -503,6 +503,7 @@ def build_recommendations(payload):
     optimize_event_id_raw = payload.get("event_id")
     squad_event_id_raw = payload.get("squad_event_id")
     horizon_gws_raw = payload.get("horizon_gws", 3)
+    latest_n_matches_raw = payload.get("latest_n_matches", getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3))
 
     include_transfers = _parse_bool(payload.get("include_transfers"), default=False)
     itb_m = payload.get("itb_m", 0.5)
@@ -548,6 +549,15 @@ def build_recommendations(payload):
         notes.append(f"horizon_gws trimmed to {int(remaining)} (season end).")
         horizon_gws = int(remaining)
 
+    latest_n_matches = _safe_int(latest_n_matches_raw)
+    if latest_n_matches is None:
+        notes.append(f"Invalid latest_n_matches; using {int(getattr(config, 'PROJ_DEFAULT_LATEST_N_MATCHES', 3))}.")
+        latest_n_matches = int(getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3))
+    latest_n_matches = max(
+        int(getattr(config, "PROJ_LATEST_N_MIN", 1)),
+        min(int(getattr(config, "PROJ_LATEST_N_MAX", 8)), int(latest_n_matches)),
+    )
+
     fixtures = ctx["fixtures"]
     elements = ctx["elements"]
     teams_short = ctx["teams_short"]
@@ -561,6 +571,7 @@ def build_recommendations(payload):
             teams_short_map=teams_short,
             gw_start=optimize_event_id,
             horizon_gws=horizon_gws,
+            latest_n_matches=latest_n_matches,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Projection failed: {e}")
@@ -649,6 +660,7 @@ def build_recommendations(payload):
             free_transfers=_safe_int(free_transfers) or 1,
             hit_cap=_safe_int(hit_cap) or 0,
             score_col="xpts_horizon",
+            horizon_gws=int(horizon_gws),
         )
         out["transfers"] = rec
 
@@ -754,6 +766,7 @@ def recommendations_get(
     event_id=None,
     squad_event_id=None,
     horizon_gws=3,
+    latest_n_matches=3,
     include_transfers=False,
     itb_m=0.5,
     free_transfers=1,
@@ -771,6 +784,7 @@ def recommendations_get(
         "event_id": event_id,
         "squad_event_id": squad_event_id,
         "horizon_gws": horizon_gws,
+        "latest_n_matches": latest_n_matches,
         "include_transfers": include_transfers,
         "itb_m": itb_m,
         "free_transfers": free_transfers,

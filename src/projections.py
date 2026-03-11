@@ -1,6 +1,6 @@
 import pandas as pd
 
-from . import transforms
+from . import config, transforms
 
 
 DIFFICULTY_MULTIPLIER = {
@@ -10,6 +10,20 @@ DIFFICULTY_MULTIPLIER = {
     4: 0.93,
     5: 0.86,
 }
+
+
+def clamp(value, low, high):
+    if value is None:
+        return low
+    try:
+        v = float(value)
+    except Exception:
+        return low
+    if v < float(low):
+        return float(low)
+    if v > float(high):
+        return float(high)
+    return float(v)
 
 
 def difficulty_multiplier(diff_avg):
@@ -24,13 +38,140 @@ def difficulty_multiplier(diff_avg):
     return float(DIFFICULTY_MULTIPLIER.get(d, 1.0))
 
 
-def baseline_points_per_gw(elements, ppg_weight=0.6, form_weight=0.4):
+def baseline_points_per_gw(
+    elements,
+    ppg_weight=config.PROJ_DEFAULT_PPG_WEIGHT,
+    form_weight=config.PROJ_DEFAULT_FORM_WEIGHT,
+    latest_n_matches=config.PROJ_DEFAULT_LATEST_N_MATCHES,
+):
     """
     Fallback baseline when ep_next is missing: blend points_per_game and form.
+    `latest_n_matches` is used as a small form emphasis control.
     """
     ppg = pd.to_numeric(elements.get("points_per_game", 0), errors="coerce").fillna(0.0)
     form = pd.to_numeric(elements.get("form", 0), errors="coerce").fillna(0.0)
-    return float(ppg_weight) * ppg + float(form_weight) * form
+    n = max(config.PROJ_LATEST_N_MIN, min(config.PROJ_LATEST_N_MAX, int(latest_n_matches or config.PROJ_DEFAULT_LATEST_N_MATCHES)))
+    form_scale = 1.0 + (float(n) - float(config.PROJ_FORM_SCALE_BASE_MATCHES)) * float(config.PROJ_FORM_SCALE_PER_MATCH)
+    return float(ppg_weight) * ppg + float(form_weight) * form * form_scale
+
+
+def team_recent_ppg_map(fixtures, gw_start, latest_n_matches=config.PROJ_DEFAULT_LATEST_N_MATCHES):
+    """
+    Build team form from last N finished fixtures before gw_start.
+    Returns {team_id: recent_points_per_game}.
+    """
+    if fixtures is None or fixtures.empty:
+        return {}
+
+    fx = fixtures.copy()
+    if "event" not in fx.columns:
+        return {}
+
+    fx["event"] = pd.to_numeric(fx["event"], errors="coerce")
+    fx = fx[fx["event"].notna()].copy()
+    fx["event"] = fx["event"].astype(int)
+    fx = fx[fx["event"] < int(gw_start)].copy()
+    if fx.empty:
+        return {}
+
+    if "finished" in fx.columns:
+        fx = fx[fx["finished"] == True].copy()
+    if fx.empty:
+        return {}
+
+    for col in ["team_h_score", "team_a_score", "team_h", "team_a"]:
+        if col not in fx.columns:
+            return {}
+        fx[col] = pd.to_numeric(fx[col], errors="coerce")
+
+    fx = fx[
+        fx["team_h_score"].notna()
+        & fx["team_a_score"].notna()
+        & fx["team_h"].notna()
+        & fx["team_a"].notna()
+    ].copy()
+    if fx.empty:
+        return {}
+
+    if "kickoff_time" in fx.columns:
+        fx["kickoff_time"] = pd.to_datetime(fx["kickoff_time"], errors="coerce", utc=True)
+    else:
+        fx["kickoff_time"] = pd.NaT
+
+    home = pd.DataFrame(
+        {
+            "team_id": fx["team_h"].astype(int),
+            "event": fx["event"].astype(int),
+            "kickoff_time": fx["kickoff_time"],
+            "points": ((fx["team_h_score"] > fx["team_a_score"]).astype(int) * 3)
+            + ((fx["team_h_score"] == fx["team_a_score"]).astype(int) * 1),
+        }
+    )
+    away = pd.DataFrame(
+        {
+            "team_id": fx["team_a"].astype(int),
+            "event": fx["event"].astype(int),
+            "kickoff_time": fx["kickoff_time"],
+            "points": ((fx["team_a_score"] > fx["team_h_score"]).astype(int) * 3)
+            + ((fx["team_a_score"] == fx["team_h_score"]).astype(int) * 1),
+        }
+    )
+    tm = pd.concat([home, away], ignore_index=True)
+    tm = tm.sort_values(["team_id", "event", "kickoff_time"]).reset_index(drop=True)
+
+    n = max(config.PROJ_LATEST_N_MIN, min(config.PROJ_LATEST_N_MAX, int(latest_n_matches or config.PROJ_DEFAULT_LATEST_N_MATCHES)))
+    out = {}
+    for team_id, g in tm.groupby("team_id"):
+        tail = g.tail(n)
+        out[int(team_id)] = float(pd.to_numeric(tail["points"], errors="coerce").fillna(0.0).mean())
+    return out
+
+
+def team_gw_context_multipliers(fixtures, gw, team_recent_ppg):
+    """
+    Per-team multipliers for a specific GW:
+      - home_away_mult: home advantage / away penalty
+      - opp_form_mult: weaker opponent boosts xPts
+      - team_form_mult: in-form own team boosts xPts
+    """
+    by_team = transforms.fixtures_by_team_for_gw(fixtures, int(gw))
+    out = {}
+    neutral_ppg = float(config.PROJ_NEUTRAL_TEAM_PPG)
+
+    for team_id, lst in by_team.items():
+        if not lst:
+            out[int(team_id)] = {"home_away_mult": 1.0, "opp_form_mult": 1.0, "team_form_mult": 1.0}
+            continue
+
+        home_away = []
+        opp_ppg = []
+        for it in lst:
+            home_away.append(float(config.PROJ_HOME_MULT_HOME) if bool(it.get("is_home")) else float(config.PROJ_HOME_MULT_AWAY))
+            opp = int(it.get("opp"))
+            opp_ppg.append(float(team_recent_ppg.get(opp, neutral_ppg)))
+
+        own_ppg = float(team_recent_ppg.get(int(team_id), neutral_ppg))
+        home_away_mult = sum(home_away) / float(len(home_away))
+        opp_ppg_avg = sum(opp_ppg) / float(len(opp_ppg)) if opp_ppg else neutral_ppg
+
+        opp_form_mult = clamp(
+            1.0 + (neutral_ppg - opp_ppg_avg) * float(config.PROJ_OPP_FORM_FACTOR),
+            float(config.PROJ_OPP_FORM_MIN),
+            float(config.PROJ_OPP_FORM_MAX),
+        )
+        team_form_mult = clamp(
+            1.0 + (own_ppg - neutral_ppg) * float(config.PROJ_TEAM_FORM_FACTOR),
+            float(config.PROJ_TEAM_FORM_MIN),
+            float(config.PROJ_TEAM_FORM_MAX),
+        )
+
+        out[int(team_id)] = {
+            "home_away_mult": float(home_away_mult),
+            "opp_form_mult": float(opp_form_mult),
+            "team_form_mult": float(team_form_mult),
+        }
+
+    return out
 
 
 def project_elements_next_gws(
@@ -39,8 +180,9 @@ def project_elements_next_gws(
     teams_short_map,
     gw_start,
     horizon_gws=3,
-    ppg_weight=0.6,
-    form_weight=0.4,
+    ppg_weight=config.PROJ_DEFAULT_PPG_WEIGHT,
+    form_weight=config.PROJ_DEFAULT_FORM_WEIGHT,
+    latest_n_matches=config.PROJ_DEFAULT_LATEST_N_MATCHES,
 ):
     """
     Lightweight next-N gameweeks projection table (FPL-only baseline).
@@ -55,7 +197,16 @@ def project_elements_next_gws(
     gws = [gw_start + i for i in range(horizon_gws)]
 
     df = elements.copy()
-    base_fallback = baseline_points_per_gw(df, ppg_weight=ppg_weight, form_weight=form_weight)
+    latest_n_matches = max(
+        config.PROJ_LATEST_N_MIN,
+        min(config.PROJ_LATEST_N_MAX, int(latest_n_matches or config.PROJ_DEFAULT_LATEST_N_MATCHES)),
+    )
+    base_fallback = baseline_points_per_gw(
+        df,
+        ppg_weight=ppg_weight,
+        form_weight=form_weight,
+        latest_n_matches=latest_n_matches,
+    )
 
     if "ep_next" in df.columns:
         ep_next = pd.to_numeric(df["ep_next"], errors="coerce")
@@ -69,22 +220,44 @@ def project_elements_next_gws(
     else:
         play_prob = pd.Series(1.0, index=df.index)
 
+    team_recent_ppg = team_recent_ppg_map(fixtures, gw_start=gw_start, latest_n_matches=latest_n_matches)
+
     horizon_total = pd.Series(0.0, index=df.index, dtype="float64")
 
     for i, gw in enumerate(gws):
         ann = transforms.annotate_elements_with_gw_fixtures(df, fixtures, int(gw), teams_short_map)
         fixture_count = pd.to_numeric(ann["gw_fixture_count"], errors="coerce").fillna(0.0)
         diff_avg = pd.to_numeric(ann["gw_diff_avg"], errors="coerce").fillna(0.0)
-        mult = diff_avg.apply(difficulty_multiplier)
+        diff_mult = diff_avg.apply(difficulty_multiplier)
+
+        team_ctx = team_gw_context_multipliers(fixtures, int(gw), team_recent_ppg)
+        home_away_mult = ann["team"].apply(
+            lambda t: float(team_ctx.get(int(t), {}).get("home_away_mult", 1.0))
+            if pd.notna(t)
+            else 1.0
+        )
+        opp_form_mult = ann["team"].apply(
+            lambda t: float(team_ctx.get(int(t), {}).get("opp_form_mult", 1.0))
+            if pd.notna(t)
+            else 1.0
+        )
+        team_form_mult = ann["team"].apply(
+            lambda t: float(team_ctx.get(int(t), {}).get("team_form_mult", 1.0))
+            if pd.notna(t)
+            else 1.0
+        )
 
         base = base_gw0 if i == 0 else base_fallback
-        xpts = base * fixture_count * mult
+        xpts = base * fixture_count * diff_mult * home_away_mult * opp_form_mult * team_form_mult
         if i == 0:
             xpts = xpts * play_prob
 
         df[f"fixtures_gw{gw}"] = ann["gw_fixtures"].fillna("")
         df[f"fixture_count_gw{gw}"] = fixture_count.astype(int)
         df[f"diff_avg_gw{gw}"] = diff_avg
+        df[f"home_away_mult_gw{gw}"] = home_away_mult
+        df[f"opp_form_mult_gw{gw}"] = opp_form_mult
+        df[f"team_form_mult_gw{gw}"] = team_form_mult
         df[f"xpts_gw{gw}"] = xpts
 
         horizon_total = horizon_total + xpts.fillna(0.0)
@@ -107,6 +280,11 @@ def project_elements_next_gws(
         "total_points",
         "selected_by_percent",
         "ep_next",
+        "transfers_in_event",
+        "transfers_out_event",
+        "penalties_order",
+        "direct_freekicks_order",
+        "corners_and_indirect_freekicks_order",
     ]
     keep = [c for c in keep_base if c in df.columns]
     for gw in gws:
@@ -116,6 +294,9 @@ def project_elements_next_gws(
                 f"fixtures_gw{gw}",
                 f"fixture_count_gw{gw}",
                 f"diff_avg_gw{gw}",
+                f"home_away_mult_gw{gw}",
+                f"opp_form_mult_gw{gw}",
+                f"team_form_mult_gw{gw}",
             ]
         )
     keep.append("xpts_horizon")

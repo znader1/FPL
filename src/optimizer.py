@@ -1,5 +1,7 @@
 import pandas as pd
 
+from . import config
+
 
 VALID_FORMATIONS = [
     (3, 4, 3),
@@ -10,6 +12,9 @@ VALID_FORMATIONS = [
     (5, 3, 2),
     (5, 4, 1),
 ]
+
+
+CAPTAIN_POSITION_MULTIPLIER = dict(config.CAPTAIN_POSITION_MULTIPLIER)
 
 
 def merge_scores(squad_df, projections_df, score_col):
@@ -69,11 +74,18 @@ def optimize_lineup(squad_df, projections_df, score_col, formations=None):
         remaining = df[~df["player_id"].isin(starting["player_id"])].copy()
 
         start_sorted = starting.sort_values("xpts", ascending=False).reset_index(drop=True)
-        captain_id = int(start_sorted.loc[0, "player_id"])
-        vice_id = int(start_sorted.loc[1, "player_id"]) if len(start_sorted) > 1 else captain_id
+        start_sorted["captain_score"] = start_sorted.apply(
+            lambda r: float(r["xpts"]) * float(CAPTAIN_POSITION_MULTIPLIER.get(r["pos"], 1.0)),
+            axis=1,
+        )
+        captain_rank = start_sorted.sort_values(["captain_score", "xpts"], ascending=[False, False]).reset_index(drop=True)
+        captain_id = int(captain_rank.loc[0, "player_id"])
+        vice_pool = captain_rank[captain_rank["player_id"] != captain_id].copy()
+        vice_id = int(vice_pool.iloc[0]["player_id"]) if not vice_pool.empty else captain_id
 
         # Score includes captain doubling (add captain again)
-        score = float(starting["xpts"].sum() + start_sorted.loc[0, "xpts"])
+        captain_xpts = float(starting[starting["player_id"] == captain_id]["xpts"].iloc[0])
+        score = float(starting["xpts"].sum() + captain_xpts)
 
         starting_out = starting.copy()
         starting_out["is_captain_suggested"] = starting_out["player_id"] == captain_id

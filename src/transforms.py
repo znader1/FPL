@@ -33,7 +33,20 @@ def tables_from_bootstrap(bootstrap):
     el["pos"] = el["element_type"].map(pos_map)
 
     # Coerce common numeric fields
-    for c in ["total_points", "form", "points_per_game", "now_cost", "selected_by_percent", "ep_next"]:
+    for c in [
+        "total_points",
+        "form",
+        "points_per_game",
+        "now_cost",
+        "selected_by_percent",
+        "ep_next",
+        "minutes",
+        "transfers_in_event",
+        "transfers_out_event",
+        "penalties_order",
+        "direct_freekicks_order",
+        "corners_and_indirect_freekicks_order",
+    ]:
         if c in el.columns:
             el[c] = pd.to_numeric(el[c], errors="coerce")
 
@@ -238,7 +251,20 @@ def annotate_elements_with_gw_fixtures(
     )
 
     # Normalize useful numeric cols
-    for c in ["now_cost", "form", "points_per_game", "total_points", "selected_by_percent", "ep_next"]:
+    for c in [
+        "now_cost",
+        "form",
+        "points_per_game",
+        "total_points",
+        "selected_by_percent",
+        "ep_next",
+        "minutes",
+        "transfers_in_event",
+        "transfers_out_event",
+        "penalties_order",
+        "direct_freekicks_order",
+        "corners_and_indirect_freekicks_order",
+    ]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 

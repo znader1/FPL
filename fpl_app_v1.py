@@ -498,7 +498,15 @@ with tab_transfers:
 
     if st.button("⚙️ Build suggestions"):
         sq = st.session_state.get("squad_df", pd.DataFrame())
-        rec = recommender.suggest_transfers(sq, proj_all, itb, int(ft), int(hit), score_col="xpts_horizon")
+        rec = recommender.suggest_transfers(
+            sq,
+            proj_all,
+            itb,
+            int(ft),
+            int(hit),
+            score_col="xpts_horizon",
+            horizon_gws=3,
+        )
         if rec["moves"]:
             st.success(f"Remaining ITB: £{rec['remaining_itb']}m")
             st.dataframe(pd.DataFrame(rec["moves"]), use_container_width=True, hide_index=True)

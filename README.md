@@ -41,6 +41,7 @@ Useful URLs:
 Example calls:
 - `curl "http://127.0.0.1:8001/squad?entry_id=1234567"`
 - `curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=30&horizon_gws=3"`
+- `curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=30&horizon_gws=3&latest_n_matches=3&include_transfers=true&free_transfers=1"`
 - `curl "http://127.0.0.1:8001/events/next"`
 
 Notes:
@@ -49,6 +50,8 @@ Notes:
 - If `squad_event_id` is in the future and not available yet, the API falls back to a valid GW and returns a message in `notes[]`.
 - Each player in `starting_xi` / `bench` includes `fixtures_horizon[]` and `next_fixtures` to show upcoming opponents across the horizon.
 - `recommendations` includes `position_panels` with top candidates per position (`all` and `not_owned`) for your frontend insights panel.
+- `recommendations` transfer engine now builds multiple moves using `free_transfers + horizon_gws` (plus optional hit allowance).
+- Main tuning knobs are centralized in `src/config.py` (projection form window, captain position coefficients, transfer weighting, set-piece weighting).
 
 Browser frontend note (CORS):
 - Local dev CORS is enabled for common localhost ports by default (8080/5173/3000).
