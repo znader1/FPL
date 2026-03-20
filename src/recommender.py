@@ -18,6 +18,11 @@ def series_num(df, col, default=0.0):
     return pd.to_numeric(df[col], errors="coerce").fillna(float(default))
 
 
+def series_ratio_clip(series, denom, low=0.0, high=1.0):
+    d = float(denom) if float(denom) > 0 else 1.0
+    return (pd.to_numeric(series, errors="coerce").fillna(0.0) / d).clip(lower=float(low), upper=float(high))
+
+
 def position_attack_bonus(pos):
     return to_number(config.TRANSFER_ATTACK_BONUS.get(pos, 0.0), 0.0)
 
@@ -54,12 +59,18 @@ def set_piece_score(row):
     score = 0.0
     if pd.notna(p_order):
         score += to_number(config.TRANSFER_SET_PIECE_WEIGHTS.get("penalties", {}).get(int(p_order), 0.0), 0.0)
+        if int(p_order) == 1:
+            score += to_number(config.TRANSFER_SET_PIECE_PRIMARY_BONUS.get("penalties", 0.0), 0.0)
 
     if pd.notna(d_order):
         score += to_number(config.TRANSFER_SET_PIECE_WEIGHTS.get("direct_free_kicks", {}).get(int(d_order), 0.0), 0.0)
+        if int(d_order) == 1:
+            score += to_number(config.TRANSFER_SET_PIECE_PRIMARY_BONUS.get("direct_free_kicks", 0.0), 0.0)
 
     if pd.notna(c_order):
         score += to_number(config.TRANSFER_SET_PIECE_WEIGHTS.get("corners_indirect", {}).get(int(c_order), 0.0), 0.0)
+        if int(c_order) == 1:
+            score += to_number(config.TRANSFER_SET_PIECE_PRIMARY_BONUS.get("corners_indirect", 0.0), 0.0)
 
     return float(score)
 
@@ -71,6 +82,8 @@ def build_transfer_scores(elements_all, score_col=None):
         "price_m",
         "form",
         "points_per_game",
+        "total_points",
+        "minutes",
         "selected_by_percent",
         "transfers_in_event",
         "transfers_out_event",
@@ -98,6 +111,8 @@ def build_transfer_scores(elements_all, score_col=None):
 
     form = series_num(el, "form", 0.0)
     ppg = series_num(el, "points_per_game", 0.0)
+    total_points = series_num(el, "total_points", 0.0)
+    minutes = series_num(el, "minutes", 0.0)
     selected = series_num(el, "selected_by_percent", 0.0)
     in_event = series_num(el, "transfers_in_event", 0.0)
     out_event = series_num(el, "transfers_out_event", 0.0)
@@ -108,12 +123,19 @@ def build_transfer_scores(elements_all, score_col=None):
         + float(config.TRANSFER_HOT_MOMENTUM_WEIGHT) * momentum
         + float(config.TRANSFER_HOT_SELECTED_WEIGHT) * (selected / float(config.TRANSFER_HOT_SELECTED_SCALE))
     )
+    el["consistency_score"] = (
+        float(config.TRANSFER_CONSISTENCY_TOTAL_POINTS_WEIGHT)
+        * series_ratio_clip(total_points, config.TRANSFER_CONSISTENCY_TOTAL_POINTS_SCALE)
+        + float(config.TRANSFER_CONSISTENCY_MINUTES_WEIGHT)
+        * series_ratio_clip(minutes, config.TRANSFER_CONSISTENCY_MINUTES_TARGET)
+    )
 
     el["set_piece_score"] = el.apply(set_piece_score, axis=1)
     el["attack_bonus"] = el.get("pos", "").apply(position_attack_bonus) if "pos" in el.columns else 0.0
 
     el["transfer_score"] = (
         el["base_score"].fillna(0.0)
+        + el["consistency_score"].fillna(0.0)
         + float(config.TRANSFER_HOT_SCORE_BLEND) * el["hot_score"].fillna(0.0)
         + el["set_piece_score"].fillna(0.0)
         + el["attack_bonus"].fillna(0.0)
@@ -142,6 +164,92 @@ def hot_by_position(el, owned_ids, n=config.TRANSFER_DEFAULT_HOT_TOPN):
             )
         out[pos] = rows
     return out
+
+
+def required_gain_for_seller(seller):
+    required = float(config.TRANSFER_MIN_SCORE_GAIN)
+    pos = str(seller.get("pos") or "")
+    if pos == "GKP":
+        required = max(required, float(config.TRANSFER_MIN_SCORE_GAIN_GKP))
+    if not bool(seller.get("is_starter")):
+        required = max(required, float(config.TRANSFER_MIN_SCORE_GAIN_BENCH))
+    injury_boost = to_number(seller.get("injury_sell_boost"), 0.0)
+    if injury_boost >= float(config.TRANSFER_GUARDRAIL_INJURY_OVERRIDE):
+        required = float(config.TRANSFER_MIN_SCORE_GAIN)
+    return float(required)
+
+
+def pick_sellers_for_state(sellers_df, sold_ids):
+    if sellers_df is None or sellers_df.empty:
+        return sellers_df
+    out = sellers_df[~sellers_df["player_id"].isin(sold_ids)].copy()
+    out = out.sort_values(["sell_priority", "is_starter", "injury_sell_boost"], ascending=[True, False, False])
+    limit = max(1, int(getattr(config, "TRANSFER_BEAM_SELLERS", 8) or 8))
+    return out.head(limit)
+
+
+def pick_buy_candidates(el, current_ids, sell_pos, budget, blocked_ids=None):
+    blocked_ids = set(blocked_ids or [])
+    excluded = set(int(x) for x in current_ids).union(set(int(x) for x in blocked_ids))
+    pool = el[
+        (el["pos"] == sell_pos)
+        & (~el["id"].astype(int).isin(excluded))
+        & (pd.to_numeric(el["price_m"], errors="coerce").fillna(99.0) <= float(budget) + 1e-9)
+    ].copy()
+    if pool.empty:
+        return pool
+    pool = pool.sort_values(["buy_priority", "transfer_score", "hot_score", "base_score"], ascending=False)
+    limit = max(1, int(getattr(config, "TRANSFER_BEAM_BUYERS", 6) or 6))
+    return pool.head(limit)
+
+
+def move_from_seller_buyer(seller, buy, gain):
+    sell_price = to_number(seller.get("price_m"), 0.0)
+    buy_price = to_number(buy.get("price_m"), 0.0)
+    return {
+        "position": seller.get("pos"),
+        "sell": {
+            "id": int(seller.get("player_id")),
+            "name": seller.get("web_name"),
+            "team": seller.get("team_short"),
+            "price": round(sell_price, 1),
+        },
+        "buy": {
+            "id": int(buy.get("id")),
+            "name": buy.get("web_name"),
+            "team": buy.get("team_short"),
+            "price": round(buy_price, 1),
+        },
+        "score_gain": round(gain, 2),
+        "buy_hot_score": round(to_number(buy.get("hot_score"), 0.0), 2),
+        "buy_set_piece_score": round(to_number(buy.get("set_piece_score"), 0.0), 2),
+    }
+
+
+def estimate_best_next_gain(state, sellers_df, el):
+    max_gain = 0.0
+    avail_sellers = pick_sellers_for_state(sellers_df, state["sold_ids"])
+    if avail_sellers is None or avail_sellers.empty:
+        return 0.0
+
+    for _, seller in avail_sellers.iterrows():
+        sell_price = to_number(seller.get("price_m"), 0.0)
+        budget = float(state["remain"]) + sell_price
+        candidates = pick_buy_candidates(
+            el,
+            state["current_ids"],
+            seller.get("pos"),
+            budget,
+            blocked_ids=state["sold_ids"],
+        )
+        if candidates is None or candidates.empty:
+            continue
+        req = required_gain_for_seller(seller)
+        for _, buy in candidates.iterrows():
+            gain = to_number(buy.get("transfer_score"), 0.0) - to_number(seller.get("transfer_score"), 0.0)
+            if gain >= req and gain > max_gain:
+                max_gain = float(gain)
+    return float(max_gain)
 
 
 def suggest_transfers(
@@ -292,73 +400,100 @@ def suggest_transfers(
     transfer_count = free_transfers + horizon_gws + extra_from_hits
     transfer_count = max(1, min(int(config.TRANSFER_MAX_MOVES), transfer_count))
 
-    remain = to_number(itb_m, 0.0)
-    moves = []
-    current_ids = set(sq["player_id"].astype(int).tolist())
-    sold_ids = set()
-
-    sellers = sq.sort_values(["sell_priority", "is_starter", "injury_sell_boost"], ascending=[True, False, False]).copy()
-    sellers = sellers[sellers["pos"].notna()].copy()
+    sellers = sq[sq["pos"].notna()].copy()
+    beam_width = max(1, int(getattr(config, "TRANSFER_BEAM_WIDTH", 8) or 8))
+    start_state = {
+        "remain": float(to_number(itb_m, 0.0)),
+        "current_ids": set(sq["player_id"].astype(int).tolist()),
+        "sold_ids": set(),
+        "moves": [],
+        "gain_total": 0.0,
+        "score_estimate": 0.0,
+    }
+    beam = [start_state]
 
     for _ in range(int(transfer_count)):
-        available_sellers = sellers[~sellers["player_id"].isin(sold_ids)].copy()
-        if available_sellers.empty:
+        expanded = []
+        for state in beam:
+            sellers_for_state = pick_sellers_for_state(sellers, state["sold_ids"])
+            if sellers_for_state is None or sellers_for_state.empty:
+                state_keep = dict(state)
+                state_keep["score_estimate"] = float(state_keep["gain_total"])
+                expanded.append(state_keep)
+                continue
+
+            state_generated = False
+            for _, seller in sellers_for_state.iterrows():
+                sell_id = int(seller["player_id"])
+                sell_price = to_number(seller.get("price_m"), 0.0)
+                budget = float(state["remain"]) + sell_price
+                candidates = pick_buy_candidates(
+                    el,
+                    state["current_ids"],
+                    seller.get("pos"),
+                    budget,
+                    blocked_ids=state["sold_ids"],
+                )
+                if candidates is None or candidates.empty:
+                    continue
+
+                required_gain = required_gain_for_seller(seller)
+                for _, buy in candidates.iterrows():
+                    buy_id = int(buy["id"])
+                    buy_price = to_number(buy.get("price_m"), 0.0)
+                    gain = to_number(buy.get("transfer_score"), 0.0) - to_number(seller.get("transfer_score"), 0.0)
+                    if gain < required_gain:
+                        continue
+
+                    next_current_ids = set(state["current_ids"])
+                    if sell_id in next_current_ids:
+                        next_current_ids.remove(sell_id)
+                    next_current_ids.add(buy_id)
+
+                    next_sold_ids = set(state["sold_ids"])
+                    next_sold_ids.add(sell_id)
+                    next_remain = float(state["remain"]) - (buy_price - sell_price)
+                    next_moves = list(state["moves"])
+                    next_moves.append(move_from_seller_buyer(seller, buy, gain))
+                    gain_total = float(state["gain_total"]) + float(gain)
+
+                    next_state = {
+                        "remain": next_remain,
+                        "current_ids": next_current_ids,
+                        "sold_ids": next_sold_ids,
+                        "moves": next_moves,
+                        "gain_total": gain_total,
+                    }
+                    lookahead_gain = estimate_best_next_gain(next_state, sellers, el)
+                    next_state["score_estimate"] = float(gain_total + 0.6 * lookahead_gain)
+                    expanded.append(next_state)
+                    state_generated = True
+
+            if not state_generated:
+                state_keep = dict(state)
+                state_keep["score_estimate"] = float(state_keep["gain_total"])
+                expanded.append(state_keep)
+
+        if not expanded:
             break
 
-        seller = available_sellers.iloc[0]
-        sell_id = int(seller["player_id"])
-        sell_pos = seller.get("pos")
-        sell_price = to_number(seller.get("price_m"), 0.0)
-
-        budget = sell_price + remain
-        candidates = el[
-            (el["pos"] == sell_pos)
-            & (~el["id"].astype(int).isin(current_ids))
-            & (pd.to_numeric(el["price_m"], errors="coerce").fillna(99.0) <= float(budget) + 1e-9)
-        ].copy()
-        if candidates.empty:
-            sold_ids.add(sell_id)
-            continue
-
-        candidates = candidates.sort_values(["buy_priority", "transfer_score", "hot_score", "base_score"], ascending=False)
-        buy = candidates.iloc[0]
-        buy_id = int(buy["id"])
-
-        buy_price = to_number(buy.get("price_m"), 0.0)
-        delta_price = buy_price - sell_price
-        gain = to_number(buy.get("transfer_score"), 0.0) - to_number(seller.get("transfer_score"), 0.0)
-        if gain < float(config.TRANSFER_MIN_SCORE_GAIN):
-            sold_ids.add(sell_id)
-            continue
-
-        remain = remain - delta_price
-        sold_ids.add(sell_id)
-        current_ids.remove(sell_id)
-        current_ids.add(buy_id)
-
-        moves.append(
-            {
-                "position": sell_pos,
-                "sell": {
-                    "id": sell_id,
-                    "name": seller.get("web_name"),
-                    "team": seller.get("team_short"),
-                    "price": round(sell_price, 1),
-                },
-                "buy": {
-                    "id": buy_id,
-                    "name": buy.get("web_name"),
-                    "team": buy.get("team_short"),
-                    "price": round(buy_price, 1),
-                },
-                "score_gain": round(gain, 2),
-                "buy_hot_score": round(to_number(buy.get("hot_score"), 0.0), 2),
-                "buy_set_piece_score": round(to_number(buy.get("set_piece_score"), 0.0), 2),
-            }
+        expanded = sorted(
+            expanded,
+            key=lambda s: (
+                float(s.get("score_estimate", 0.0)),
+                float(s.get("gain_total", 0.0)),
+                len(s.get("moves", [])),
+            ),
+            reverse=True,
         )
+        beam = expanded[:beam_width]
 
-        if len(moves) >= transfer_count:
-            break
+    best_state = max(
+        beam,
+        key=lambda s: (float(s.get("gain_total", 0.0)), len(s.get("moves", [])), float(s.get("remain", 0.0))),
+    )
+    moves = list(best_state.get("moves", []))
+    remain = float(best_state.get("remain", to_number(itb_m, 0.0)))
 
     by_pos = {}
     for m in moves:
@@ -366,7 +501,7 @@ def suggest_transfers(
         by_pos[pos] = by_pos.get(pos, 0) + 1
 
     return {
-        "note": "Heuristic transfer planner with horizon + hot-player + set-piece weighting.",
+        "note": "Beam-search transfer planner with horizon, consistency, set-piece certainty, and guardrails.",
         "transfer_plan": {
             "free_transfers": int(free_transfers),
             "horizon_gws": int(horizon_gws),

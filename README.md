@@ -54,6 +54,37 @@ Notes:
 - Transfer ordering now prioritizes injured/at-risk starters and underperforming premium slots before low-impact bench/GKP churn.
 - `recommendations` now returns `strategy_recommendation` with a structured action (`roll` / `make_transfers` / `use_chip`), confidence, reasons, captain suggestion, transfer summary, chip suggestion, and bench moves.
 - Main tuning knobs are centralized in `src/config.py` (projection form window, captain position coefficients, transfer weighting, set-piece weighting).
+- Full parameter-by-parameter config guide: `docs/config_reference.md`.
+
+Transfer tuning map (`src/config.py`):
+- **Core transfer score** (used in `src/recommender.py -> build_transfer_scores`):
+  - `TRANSFER_BASE_PPG_WEIGHT`, `TRANSFER_BASE_FORM_WEIGHT`: base quality score.
+  - `TRANSFER_CONSISTENCY_*`: season stability + minutes reliability.
+  - `TRANSFER_HOT_*`: short-term momentum/hotness.
+  - `TRANSFER_SET_PIECE_WEIGHTS`: penalties/FK/corners bonus.
+  - `TRANSFER_SET_PIECE_PRIMARY_BONUS`: extra certainty for primary takers.
+  - `TRANSFER_ATTACK_BONUS`: position upside bonus.
+- **Sell-side prioritization** (used in `src/recommender.py -> suggest_transfers`):
+  - `TRANSFER_SELL_STARTER_BOOST`: protect nailed starters from being sold.
+  - `TRANSFER_SELL_BENCH_PENALTY`, `TRANSFER_SELL_GKP_PENALTY`: de-prioritize low-impact churn.
+  - `TRANSFER_SELL_PREMIUM_*`: prioritize replacing weak premium slots.
+  - `TRANSFER_SELL_INJURY_BOOST`: aggressively sell injury/absence risk.
+- **Buy-side prioritization** (used in `src/recommender.py -> suggest_transfers`):
+  - `TRANSFER_BUY_PREMIUM_*`: favor high-upside MID/FWD upgrades.
+  - `TRANSFER_BUY_OWNERSHIP_BONUS`: add signal from strong market consensus.
+  - `TRANSFER_BUY_AVAILABILITY_WEIGHT`: penalize doubtful buys.
+- **Move control** (used in `src/recommender.py -> suggest_transfers`):
+  - `TRANSFER_MIN_SCORE_GAIN`: minimum gain required to execute a move.
+  - `TRANSFER_MIN_SCORE_GAIN_BENCH`, `TRANSFER_MIN_SCORE_GAIN_GKP`: guardrails for low-impact churn.
+  - `TRANSFER_GUARDRAIL_INJURY_OVERRIDE`: bypass guardrails for clear injury risk.
+  - `TRANSFER_HIT_POINTS_STEP`, `TRANSFER_MAX_MOVES`, `TRANSFER_DEFAULT_HOT_TOPN`.
+  - `TRANSFER_BEAM_*`: 2-step beam-lookahead search controls.
+- **Strategy output thresholds** (used in `api/main.py -> _build_strategy_recommendation`):
+  - `STRATEGY_MIN_GAIN_PER_TRANSFER_GW1`, `STRATEGY_MIN_GAIN_PER_TRANSFER_MULTI`: roll vs transfer.
+  - `STRATEGY_CHIP_BENCH_BOOST_MIN_XPTS`, `STRATEGY_CHIP_TRIPLE_CAPTAIN_MIN_XPTS`: chip triggers.
+  - `STRATEGY_MAX_BENCH_MOVES`: max bench actions in strategy block.
+- **Captain ceiling tuning** (used in `src/optimizer.py -> optimize_lineup`):
+  - `CAPTAIN_POSITION_MULTIPLIER`, `CAPTAIN_PREMIUM_*`, `CAPTAIN_FORM_CEILING_WEIGHT`, `CAPTAIN_SET_PIECE_PENALTY_WEIGHT`.
 
 Browser frontend note (CORS):
 - Local dev CORS is enabled for common localhost ports by default (8080/5173/3000).

@@ -17,6 +17,16 @@ VALID_FORMATIONS = [
 CAPTAIN_POSITION_MULTIPLIER = dict(config.CAPTAIN_POSITION_MULTIPLIER)
 
 
+def to_number(value, default=0.0):
+    try:
+        parsed = float(pd.to_numeric(value, errors="coerce"))
+        if pd.isna(parsed):
+            return float(default)
+        return float(parsed)
+    except Exception:
+        return float(default)
+
+
 def merge_scores(squad_df, projections_df, score_col):
     """
     Attach `xpts` to a squad DataFrame using a projections table.
@@ -24,10 +34,20 @@ def merge_scores(squad_df, projections_df, score_col):
     - projections_df: expects `id` and `score_col`
     """
     df = squad_df.copy()
-    proj = projections_df[["id", score_col]].copy()
+    optional_cols = []
+    for c in ["price_m", "form", "penalties_order"]:
+        if c in projections_df.columns:
+            optional_cols.append(c)
+    proj = projections_df[["id", score_col] + optional_cols].copy()
     proj = proj.rename(columns={"id": "player_id", score_col: "xpts"})
     df = df.merge(proj, on="player_id", how="left")
     df["xpts"] = pd.to_numeric(df["xpts"], errors="coerce").fillna(0.0)
+    if "price_m" in df.columns:
+        df["price_m"] = pd.to_numeric(df["price_m"], errors="coerce").fillna(0.0)
+    if "form" in df.columns:
+        df["form"] = pd.to_numeric(df["form"], errors="coerce").fillna(0.0)
+    if "penalties_order" in df.columns:
+        df["penalties_order"] = pd.to_numeric(df["penalties_order"], errors="coerce")
     return df
 
 
@@ -75,7 +95,29 @@ def optimize_lineup(squad_df, projections_df, score_col, formations=None):
 
         start_sorted = starting.sort_values("xpts", ascending=False).reset_index(drop=True)
         start_sorted["captain_score"] = start_sorted.apply(
-            lambda r: float(r["xpts"]) * float(CAPTAIN_POSITION_MULTIPLIER.get(r["pos"], 1.0)),
+            lambda r: (
+                float(r["xpts"]) * float(CAPTAIN_POSITION_MULTIPLIER.get(r["pos"], 1.0))
+                + (
+                    max(
+                        0.0,
+                        to_number(r.get("price_m"), 0.0)
+                        - float(config.CAPTAIN_PREMIUM_PRICE_FLOOR),
+                    )
+                    * float(config.CAPTAIN_PREMIUM_PRICE_BONUS_PER_M)
+                    * (1.0 if str(r.get("pos")) in ["MID", "FWD"] else 0.0)
+                )
+                + (
+                    max(0.0, to_number(r.get("form"), 0.0))
+                    * float(config.CAPTAIN_FORM_CEILING_WEIGHT)
+                    * (1.0 if str(r.get("pos")) in ["MID", "FWD"] else 0.0)
+                )
+                + (
+                    float(config.CAPTAIN_SET_PIECE_PENALTY_WEIGHT)
+                    if to_number(r.get("penalties_order"), 99.0) == 1.0
+                    and str(r.get("pos")) in ["MID", "FWD"]
+                    else 0.0
+                )
+            ),
             axis=1,
         )
         captain_rank = start_sorted.sort_values(["captain_score", "xpts"], ascending=[False, False]).reset_index(drop=True)
