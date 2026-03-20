@@ -359,6 +359,240 @@ def _build_position_panels(proj_all, gws, teams_code, owned_ids=None, limit_per_
     }
 
 
+def _round_float(value, ndigits=2, default=0.0):
+    parsed = _safe_float(value, default=default)
+    if parsed is None:
+        parsed = default
+    return float(round(float(parsed), int(ndigits)))
+
+
+def _safe_player_id(value):
+    parsed = _safe_int(value)
+    if parsed is None:
+        return None
+    return int(parsed)
+
+
+def _player_map_from_records(starting_records, bench_records):
+    by_id = {}
+    for rec in list(starting_records or []) + list(bench_records or []):
+        pid = _safe_player_id(rec.get("player_id"))
+        if pid is None:
+            continue
+        by_id[pid] = rec
+    return by_id
+
+
+def _build_bench_moves(squad_df, starting_records, bench_records):
+    if squad_df is None or squad_df.empty:
+        return []
+
+    cur = squad_df.copy()
+    if "player_id" not in cur.columns:
+        return []
+    cur["player_id"] = pd.to_numeric(cur["player_id"], errors="coerce")
+    cur = cur[cur["player_id"].notna()].copy()
+    cur["player_id"] = cur["player_id"].astype(int)
+    if cur.empty:
+        return []
+
+    if "multiplier" in cur.columns:
+        cur["multiplier"] = pd.to_numeric(cur["multiplier"], errors="coerce").fillna(0.0)
+    else:
+        cur["multiplier"] = 0.0
+
+    current_starting_ids = set(cur[cur["multiplier"] > 0]["player_id"].astype(int).tolist())
+    current_bench_ids = set(cur[cur["multiplier"] <= 0]["player_id"].astype(int).tolist())
+
+    rec_starting_ids = set()
+    for rec in starting_records or []:
+        pid = _safe_player_id(rec.get("player_id"))
+        if pid is not None:
+            rec_starting_ids.add(pid)
+
+    rec_bench_order = {}
+    for rec in bench_records or []:
+        pid = _safe_player_id(rec.get("player_id"))
+        if pid is None:
+            continue
+        rec_bench_order[pid] = _safe_int(rec.get("bench_order"))
+
+    by_id = _player_map_from_records(starting_records, bench_records)
+
+    start_candidates = []
+    for pid in rec_starting_ids:
+        rec = by_id.get(pid) or {}
+        start_candidates.append((pid, _safe_float(rec.get("xpts"), default=0.0) or 0.0))
+    start_candidates.sort(key=lambda row: row[1], reverse=True)
+
+    moves = []
+    for pid, _ in start_candidates:
+        if pid not in current_bench_ids:
+            continue
+        rec = by_id.get(pid) or {}
+        moves.append(
+            {
+                "player_id": int(pid),
+                "web_name": rec.get("web_name"),
+                "team_short": rec.get("team_short"),
+                "move": "start",
+                "recommended_bench_order": None,
+                "xpts": _round_float(rec.get("xpts"), 2, 0.0),
+            }
+        )
+
+    bench_candidates = []
+    for pid, bench_order in rec_bench_order.items():
+        rec = by_id.get(pid) or {}
+        xpts = _safe_float(rec.get("xpts"), default=0.0) or 0.0
+        bench_candidates.append((pid, bench_order if bench_order is not None else 99, xpts))
+    bench_candidates.sort(key=lambda row: (row[1], row[2]))
+
+    for pid, bench_order, _ in bench_candidates:
+        if pid not in current_starting_ids:
+            continue
+        rec = by_id.get(pid) or {}
+        moves.append(
+            {
+                "player_id": int(pid),
+                "web_name": rec.get("web_name"),
+                "team_short": rec.get("team_short"),
+                "move": "bench",
+                "recommended_bench_order": int(bench_order) if bench_order is not None else None,
+                "xpts": _round_float(rec.get("xpts"), 2, 0.0),
+            }
+        )
+
+    limit = int(getattr(config, "STRATEGY_MAX_BENCH_MOVES", 6) or 6)
+    return moves[: max(1, limit)]
+
+
+def _build_strategy_recommendation(
+    squad_df,
+    starting_records,
+    bench_records,
+    captain_player_id,
+    vice_player_id,
+    horizon_gws,
+    free_transfers,
+    transfer_preview,
+    active_chip=None,
+):
+    horizon_gws = max(1, int(_safe_int(horizon_gws) or 1))
+    free_transfers = max(0, int(_safe_int(free_transfers) or 0))
+
+    transfer_preview = transfer_preview or {}
+    preview_moves = transfer_preview.get("moves")
+    if not isinstance(preview_moves, list):
+        preview_moves = []
+
+    total_gain = 0.0
+    for move in preview_moves:
+        if isinstance(move, dict):
+            total_gain += float(_safe_float(move.get("score_gain"), default=0.0) or 0.0)
+    planned_moves = len(preview_moves)
+    avg_gain = float(total_gain / planned_moves) if planned_moves > 0 else 0.0
+
+    if horizon_gws == 1:
+        min_gain_per_transfer = float(getattr(config, "STRATEGY_MIN_GAIN_PER_TRANSFER_GW1", 1.4))
+    else:
+        min_gain_per_transfer = float(getattr(config, "STRATEGY_MIN_GAIN_PER_TRANSFER_MULTI", 1.1))
+
+    suggested_transfers_count = planned_moves if avg_gain >= min_gain_per_transfer and total_gain > 0 else 0
+    action = "make_transfers" if suggested_transfers_count > 0 else "roll"
+
+    by_id = _player_map_from_records(starting_records, bench_records)
+    captain_rec = by_id.get(_safe_player_id(captain_player_id) or -1) or {}
+    vice_rec = by_id.get(_safe_player_id(vice_player_id) or -1) or {}
+    captain_xpts = float(_safe_float(captain_rec.get("xpts"), default=0.0) or 0.0)
+    bench_xpts = sum(float(_safe_float(r.get("xpts"), default=0.0) or 0.0) for r in (bench_records or []))
+
+    chip_name = "none"
+    chip_should_use = False
+    chip_confidence = 0.35
+    chip_reason = "No strong chip signal for this setup."
+
+    if active_chip:
+        chip_reason = f"Chip already active this GW ({active_chip})."
+    elif horizon_gws == 1:
+        bb_min = float(getattr(config, "STRATEGY_CHIP_BENCH_BOOST_MIN_XPTS", 15.0))
+        tc_min = float(getattr(config, "STRATEGY_CHIP_TRIPLE_CAPTAIN_MIN_XPTS", 10.0))
+        bench_boost_margin = bench_xpts - bb_min
+        triple_captain_margin = captain_xpts - tc_min
+        if bench_boost_margin >= 0 or triple_captain_margin >= 0:
+            chip_should_use = True
+            if bench_boost_margin >= triple_captain_margin:
+                chip_name = "bench_boost"
+                chip_confidence = min(0.92, 0.72 + max(0.0, bench_boost_margin) * 0.03)
+                chip_reason = f"Bench projection is high ({_round_float(bench_xpts, 1, 0.0)} xPts)."
+            else:
+                chip_name = "triple_captain"
+                chip_confidence = min(0.92, 0.72 + max(0.0, triple_captain_margin) * 0.04)
+                chip_reason = f"Captain projection is very high ({_round_float(captain_xpts, 1, 0.0)} xPts)."
+
+    reasons = []
+    if action == "make_transfers":
+        reasons.append(
+            f"Transfer planner projects {_round_float(total_gain, 2, 0.0)} points total gain "
+            f"({_round_float(avg_gain, 2, 0.0)} per move)."
+        )
+    else:
+        reasons.append(
+            f"Average transfer gain ({_round_float(avg_gain, 2, 0.0)}) is below threshold "
+            f"({_round_float(min_gain_per_transfer, 2, 0.0)}), so rolling is safer."
+        )
+
+    if chip_should_use:
+        reasons.append(chip_reason)
+        action = "use_chip"
+
+    if free_transfers > 0:
+        reasons.append(f"Free transfers available: {int(free_transfers)}.")
+    if horizon_gws > 1:
+        reasons.append(f"Decision is optimized across the next {int(horizon_gws)} GWs.")
+
+    if action == "use_chip":
+        confidence = min(0.95, max(0.65, float(chip_confidence)))
+    elif action == "make_transfers":
+        confidence = min(0.9, 0.58 + max(0.0, min(0.28, avg_gain * 0.08)))
+    else:
+        confidence = min(0.88, 0.58 + max(0.0, min(0.24, (min_gain_per_transfer - avg_gain) * 0.1)))
+
+    bench_moves = _build_bench_moves(squad_df, starting_records, bench_records)
+
+    return {
+        "action": action,
+        "confidence": _round_float(confidence, 3, 0.6),
+        "reasons": reasons,
+        "captain_suggestion": {
+            "captain_player_id": _safe_player_id(captain_player_id),
+            "vice_player_id": _safe_player_id(vice_player_id),
+            "captain_web_name": captain_rec.get("web_name"),
+            "vice_web_name": vice_rec.get("web_name"),
+            "captain_xpts": _round_float(captain_xpts, 2, 0.0),
+        },
+        "transfer_suggestion": {
+            "free_transfers": int(free_transfers),
+            "horizon_gws": int(horizon_gws),
+            "suggested_transfers_count": int(suggested_transfers_count),
+            "considered_transfers_count": int(planned_moves),
+            "estimated_total_gain": _round_float(total_gain, 2, 0.0),
+            "estimated_avg_gain": _round_float(avg_gain, 2, 0.0),
+            "min_gain_per_transfer_threshold": _round_float(min_gain_per_transfer, 2, 0.0),
+        },
+        "chip_suggestion": {
+            "chip": chip_name,
+            "should_use": bool(chip_should_use),
+            "confidence": _round_float(chip_confidence, 3, 0.35),
+            "active_chip": active_chip,
+            "reason": chip_reason,
+        },
+        "bench_recommendation": {
+            "moves": bench_moves,
+        },
+    }
+
+
 def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
     notes = []
 
@@ -650,19 +884,35 @@ def build_recommendations(payload):
         "starting_xi": starting_records,
         "bench": bench_records,
         "position_panels": position_panels,
+        "active_chip": ctx.get("myteam", {}).get("active_chip"),
     }
 
+    free_transfers_value = _safe_int(free_transfers)
+    if free_transfers_value is None:
+        free_transfers_value = 1
+    transfer_preview = recommender.suggest_transfers(
+        squad_df=squad_df,
+        elements_all=proj_all,
+        itb_m=_safe_float(itb_m, default=0.0) or 0.0,
+        free_transfers=free_transfers_value,
+        hit_cap=_safe_int(hit_cap) or 0,
+        score_col="xpts_horizon",
+        horizon_gws=int(horizon_gws),
+    )
     if include_transfers:
-        rec = recommender.suggest_transfers(
-            squad_df=squad_df,
-            elements_all=proj_all,
-            itb_m=_safe_float(itb_m, default=0.0) or 0.0,
-            free_transfers=_safe_int(free_transfers) or 1,
-            hit_cap=_safe_int(hit_cap) or 0,
-            score_col="xpts_horizon",
-            horizon_gws=int(horizon_gws),
-        )
-        out["transfers"] = rec
+        out["transfers"] = transfer_preview
+
+    out["strategy_recommendation"] = _build_strategy_recommendation(
+        squad_df=squad_df,
+        starting_records=starting_records,
+        bench_records=bench_records,
+        captain_player_id=res.get("captain_player_id"),
+        vice_player_id=res.get("vice_player_id"),
+        horizon_gws=horizon_gws,
+        free_transfers=free_transfers_value,
+        transfer_preview=transfer_preview,
+        active_chip=ctx.get("myteam", {}).get("active_chip"),
+    )
 
     return out
 

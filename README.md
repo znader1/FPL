@@ -51,6 +51,8 @@ Notes:
 - Each player in `starting_xi` / `bench` includes `fixtures_horizon[]` and `next_fixtures` to show upcoming opponents across the horizon.
 - `recommendations` includes `position_panels` with top candidates per position (`all` and `not_owned`) for your frontend insights panel.
 - `recommendations` transfer engine now builds multiple moves using `free_transfers + horizon_gws` (plus optional hit allowance).
+- Transfer ordering now prioritizes injured/at-risk starters and underperforming premium slots before low-impact bench/GKP churn.
+- `recommendations` now returns `strategy_recommendation` with a structured action (`roll` / `make_transfers` / `use_chip`), confidence, reasons, captain suggestion, transfer summary, chip suggestion, and bench moves.
 - Main tuning knobs are centralized in `src/config.py` (projection form window, captain position coefficients, transfer weighting, set-piece weighting).
 
 Browser frontend note (CORS):

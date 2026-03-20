@@ -22,6 +22,30 @@ def position_attack_bonus(pos):
     return to_number(config.TRANSFER_ATTACK_BONUS.get(pos, 0.0), 0.0)
 
 
+def status_sell_boost(status):
+    key = str(status or "").strip().lower()
+    mapping = {
+        "a": 0.0,
+        "d": 0.45,
+        "u": 0.9,
+        "s": 1.1,
+        "i": 1.35,
+    }
+    return to_number(mapping.get(key, 0.0), 0.0)
+
+
+def status_buy_bonus(status):
+    key = str(status or "").strip().lower()
+    mapping = {
+        "a": 0.2,
+        "d": -0.35,
+        "u": -0.95,
+        "s": -1.15,
+        "i": -1.35,
+    }
+    return to_number(mapping.get(key, 0.0), 0.0)
+
+
 def set_piece_score(row):
     p_order = pd.to_numeric(row.get("penalties_order"), errors="coerce")
     d_order = pd.to_numeric(row.get("direct_freekicks_order"), errors="coerce")
@@ -133,7 +157,21 @@ def suggest_transfers(
         return {"note": "No squad loaded.", "moves": [], "remaining_itb": itb_m}
 
     el = build_transfer_scores(elements_all, score_col=score_col)
-    need_cols = ["id", "web_name", "team_short", "pos", "price_m", "base_score", "hot_score", "set_piece_score", "transfer_score"]
+    need_cols = [
+        "id",
+        "web_name",
+        "team_short",
+        "pos",
+        "price_m",
+        "base_score",
+        "hot_score",
+        "set_piece_score",
+        "transfer_score",
+        "selected_by_percent",
+        "status",
+        "chance_of_playing_this_round",
+        "chance_of_playing_next_round",
+    ]
     for c in need_cols:
         if c not in el.columns:
             if c in ["id"]:
@@ -180,14 +218,72 @@ def suggest_transfers(
     sq["transfer_score"] = pd.to_numeric(sq["transfer_score"], errors="coerce").fillna(0.0)
     sq["hot_score"] = pd.to_numeric(sq["hot_score"], errors="coerce").fillna(0.0)
     sq["set_piece_score"] = pd.to_numeric(sq["set_piece_score"], errors="coerce").fillna(0.0)
+    sq["selected_by_percent"] = pd.to_numeric(sq.get("selected_by_percent"), errors="coerce").fillna(0.0)
+    sq["chance_of_playing_next_round"] = pd.to_numeric(sq.get("chance_of_playing_next_round"), errors="coerce")
+    sq["chance_of_playing_this_round"] = pd.to_numeric(sq.get("chance_of_playing_this_round"), errors="coerce")
+
+    if "chance_of_playing_next_round" in sq.columns:
+        fallback_mask = sq["chance_of_playing_next_round"].isna()
+        if "chance_of_playing_this_round" in sq.columns:
+            sq.loc[fallback_mask, "chance_of_playing_next_round"] = sq.loc[fallback_mask, "chance_of_playing_this_round"]
+    sq["chance_of_playing_next_round"] = sq["chance_of_playing_next_round"].fillna(100.0).clip(lower=0.0, upper=100.0)
+    sq["availability_risk"] = (100.0 - sq["chance_of_playing_next_round"]) / 100.0
+    sq["status_sell_boost"] = sq.get("status", "").apply(status_sell_boost) if "status" in sq.columns else 0.0
 
     sq["is_captain"] = sq.get("is_captain", False).astype(bool)
     sq["is_vice_captain"] = sq.get("is_vice_captain", False).astype(bool)
+    sq["is_starter"] = pd.to_numeric(sq.get("multiplier"), errors="coerce").fillna(0.0) > 0
     sq["keep_penalty"] = (
         sq["is_captain"].astype(int) * float(config.TRANSFER_KEEP_CAPTAIN_PENALTY)
         + sq["is_vice_captain"].astype(int) * float(config.TRANSFER_KEEP_VICE_PENALTY)
     )
-    sq["sell_priority"] = sq["transfer_score"] + sq["keep_penalty"]
+    sq["starter_sell_boost"] = sq["is_starter"].astype(int) * float(config.TRANSFER_SELL_STARTER_BOOST)
+    sq["bench_sell_penalty"] = (~sq["is_starter"]).astype(int) * float(config.TRANSFER_SELL_BENCH_PENALTY)
+    sq["gkp_sell_penalty"] = (sq["pos"] == "GKP").astype(int) * float(config.TRANSFER_SELL_GKP_PENALTY)
+    sq["premium_sell_boost"] = (
+        (sq["price_m"] - float(config.TRANSFER_SELL_PREMIUM_PRICE_FLOOR)).clip(lower=0.0)
+        * float(config.TRANSFER_SELL_PREMIUM_BOOST)
+    )
+    sq["injury_sell_boost"] = (
+        sq["availability_risk"].fillna(0.0) * float(config.TRANSFER_SELL_INJURY_BOOST)
+        + sq["status_sell_boost"].fillna(0.0)
+    )
+    sq["sell_priority"] = (
+        sq["transfer_score"]
+        + sq["keep_penalty"]
+        + sq["bench_sell_penalty"]
+        + sq["gkp_sell_penalty"]
+        - sq["starter_sell_boost"]
+        - sq["premium_sell_boost"]
+        - sq["injury_sell_boost"]
+    )
+
+    el["selected_by_percent"] = pd.to_numeric(el.get("selected_by_percent"), errors="coerce").fillna(0.0)
+    el["chance_of_playing_next_round"] = pd.to_numeric(el.get("chance_of_playing_next_round"), errors="coerce")
+    el["chance_of_playing_this_round"] = pd.to_numeric(el.get("chance_of_playing_this_round"), errors="coerce")
+    fallback_mask_el = el["chance_of_playing_next_round"].isna()
+    el.loc[fallback_mask_el, "chance_of_playing_next_round"] = el.loc[fallback_mask_el, "chance_of_playing_this_round"]
+    el["chance_of_playing_next_round"] = el["chance_of_playing_next_round"].fillna(100.0).clip(lower=0.0, upper=100.0)
+    el["buy_availability_bonus"] = (
+        (el["chance_of_playing_next_round"] / 100.0) * float(config.TRANSFER_BUY_AVAILABILITY_WEIGHT)
+    )
+    el["buy_status_bonus"] = el.get("status", "").apply(status_buy_bonus) if "status" in el.columns else 0.0
+    el["buy_premium_bonus"] = (
+        (pd.to_numeric(el.get("price_m"), errors="coerce").fillna(0.0) - float(config.TRANSFER_BUY_PREMIUM_PRICE_FLOOR))
+        .clip(lower=0.0)
+        * float(config.TRANSFER_BUY_PREMIUM_BONUS)
+        * (el.get("pos", "").isin(["MID", "FWD"]).astype(int))
+    )
+    el["buy_ownership_bonus"] = (
+        (el["selected_by_percent"] / 100.0) * float(config.TRANSFER_BUY_OWNERSHIP_BONUS)
+    )
+    el["buy_priority"] = (
+        el["transfer_score"].fillna(0.0)
+        + el["buy_availability_bonus"].fillna(0.0)
+        + el["buy_status_bonus"].fillna(0.0)
+        + el["buy_premium_bonus"].fillna(0.0)
+        + el["buy_ownership_bonus"].fillna(0.0)
+    )
 
     free_transfers = max(0, int(free_transfers or 0))
     horizon_gws = max(0, int(horizon_gws or 0))
@@ -201,7 +297,7 @@ def suggest_transfers(
     current_ids = set(sq["player_id"].astype(int).tolist())
     sold_ids = set()
 
-    sellers = sq.sort_values(["sell_priority", "multiplier"], ascending=[True, False]).copy()
+    sellers = sq.sort_values(["sell_priority", "is_starter", "injury_sell_boost"], ascending=[True, False, False]).copy()
     sellers = sellers[sellers["pos"].notna()].copy()
 
     for _ in range(int(transfer_count)):
@@ -224,7 +320,7 @@ def suggest_transfers(
             sold_ids.add(sell_id)
             continue
 
-        candidates = candidates.sort_values(["transfer_score", "hot_score", "base_score"], ascending=False)
+        candidates = candidates.sort_values(["buy_priority", "transfer_score", "hot_score", "base_score"], ascending=False)
         buy = candidates.iloc[0]
         buy_id = int(buy["id"])
 
