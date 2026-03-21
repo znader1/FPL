@@ -53,6 +53,9 @@ Notes:
 - `recommendations` transfer engine now builds multiple moves using `free_transfers + horizon_gws` (plus optional hit allowance).
 - Transfer ordering now prioritizes injured/at-risk starters and underperforming premium slots before low-impact bench/GKP churn.
 - `recommendations` now returns `strategy_recommendation` with a structured action (`roll` / `make_transfers` / `use_chip`), confidence, reasons, captain suggestion, transfer summary, chip suggestion, and bench moves.
+- `recommendations` now returns `squad_with_transfers` so frontend can render the pitch **after** applying suggested moves.
+- `recommendations` now returns `squad_with_transfers_steps` (0..N applied moves) so frontend can switch applied transfers instantly without re-calling API.
+- `recommendations` also returns `transfer_impact`, `transfer_application`, and `timings_ms` for debugging/runtime tracking.
 - Main tuning knobs are centralized in `src/config.py` (projection form window, captain position coefficients, transfer weighting, set-piece weighting).
 - Full parameter-by-parameter config guide: `docs/config_reference.md`.
 

@@ -1,5 +1,6 @@
 import os
 import time
+import logging
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -12,6 +13,7 @@ from src import config, fpl_client, fpl_refresh_next_gw, optimizer, projections,
 
 
 app = FastAPI(title="FPL Assistant API", version="0.3.0")
+logger = logging.getLogger(__name__)
 
 
 def _csv_env(name):
@@ -356,6 +358,214 @@ def _build_position_panels(proj_all, gws, teams_code, owned_ids=None, limit_per_
     return {
         "all": pack(pool),
         "not_owned": pack(not_owned_df),
+    }
+
+
+def _elapsed_ms(start_ts):
+    return int(round((time.perf_counter() - float(start_ts)) * 1000.0))
+
+
+def _lineup_projection_cols(proj_all, gws):
+    proj_cols = ["id"]
+    if "xpts_horizon" in proj_all.columns:
+        proj_cols.append("xpts_horizon")
+    for gw in gws:
+        for c in [f"xpts_gw{gw}", f"fixtures_gw{gw}", f"fixture_count_gw{gw}", f"diff_avg_gw{gw}"]:
+            if c in proj_all.columns:
+                proj_cols.append(c)
+    return list(dict.fromkeys(proj_cols))
+
+
+def _pack_lineup_records(starting_df, bench_df, elements, proj_all, gws, teams_code):
+    el_img = elements.copy()
+    cols = [c for c in ["id", "team", "code", "photo"] if c in el_img.columns]
+    el_img = el_img[cols].rename(columns={"id": "player_id"})
+
+    proj_small = proj_all[_lineup_projection_cols(proj_all, gws)].copy().rename(columns={"id": "player_id"})
+    starting = starting_df.merge(el_img, on="player_id", how="left").merge(proj_small, on="player_id", how="left")
+    bench = bench_df.merge(el_img, on="player_id", how="left").merge(proj_small, on="player_id", how="left")
+    starting_records = _attach_media(_df_records(starting), teams_code)
+    bench_records = _attach_media(_df_records(bench), teams_code)
+
+    drop_keys = []
+    for gw in gws:
+        drop_keys.extend([f"xpts_gw{gw}", f"fixtures_gw{gw}", f"fixture_count_gw{gw}", f"diff_avg_gw{gw}"])
+    for rec in starting_records + bench_records:
+        fixtures_h = []
+        for gw in gws:
+            fixtures_h.append(
+                {
+                    "event_id": int(gw),
+                    "fixtures": (rec.get(f"fixtures_gw{gw}") or ""),
+                    "fixture_count": int(_safe_int(rec.get(f"fixture_count_gw{gw}")) or 0),
+                    "diff_avg": float(_safe_float(rec.get(f"diff_avg_gw{gw}"), default=0.0) or 0.0),
+                    "xpts": float(_safe_float(rec.get(f"xpts_gw{gw}"), default=0.0) or 0.0),
+                }
+            )
+        rec["fixtures_horizon"] = fixtures_h
+        rec["next_fixtures"] = fixtures_h[0]["fixtures"] if fixtures_h else ""
+        for k in drop_keys:
+            if k in rec:
+                rec.pop(k, None)
+
+    return starting_records, bench_records
+
+
+def _apply_transfer_moves_to_squad(squad_df, transfer_moves, elements):
+    if squad_df is None or squad_df.empty:
+        return squad_df, {"requested": 0, "applied": 0, "skipped": 0}
+
+    moves = transfer_moves if isinstance(transfer_moves, list) else []
+    if not moves:
+        return squad_df.copy(), {"requested": 0, "applied": 0, "skipped": 0}
+
+    out = squad_df.copy()
+    if "player_id" not in out.columns:
+        return out, {"requested": len(moves), "applied": 0, "skipped": len(moves)}
+    out["player_id"] = pd.to_numeric(out["player_id"], errors="coerce")
+    out = out[out["player_id"].notna()].copy()
+    out["player_id"] = out["player_id"].astype(int)
+
+    el_cols = [c for c in ["id", "web_name", "team", "team_short", "team_name", "pos"] if c in elements.columns]
+    el_map = elements[el_cols].drop_duplicates("id").set_index("id") if "id" in elements.columns else pd.DataFrame()
+
+    applied = 0
+    skipped = 0
+    for move in moves:
+        if not isinstance(move, dict):
+            skipped += 1
+            continue
+        sell = move.get("sell") or {}
+        buy = move.get("buy") or {}
+        sell_id = _safe_int(sell.get("id"))
+        buy_id = _safe_int(buy.get("id"))
+        if not sell_id or not buy_id or int(sell_id) == int(buy_id):
+            skipped += 1
+            continue
+
+        idxs = out.index[out["player_id"] == int(sell_id)].tolist()
+        if not idxs:
+            skipped += 1
+            continue
+        if int(buy_id) in set(out["player_id"].astype(int).tolist()):
+            skipped += 1
+            continue
+
+        idx = idxs[0]
+        out.at[idx, "player_id"] = int(buy_id)
+        if "is_captain" in out.columns:
+            out.at[idx, "is_captain"] = False
+        if "is_vice_captain" in out.columns:
+            out.at[idx, "is_vice_captain"] = False
+
+        if not el_map.empty and int(buy_id) in el_map.index:
+            row = el_map.loc[int(buy_id)]
+            for col in ["web_name", "team", "team_short", "team_name", "pos"]:
+                if col in out.columns and col in row.index:
+                    out.at[idx, col] = row[col]
+        else:
+            if "web_name" in out.columns:
+                out.at[idx, "web_name"] = buy.get("name")
+            if "team_short" in out.columns:
+                out.at[idx, "team_short"] = buy.get("team")
+
+        applied += 1
+
+    return out, {"requested": len(moves), "applied": applied, "skipped": skipped}
+
+
+def _build_transfer_step(
+    applied_count,
+    moves,
+    squad_df,
+    elements,
+    proj_all,
+    score_col,
+    gws,
+    teams_code,
+    base_res,
+    base_points,
+    base_starting_records,
+    base_bench_records,
+):
+    applied_count = max(0, int(applied_count or 0))
+    moves = list(moves or [])
+    selected_moves = moves[:applied_count]
+
+    if applied_count <= 0 or not selected_moves:
+        apply_info = {"requested": 0, "applied": 0, "skipped": 0}
+        return {
+            "applied_count": 0,
+            "transfer_application": {
+                **apply_info,
+                "available_moves": int(len(moves)),
+                "requested_apply_count": 0,
+            },
+            "transfer_impact": {
+                "base_projected_points_with_captain": float(base_points),
+                "with_transfers_projected_points_with_captain": float(base_points),
+                "delta_projected_points_with_captain": _round_float(0.0, 2, 0.0),
+            },
+            "formation": list(base_res["formation"]),
+            "captain_player_id": int(base_res["captain_player_id"]),
+            "vice_player_id": int(base_res["vice_player_id"]),
+            "projected_points_with_captain": float(base_points),
+            "starting_xi": base_starting_records,
+            "bench": base_bench_records,
+        }
+
+    squad_after_df, apply_info = _apply_transfer_moves_to_squad(
+        squad_df=squad_df,
+        transfer_moves=selected_moves,
+        elements=elements,
+    )
+
+    res_after = None
+    if apply_info.get("applied", 0) > 0:
+        try:
+            res_after = optimizer.optimize_lineup(squad_after_df, proj_all, score_col=score_col)
+        except Exception:
+            res_after = None
+
+    if not res_after:
+        step_points = float(base_points)
+        step_starting_records = base_starting_records
+        step_bench_records = base_bench_records
+        step_formation = list(base_res["formation"])
+        step_captain = int(base_res["captain_player_id"])
+        step_vice = int(base_res["vice_player_id"])
+    else:
+        step_points = float(res_after["projected_points_with_captain"])
+        step_formation = list(res_after["formation"])
+        step_captain = int(res_after["captain_player_id"])
+        step_vice = int(res_after["vice_player_id"])
+        step_starting_records, step_bench_records = _pack_lineup_records(
+            starting_df=res_after["starting_xi"],
+            bench_df=res_after["bench"],
+            elements=elements,
+            proj_all=proj_all,
+            gws=gws,
+            teams_code=teams_code,
+        )
+
+    return {
+        "applied_count": int(applied_count),
+        "transfer_application": {
+            **apply_info,
+            "available_moves": int(len(moves)),
+            "requested_apply_count": int(applied_count),
+        },
+        "transfer_impact": {
+            "base_projected_points_with_captain": float(base_points),
+            "with_transfers_projected_points_with_captain": float(step_points),
+            "delta_projected_points_with_captain": _round_float(step_points - float(base_points), 2, 0.0),
+        },
+        "formation": step_formation,
+        "captain_player_id": step_captain,
+        "vice_player_id": step_vice,
+        "projected_points_with_captain": float(step_points),
+        "starting_xi": step_starting_records,
+        "bench": step_bench_records,
     }
 
 
@@ -733,11 +943,15 @@ def build_squad(payload):
 
 
 def build_recommendations(payload):
+    total_start = time.perf_counter()
+    timings = {}
+
     entry_id = payload.get("entry_id") or os.environ.get("FPL_ENTRY_ID")
     optimize_event_id_raw = payload.get("event_id")
     squad_event_id_raw = payload.get("squad_event_id")
     horizon_gws_raw = payload.get("horizon_gws", 3)
     latest_n_matches_raw = payload.get("latest_n_matches", getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3))
+    apply_transfer_count_raw = payload.get("apply_transfer_count")
 
     include_transfers = _parse_bool(payload.get("include_transfers"), default=False)
     itb_m = payload.get("itb_m", 0.5)
@@ -747,7 +961,9 @@ def build_recommendations(payload):
     if panel_limit is None:
         panel_limit = 5
 
+    ts = time.perf_counter()
     ctx = load_fpl_context(entry_id, squad_event_id_raw, with_fixtures=True)
+    timings["load_context_ms"] = _elapsed_ms(ts)
     notes = list(ctx.get("notes") or [])
 
     entry_id = ctx["entry_id"]
@@ -798,6 +1014,7 @@ def build_recommendations(payload):
     teams_code = ctx["teams_code"]
     squad_df = ctx["squad_df"]
 
+    ts = time.perf_counter()
     try:
         proj_all = projections.project_elements_next_gws(
             elements=elements,
@@ -809,59 +1026,34 @@ def build_recommendations(payload):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Projection failed: {e}")
+    timings["projections_ms"] = _elapsed_ms(ts)
 
     score_col = f"xpts_gw{int(optimize_event_id)}"
+    ts = time.perf_counter()
     try:
         res = optimizer.optimize_lineup(squad_df, proj_all, score_col=score_col)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Optimize failed: {e}")
     if not res:
         raise HTTPException(status_code=500, detail="Could not optimize lineup for this squad.")
+    timings["optimize_base_ms"] = _elapsed_ms(ts)
 
     gws = [int(optimize_event_id) + i for i in range(int(horizon_gws))]
-
-    el_img = elements.copy()
-    cols = [c for c in ["id", "team", "code", "photo"] if c in el_img.columns]
-    el_img = el_img[cols].rename(columns={"id": "player_id"})
-
-    proj_cols = ["id"]
-    if "xpts_horizon" in proj_all.columns:
-        proj_cols.append("xpts_horizon")
-    for gw in gws:
-        for c in [f"xpts_gw{gw}", f"fixtures_gw{gw}", f"fixture_count_gw{gw}", f"diff_avg_gw{gw}"]:
-            if c in proj_all.columns:
-                proj_cols.append(c)
-    proj_small = proj_all[list(dict.fromkeys(proj_cols))].copy().rename(columns={"id": "player_id"})
-
-    starting = res["starting_xi"].merge(el_img, on="player_id", how="left").merge(proj_small, on="player_id", how="left")
-    bench = res["bench"].merge(el_img, on="player_id", how="left").merge(proj_small, on="player_id", how="left")
-    starting_records = _attach_media(_df_records(starting), teams_code)
-    bench_records = _attach_media(_df_records(bench), teams_code)
-
-    drop_keys = []
-    for gw in gws:
-        drop_keys.extend([f"xpts_gw{gw}", f"fixtures_gw{gw}", f"fixture_count_gw{gw}", f"diff_avg_gw{gw}"])
-    for rec in starting_records + bench_records:
-        fixtures_h = []
-        for gw in gws:
-            fixtures_h.append(
-                {
-                    "event_id": int(gw),
-                    "fixtures": (rec.get(f"fixtures_gw{gw}") or ""),
-                    "fixture_count": int(_safe_int(rec.get(f"fixture_count_gw{gw}")) or 0),
-                    "diff_avg": float(_safe_float(rec.get(f"diff_avg_gw{gw}"), default=0.0) or 0.0),
-                    "xpts": float(_safe_float(rec.get(f"xpts_gw{gw}"), default=0.0) or 0.0),
-                }
-            )
-        rec["fixtures_horizon"] = fixtures_h
-        rec["next_fixtures"] = fixtures_h[0]["fixtures"] if fixtures_h else ""
-        for k in drop_keys:
-            if k in rec:
-                rec.pop(k, None)
+    ts = time.perf_counter()
+    starting_records, bench_records = _pack_lineup_records(
+        starting_df=res["starting_xi"],
+        bench_df=res["bench"],
+        elements=elements,
+        proj_all=proj_all,
+        gws=gws,
+        teams_code=teams_code,
+    )
+    timings["pack_base_lineup_ms"] = _elapsed_ms(ts)
 
     owned_ids = []
     if "player_id" in squad_df.columns:
         owned_ids = [int(x) for x in pd.to_numeric(squad_df["player_id"], errors="coerce").dropna().astype(int).tolist()]
+    ts = time.perf_counter()
     position_panels = _build_position_panels(
         proj_all=proj_all,
         gws=gws,
@@ -869,6 +1061,7 @@ def build_recommendations(payload):
         owned_ids=owned_ids,
         limit_per_pos=panel_limit,
     )
+    timings["position_panels_ms"] = _elapsed_ms(ts)
 
     out = {
         "entry_id": int(entry_id),
@@ -890,6 +1083,7 @@ def build_recommendations(payload):
     free_transfers_value = _safe_int(free_transfers)
     if free_transfers_value is None:
         free_transfers_value = 1
+    ts = time.perf_counter()
     transfer_preview = recommender.suggest_transfers(
         squad_df=squad_df,
         elements_all=proj_all,
@@ -899,8 +1093,71 @@ def build_recommendations(payload):
         score_col="xpts_horizon",
         horizon_gws=int(horizon_gws),
     )
+    timings["transfer_preview_ms"] = _elapsed_ms(ts)
     if include_transfers:
         out["transfers"] = transfer_preview
+
+    ts = time.perf_counter()
+    moves = transfer_preview.get("moves") if isinstance(transfer_preview, dict) else []
+    if not isinstance(moves, list):
+        moves = []
+
+    apply_transfer_count = _safe_int(apply_transfer_count_raw)
+    if apply_transfer_count is None:
+        effective_apply_count = 0
+    else:
+        effective_apply_count = max(0, min(int(apply_transfer_count), len(moves)))
+
+    transfer_steps = []
+    if moves:
+        for idx in range(0, len(moves) + 1):
+            step = _build_transfer_step(
+                applied_count=idx,
+                moves=moves,
+                squad_df=squad_df,
+                elements=elements,
+                proj_all=proj_all,
+                score_col=score_col,
+                gws=gws,
+                teams_code=teams_code,
+                base_res=res,
+                base_points=float(res["projected_points_with_captain"]),
+                base_starting_records=starting_records,
+                base_bench_records=bench_records,
+            )
+            transfer_steps.append(step)
+    else:
+        transfer_steps.append(
+            _build_transfer_step(
+                applied_count=0,
+                moves=[],
+                squad_df=squad_df,
+                elements=elements,
+                proj_all=proj_all,
+                score_col=score_col,
+                gws=gws,
+                teams_code=teams_code,
+                base_res=res,
+                base_points=float(res["projected_points_with_captain"]),
+                base_starting_records=starting_records,
+                base_bench_records=bench_records,
+            )
+        )
+
+    selected_step = transfer_steps[effective_apply_count] if effective_apply_count < len(transfer_steps) else transfer_steps[0]
+
+    out["transfer_application"] = selected_step.get("transfer_application")
+    out["squad_with_transfers"] = {
+        "formation": selected_step.get("formation"),
+        "captain_player_id": selected_step.get("captain_player_id"),
+        "vice_player_id": selected_step.get("vice_player_id"),
+        "projected_points_with_captain": selected_step.get("projected_points_with_captain"),
+        "starting_xi": selected_step.get("starting_xi"),
+        "bench": selected_step.get("bench"),
+    }
+    out["transfer_impact"] = selected_step.get("transfer_impact")
+    out["squad_with_transfers_steps"] = transfer_steps
+    timings["transfer_apply_and_reoptimize_ms"] = _elapsed_ms(ts)
 
     out["strategy_recommendation"] = _build_strategy_recommendation(
         squad_df=squad_df,
@@ -912,6 +1169,17 @@ def build_recommendations(payload):
         free_transfers=free_transfers_value,
         transfer_preview=transfer_preview,
         active_chip=ctx.get("myteam", {}).get("active_chip"),
+    )
+
+    timings["total_ms"] = _elapsed_ms(total_start)
+    out["timings_ms"] = timings
+    logger.info(
+        "recommendations entry_id=%s squad_event_id=%s event_id=%s horizon=%s timings_ms=%s",
+        int(entry_id),
+        int(squad_event_id),
+        int(optimize_event_id),
+        int(horizon_gws),
+        timings,
     )
 
     return out
@@ -1018,6 +1286,7 @@ def recommendations_get(
     horizon_gws=3,
     latest_n_matches=3,
     include_transfers=False,
+    apply_transfer_count=None,
     itb_m=0.5,
     free_transfers=1,
     hit_cap=0,
@@ -1036,6 +1305,7 @@ def recommendations_get(
         "horizon_gws": horizon_gws,
         "latest_n_matches": latest_n_matches,
         "include_transfers": include_transfers,
+        "apply_transfer_count": apply_transfer_count,
         "itb_m": itb_m,
         "free_transfers": free_transfers,
         "hit_cap": hit_cap,
