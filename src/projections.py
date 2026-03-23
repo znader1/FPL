@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pandas as pd
 
 from . import config, transforms
@@ -13,6 +15,7 @@ DIFFICULTY_MULTIPLIER = {
 
 
 def clamp(value, low, high):
+    """Clamp a numeric value between low and high with safe fallbacks."""
     if value is None:
         return low
     try:
@@ -303,4 +306,149 @@ def project_elements_next_gws(
 
     out = df[[c for c in keep if c in df.columns]].copy()
     out = out.sort_values("xpts_horizon", ascending=False)
+    return out
+
+
+def _spearman_rank_corr(a, b):
+    """Compute Spearman rank correlation with pandas rank + corr."""
+    ar = pd.Series(a).rank(method="average")
+    br = pd.Series(b).rank(method="average")
+    corr = ar.corr(br)
+    if pd.isna(corr):
+        return None
+    return float(corr)
+
+
+def find_latest_gw_history(base_dir="data/processed/fpl"):
+    """Return latest `player_gw_history_*.csv` file path under base_dir."""
+    base = Path(base_dir)
+    if not base.exists():
+        return None
+    paths = list(base.glob("*/player_gw_history_*.csv"))
+    if not paths:
+        return None
+    return str(max(paths, key=lambda p: p.stat().st_mtime))
+
+
+def evaluate_xpts_history(history_df, window=3, min_gw=2, topk=25):
+    """
+    Evaluate baseline xPts versus actual GW points from a history DataFrame.
+
+    Expected columns: `player_id`, `gw`, `gw_total_points`, `gw_fixture_count`.
+    Optional: `gw_team_difficulty_avg` for difficulty adjustment.
+    """
+    if history_df is None or history_df.empty:
+        return {"ok": False, "error": "Empty history dataset."}
+
+    required = ["player_id", "gw", "gw_total_points", "gw_fixture_count"]
+    missing = [c for c in required if c not in history_df.columns]
+    if missing:
+        return {"ok": False, "error": f"Missing required columns: {missing}"}
+
+    df = history_df.copy()
+    df["gw"] = pd.to_numeric(df["gw"], errors="coerce")
+    df["player_id"] = pd.to_numeric(df["player_id"], errors="coerce")
+    df = df[df["gw"].notna() & df["player_id"].notna()].copy()
+    if df.empty:
+        return {"ok": False, "error": "No valid rows after cleaning."}
+
+    df["gw"] = df["gw"].astype(int)
+    df["player_id"] = df["player_id"].astype(int)
+    df["gw_total_points"] = pd.to_numeric(df["gw_total_points"], errors="coerce").fillna(0.0)
+    df["gw_fixture_count"] = pd.to_numeric(df["gw_fixture_count"], errors="coerce").fillna(0.0)
+    df = df.sort_values(["player_id", "gw"]).reset_index(drop=True)
+
+    window = max(1, int(window or 3))
+    min_gw = max(1, int(min_gw or 2))
+    topk = max(1, int(topk or 25))
+
+    df["pred_base"] = (
+        df.groupby("player_id")["gw_total_points"]
+        .apply(lambda s: s.shift(1).rolling(window, min_periods=1).mean())
+        .reset_index(level=0, drop=True)
+    )
+
+    diff_col = "gw_team_difficulty_avg" if "gw_team_difficulty_avg" in df.columns else None
+    if diff_col:
+        df["diff_mult"] = pd.to_numeric(df[diff_col], errors="coerce").apply(difficulty_multiplier)
+    else:
+        df["diff_mult"] = 1.0
+
+    df["pred_xpts"] = df["pred_base"].fillna(0.0) * df["gw_fixture_count"] * df["diff_mult"]
+    df["actual"] = df["gw_total_points"]
+
+    eval_df = df[df["gw"] >= int(min_gw)].copy()
+    if eval_df.empty:
+        return {"ok": False, "error": "No rows available for selected min_gw."}
+
+    eval_df["error"] = eval_df["pred_xpts"] - eval_df["actual"]
+    eval_df["abs_error"] = eval_df["error"].abs()
+    mae = float(eval_df["abs_error"].mean())
+    rmse = float((eval_df["error"] ** 2).mean() ** 0.5)
+    bias = float(eval_df["error"].mean())
+
+    per_gw = []
+    for gw, gw_df in eval_df.groupby("gw"):
+        if len(gw_df) < 10:
+            continue
+        corr = _spearman_rank_corr(gw_df["pred_xpts"], gw_df["actual"])
+        pred_top = set(gw_df.sort_values("pred_xpts", ascending=False).head(topk)["player_id"].astype(int).tolist())
+        act_top = set(gw_df.sort_values("actual", ascending=False).head(topk)["player_id"].astype(int).tolist())
+        per_gw.append(
+            {
+                "gw": int(gw),
+                "rows": int(len(gw_df)),
+                "spearman": corr,
+                "topk_overlap": int(len(pred_top.intersection(act_top))),
+            }
+        )
+
+    avg_spearman = None
+    if per_gw:
+        vals = [r.get("spearman") for r in per_gw if r.get("spearman") is not None]
+        if vals:
+            avg_spearman = float(sum(vals) / float(len(vals)))
+    avg_topk_overlap = float(sum(r["topk_overlap"] for r in per_gw) / float(len(per_gw))) if per_gw else None
+
+    sample_cols = [c for c in ["player_id", "gw", "pred_xpts", "actual", "error", "abs_error"] if c in eval_df.columns]
+    worst_rows = (
+        eval_df[sample_cols]
+        .sort_values("abs_error", ascending=False)
+        .head(25)
+        .to_dict(orient="records")
+    )
+
+    return {
+        "ok": True,
+        "summary": {
+            "rows_evaluated": int(len(eval_df)),
+            "players_evaluated": int(eval_df["player_id"].nunique()),
+            "gws_evaluated": int(eval_df["gw"].nunique()),
+            "window": int(window),
+            "min_gw": int(min_gw),
+            "topk": int(topk),
+            "mae": mae,
+            "rmse": rmse,
+            "bias": bias,
+            "avg_spearman_per_gw": avg_spearman,
+            "avg_topk_overlap_per_gw": avg_topk_overlap,
+        },
+        "per_gw": per_gw,
+        "worst_errors": worst_rows,
+    }
+
+
+def evaluate_xpts_history_file(path=None, base_dir="data/processed/fpl", window=3, min_gw=2, topk=25):
+    """Load history CSV and run xPts-vs-actual evaluation metrics."""
+    selected_path = path or find_latest_gw_history(base_dir=base_dir)
+    if not selected_path:
+        return {"ok": False, "error": "No player_gw_history CSV found.", "input_path": None}
+
+    try:
+        df = pd.read_csv(selected_path)
+    except Exception as exc:
+        return {"ok": False, "error": f"Could not read CSV: {exc}", "input_path": str(selected_path)}
+
+    out = evaluate_xpts_history(df, window=window, min_gw=min_gw, topk=topk)
+    out["input_path"] = str(selected_path)
     return out

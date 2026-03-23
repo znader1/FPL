@@ -42,6 +42,8 @@ Example calls:
 - `curl "http://127.0.0.1:8001/squad?entry_id=1234567"`
 - `curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=30&horizon_gws=3"`
 - `curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=30&horizon_gws=3&latest_n_matches=3&include_transfers=true&free_transfers=1"`
+- `curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=33&chip_strategy=wildcard&chip_horizon_gws=5"`
+- `curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=33&chip_strategy=free_hit&horizon_gws=1"`
 - `curl "http://127.0.0.1:8001/events/next"`
 
 Notes:
@@ -53,6 +55,9 @@ Notes:
 - `recommendations` transfer engine now builds multiple moves using `free_transfers + horizon_gws` (plus optional hit allowance).
 - Transfer ordering now prioritizes injured/at-risk starters and underperforming premium slots before low-impact bench/GKP churn.
 - `recommendations` now returns `strategy_recommendation` with a structured action (`roll` / `make_transfers` / `use_chip`), confidence, reasons, captain suggestion, transfer summary, chip suggestion, and bench moves.
+- `recommendations` accepts `chip_strategy` (`none`, `wildcard`, `free_hit`) and optional `chip_horizon_gws`.
+- When chip mode is active, response includes `chip_strategy` details (`objective_score_col`, budget, remaining budget) and `squad_source=chip_draft`.
+- `wildcard` draft optimization uses horizon objective (`xpts_horizon`), while `free_hit` uses next-GW objective (`xpts_gw{event_id}`).
 - `recommendations` now returns `squad_with_transfers` so frontend can render the pitch **after** applying suggested moves.
 - `recommendations` now returns `squad_with_transfers_steps` (0..N applied moves) so frontend can switch applied transfers instantly without re-calling API.
 - `recommendations` also returns `transfer_impact`, `transfer_application`, and `timings_ms` for debugging/runtime tracking.
@@ -88,6 +93,11 @@ Transfer tuning map (`src/config.py`):
   - `STRATEGY_MAX_BENCH_MOVES`: max bench actions in strategy block.
 - **Captain ceiling tuning** (used in `src/optimizer.py -> optimize_lineup`):
   - `CAPTAIN_POSITION_MULTIPLIER`, `CAPTAIN_PREMIUM_*`, `CAPTAIN_FORM_CEILING_WEIGHT`, `CAPTAIN_SET_PIECE_PENALTY_WEIGHT`.
+- **Chip draft tuning** (used in `src/optimizer.py -> build_chip_squad`):
+  - `CHIP_WILDCARD_DEFAULT_HORIZON_GWS`: default planning horizon for wildcard.
+  - `CHIP_MAX_PER_TEAM`: per-team cap in wildcard/free-hit draft.
+  - `CHIP_SQUAD_SHAPE`: required 15-man shape.
+  - `CHIP_UPGRADE_MAX_ITERS`: greedy upgrade iterations during draft optimization.
 
 Browser frontend note (CORS):
 - Local dev CORS is enabled for common localhost ports by default (8080/5173/3000).
