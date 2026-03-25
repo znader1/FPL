@@ -1,158 +1,120 @@
-# Fantasy Premier League (FPL) Player Performance Prediction
+# FPL Assistant API (Backend)
 
-This project aims to predict next-gameweek player points in the Fantasy Premier League (FPL) using historical match data (2016–2024), player stats, and match context such as odds and fixture difficulty.
+FastAPI backend for the FPL Assistant product.  
+It powers squad loading, xPts projections, lineup optimization, transfer planning, and chip draft scenarios (`wildcard`, `free_hit`).
 
-## Recommended “Production-Ready” Direction
+## Live Demo Links
 
-Build a **single Python core** (data → features → projections → optimizer), then expose it via:
-- **Streamlit** (fast MVP UI for you)
-- **HTTP API** (later) for a simple website + iOS app
+- Frontend app: `<YOUR_FRONTEND_URL>`
+- Backend base URL: `<YOUR_BACKEND_URL>`
+- Swagger docs: `<YOUR_BACKEND_URL>/docs`
+- Loom walkthrough: `<YOUR_LOOM_URL>`
 
-This repo currently focuses on the Streamlit MVP while keeping the logic in `src/` so it can be reused by a future API server.
+## What This Backend Does
 
-## Project Goals
+- Loads current squad and entry history from official FPL endpoints.
+- Projects player xPts across a configurable horizon.
+- Optimizes starting XI, bench order, captain, and vice-captain.
+- Suggests transfers with multi-move planning and transfer application steps.
+- Builds chip drafts:
+  - `free_hit`: optimize for next GW only.
+  - `wildcard`: optimize for horizon score.
+- Exposes evaluation endpoint for xPts vs actual points quality checks.
 
-- Predict FPL player points for upcoming gameweeks
-- Analyze key features: form streaks, minutes, goals, assists, clean sheets, team performance, and betting odds
-- Build a modeling pipeline for sports analytics and ML explainability
+## Architecture Overview
 
-## Data Sources
+```mermaid
+flowchart LR
+    A["Frontend (Lovable / Vite)"] --> B["FastAPI (api/main.py)"]
+    B --> C["Projection Engine (src/projections.py)"]
+    B --> D["Lineup + Chip Optimizer (src/optimizer.py)"]
+    B --> E["Transfer Recommender (src/recommender.py)"]
+    B --> F["Official FPL API"]
+    B --> G["Processed Data (data/processed/fpl)"]
+```
 
-- FPL historical data (2016–2024): https://github.com/vaastav/Fantasy-Premier-League
-- Archived match odds from Football-Data.co.uk: https://www.football-data.co.uk/englandm.php
-- Official FPL API for current squads
+## Core Endpoints
 
-## Quickstart
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/health` | GET | Health probe |
+| `/events/next` | GET | Next event + deadline summary |
+| `/squad` | GET/POST | Load entry squad for a GW |
+| `/recommendations` | GET/POST | Recommended lineup + transfers + chip strategy output |
+| `/evaluation/xpts` | GET/POST | Evaluate predicted xPts vs actual points history |
+| `/admin/refresh` | POST | Refresh caches and optional snapshot |
 
-From the `FPL/` directory:
+## Local Run
 
-- Install deps: `python3 -m pip install -r requirements.txt`
-- Run the app: `streamlit run fpl_app_v1.py`
+```bash
+cd FPL
+python3 -m pip install -r requirements.txt
+uvicorn api.main:app --reload --port 8001
+```
 
-### FastAPI (for Lovable / web / iOS clients)
+Local URLs:
 
-Run locally:
-- `uvicorn api.main:app --reload --port 8001`
-
-Useful URLs:
-- `http://127.0.0.1:8001/docs` (Swagger UI)
+- `http://127.0.0.1:8001/docs`
 - `http://127.0.0.1:8001/health`
 
-Example calls:
-- `curl "http://127.0.0.1:8001/squad?entry_id=1234567"`
-- `curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=30&horizon_gws=3"`
-- `curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=30&horizon_gws=3&latest_n_matches=3&include_transfers=true&free_transfers=1"`
-- `curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=33&chip_strategy=wildcard&chip_horizon_gws=5"`
-- `curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=33&chip_strategy=free_hit&horizon_gws=1"`
-- `curl "http://127.0.0.1:8001/events/next"`
+## Example Calls
 
-Notes:
-- `event_id` = the GW you want to optimize for (can be future).
-- `squad_event_id` (optional) = which GW to load your saved squad from. If omitted, the API uses `is_current` (or `is_next`).
-- If `squad_event_id` is in the future and not available yet, the API falls back to a valid GW and returns a message in `notes[]`.
-- Each player in `starting_xi` / `bench` includes `fixtures_horizon[]` and `next_fixtures` to show upcoming opponents across the horizon.
-- `recommendations` includes `position_panels` with top candidates per position (`all` and `not_owned`) for your frontend insights panel.
-- `recommendations` transfer engine now builds multiple moves using `free_transfers + horizon_gws` (plus optional hit allowance).
-- Transfer ordering now prioritizes injured/at-risk starters and underperforming premium slots before low-impact bench/GKP churn.
-- `recommendations` now returns `strategy_recommendation` with a structured action (`roll` / `make_transfers` / `use_chip`), confidence, reasons, captain suggestion, transfer summary, chip suggestion, and bench moves.
-- `recommendations` accepts `chip_strategy` (`none`, `wildcard`, `free_hit`) and optional `chip_horizon_gws`.
-- When chip mode is active, response includes `chip_strategy` details (`objective_score_col`, budget, remaining budget) and `squad_source=chip_draft`.
-- `wildcard` draft optimization uses horizon objective (`xpts_horizon`), while `free_hit` uses next-GW objective (`xpts_gw{event_id}`).
-- `recommendations` now returns `squad_with_transfers` so frontend can render the pitch **after** applying suggested moves.
-- `recommendations` now returns `squad_with_transfers_steps` (0..N applied moves) so frontend can switch applied transfers instantly without re-calling API.
-- `recommendations` also returns `transfer_impact`, `transfer_application`, and `timings_ms` for debugging/runtime tracking.
-- Main tuning knobs are centralized in `src/config.py` (projection form window, captain position coefficients, transfer weighting, set-piece weighting).
-- Full parameter-by-parameter config guide: `docs/config_reference.md`.
+```bash
+curl "http://127.0.0.1:8001/squad?entry_id=1234567&event_id=31"
+curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=31&horizon_gws=3&include_transfers=true"
+curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=33&chip_strategy=wildcard&chip_horizon_gws=5"
+curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=33&chip_strategy=free_hit&horizon_gws=1"
+curl "http://127.0.0.1:8001/evaluation/xpts?window=3&min_gw=2&topk=25"
+```
 
-Transfer tuning map (`src/config.py`):
-- **Core transfer score** (used in `src/recommender.py -> build_transfer_scores`):
-  - `TRANSFER_BASE_PPG_WEIGHT`, `TRANSFER_BASE_FORM_WEIGHT`: base quality score.
-  - `TRANSFER_CONSISTENCY_*`: season stability + minutes reliability.
-  - `TRANSFER_HOT_*`: short-term momentum/hotness.
-  - `TRANSFER_SET_PIECE_WEIGHTS`: penalties/FK/corners bonus.
-  - `TRANSFER_SET_PIECE_PRIMARY_BONUS`: extra certainty for primary takers.
-  - `TRANSFER_ATTACK_BONUS`: position upside bonus.
-- **Sell-side prioritization** (used in `src/recommender.py -> suggest_transfers`):
-  - `TRANSFER_SELL_STARTER_BOOST`: protect nailed starters from being sold.
-  - `TRANSFER_SELL_BENCH_PENALTY`, `TRANSFER_SELL_GKP_PENALTY`: de-prioritize low-impact churn.
-  - `TRANSFER_SELL_PREMIUM_*`: prioritize replacing weak premium slots.
-  - `TRANSFER_SELL_INJURY_BOOST`: aggressively sell injury/absence risk.
-- **Buy-side prioritization** (used in `src/recommender.py -> suggest_transfers`):
-  - `TRANSFER_BUY_PREMIUM_*`: favor high-upside MID/FWD upgrades.
-  - `TRANSFER_BUY_OWNERSHIP_BONUS`: add signal from strong market consensus.
-  - `TRANSFER_BUY_AVAILABILITY_WEIGHT`: penalize doubtful buys.
-- **Move control** (used in `src/recommender.py -> suggest_transfers`):
-  - `TRANSFER_MIN_SCORE_GAIN`: minimum gain required to execute a move.
-  - `TRANSFER_MIN_SCORE_GAIN_BENCH`, `TRANSFER_MIN_SCORE_GAIN_GKP`: guardrails for low-impact churn.
-  - `TRANSFER_GUARDRAIL_INJURY_OVERRIDE`: bypass guardrails for clear injury risk.
-  - `TRANSFER_HIT_POINTS_STEP`, `TRANSFER_MAX_MOVES`, `TRANSFER_DEFAULT_HOT_TOPN`.
-  - `TRANSFER_BEAM_*`: 2-step beam-lookahead search controls.
-- **Strategy output thresholds** (used in `api/main.py -> _build_strategy_recommendation`):
-  - `STRATEGY_MIN_GAIN_PER_TRANSFER_GW1`, `STRATEGY_MIN_GAIN_PER_TRANSFER_MULTI`: roll vs transfer.
-  - `STRATEGY_CHIP_BENCH_BOOST_MIN_XPTS`, `STRATEGY_CHIP_TRIPLE_CAPTAIN_MIN_XPTS`: chip triggers.
-  - `STRATEGY_MAX_BENCH_MOVES`: max bench actions in strategy block.
-- **Captain ceiling tuning** (used in `src/optimizer.py -> optimize_lineup`):
-  - `CAPTAIN_POSITION_MULTIPLIER`, `CAPTAIN_PREMIUM_*`, `CAPTAIN_FORM_CEILING_WEIGHT`, `CAPTAIN_SET_PIECE_PENALTY_WEIGHT`.
-- **Chip draft tuning** (used in `src/optimizer.py -> build_chip_squad`):
-  - `CHIP_WILDCARD_DEFAULT_HORIZON_GWS`: default planning horizon for wildcard.
-  - `CHIP_MAX_PER_TEAM`: per-team cap in wildcard/free-hit draft.
-  - `CHIP_SQUAD_SHAPE`: required 15-man shape.
-  - `CHIP_UPGRADE_MAX_ITERS`: greedy upgrade iterations during draft optimization.
+## Key Response Fields
 
-Browser frontend note (CORS):
-- Local dev CORS is enabled for common localhost ports by default (8080/5173/3000).
-- For production, set `FPL_API_CORS_ORIGINS` to your real frontend domain(s).
+From `/recommendations`:
 
-If you deploy publicly, set `FPL_API_KEY` and pass it from your frontend as:
-- Header `X-API-Key: <FPL_API_KEY>` (or `Authorization: Bearer <FPL_API_KEY>`)
+- `starting_xi`, `bench`, `formation`, `captain_player_id`, `vice_player_id`
+- `projected_points_with_captain`
+- `transfers` (moves, hot targets, plan metadata)
+- `squad_with_transfers_steps` (instant apply step 0..N for frontend)
+- `chip_strategy` (selected chip mode, objective, budget, remaining budget)
+- `strategy_recommendation` (roll / transfer / chip action block)
+- `timings_ms` (latency instrumentation per stage)
 
-Admin refresh endpoint:
-- `POST /admin/refresh` (requires `FPL_ADMIN_KEY` or `FPL_API_KEY`)
-- Use this for scheduled cache warmup + snapshot refresh.
+## Environment Variables
 
-### Production (always-on backend)
+| Variable | Description |
+|---|---|
+| `FPL_API_KEY` | Optional API key required for public access |
+| `FPL_ADMIN_KEY` | Admin key for `/admin/refresh` |
+| `FPL_API_CORS_ORIGINS` | Comma-separated allowed frontend origins |
+| `FPL_ENTRY_ID` | Default entry ID fallback |
+| `FPL_SNAPSHOT_OUT_BASE` | Output path for refresh snapshots |
 
-- Docker image is provided via `Dockerfile`.
-- Deploy backend on Azure App Service (Web App for Containers) or Azure Container Apps.
-- Use GitHub Actions:
-  - `.github/workflows/api-ci.yml` for CI checks.
-  - `.github/workflows/deploy-azure-containerapp.yml` for build + deploy to Azure Container Apps.
-  - `.github/workflows/refresh-backend.yml` to trigger `/admin/refresh` every 6 hours.
-- For Azure setup and CI/CD steps, see `docs/production_azure.md`.
+## Data + Evaluation
 
-### Scrape 2025–26 match history (FPL-only)
+- Refresh season history dataset:
+  - `python3 -m src.season_history --resume`
+- Baseline backtest script:
+  - `python scripts/backtest_baseline.py`
+- API evaluation endpoint:
+  - `/evaluation/xpts` returns MAE, RMSE, bias, rank correlation, top-k overlap.
 
-This builds a **player × fixture** dataset for the current season using `/api/element-summary/{id}/`:
+## Deployment
 
-- `python3 -m src.season_history --resume`
-
-Outputs:
-- Raw JSON snapshots: `data/raw/fpl/<season>/`
-- Aggregated tables:
-  - `data/processed/fpl/<season>/player_match_history_<season>.csv` (player × fixture)
-  - `data/processed/fpl/<season>/player_gw_history_<season>.csv` (player × gameweek, handles doubles)
-
-### Quick baseline backtest (sanity check)
-
-After scraping, run:
-- `python scripts/backtest_baseline.py`
-
-## Main Features
-
-- Rolling averages and player form by position
-- Match context: home/away, opponent, team odds
-- Set-piece taker flags (penalty, corner, free kick)
+- Dockerized backend (`Dockerfile`).
+- Azure Container Apps workflows in `.github/workflows/`.
+- Scheduled refresh workflow can call `/admin/refresh`.
+- Production details: `docs/production_azure.md`.
 
 ## Repo Structure
 
+- `api/main.py` — API routes and orchestration
+- `src/projections.py` — xPts projection pipeline
+- `src/optimizer.py` — lineup and chip draft optimization
+- `src/recommender.py` — transfer planning logic
+- `src/config.py` — model and strategy tuning parameters
+- `scripts/` — refresh/backtest/util scripts
 
-## Next Steps
+## Related Repos
 
-- Train a baseline xPts model on the scraped current-season dataset (minutes + points model)
-- Add 3-GW horizon transfer planning (hits, roll/hold logic)
-- Add external sources (injuries, xG providers, coach changes) as a second stage
-- Deploy as an API for web/iOS clients
+- Frontend: `<YOUR_FRONTEND_REPO_URL>`
 
----
-
-Project by [Your Name]. Contributions and feedback welcome!
