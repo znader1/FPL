@@ -381,15 +381,121 @@ def _estimate_squad_budget_m(squad_df, elements, itb_m=0.0):
     return float(round(max(0.0, budget), 2))
 
 
-def _build_position_panels(proj_all, gws, teams_code, owned_ids=None, limit_per_pos=5):
+def _chip_objective_components(chip_strategy):
+    """Return a short list of scoring components for each chip mode."""
+    chip_strategy = _normalize_chip_strategy(chip_strategy)
+    if chip_strategy == "wildcard":
+        return [
+            "weighted next-fixture xPts",
+            "future double-gameweek bonus",
+            "premium captaincy bonus",
+        ]
+    if chip_strategy == "free_hit":
+        return [
+            "current gameweek xPts",
+            "immediate doubles and blanks only",
+        ]
+    return []
+
+
+def _build_chip_profile(chip_strategy, squad_df, proj_all, gws):
+    """Summarize what the active chip build is trying to do."""
+    chip_strategy = _normalize_chip_strategy(chip_strategy)
+    if chip_strategy == "none" or squad_df is None or squad_df.empty or proj_all is None or proj_all.empty:
+        return None
+
+    if "player_id" not in squad_df.columns or "id" not in proj_all.columns:
+        return None
+
+    join_cols = ["id", "pos", "price_m"]
+    for extra in ["wildcard_score", "wildcard_weighted_xpts", "wildcard_future_dgw_bonus", "wildcard_captaincy_bonus"]:
+        if extra in proj_all.columns:
+            join_cols.append(extra)
+    for gw in gws:
+        for col in [f"fixture_count_gw{gw}", f"xpts_gw{gw}"]:
+            if col in proj_all.columns:
+                join_cols.append(col)
+
+    sq = squad_df.copy()
+    sq["player_id"] = pd.to_numeric(sq.get("player_id"), errors="coerce")
+    sq = sq[sq["player_id"].notna()].copy()
+    if sq.empty:
+        return None
+    sq["player_id"] = sq["player_id"].astype(int)
+
+    merged = sq.merge(
+        proj_all[list(dict.fromkeys(join_cols))].rename(columns={"id": "player_id"}),
+        on="player_id",
+        how="left",
+    )
+    if merged.empty:
+        return None
+
+    if chip_strategy == "free_hit":
+        current_gw = int(gws[0]) if gws else None
+        double_count = 0
+        if current_gw is not None and f"fixture_count_gw{current_gw}" in merged.columns:
+            double_count = int((pd.to_numeric(merged[f"fixture_count_gw{current_gw}"], errors="coerce").fillna(0.0) > 1).sum())
+        return {
+            "summary": "Free Hit is treated as a one-week attack: maximize the current gameweek score and ignore longer-term setup.",
+            "focus": ["current gameweek", "immediate doubles", "short-term ceiling"],
+            "current_double_players": int(double_count),
+        }
+
+    premium_floor = float(
+        getattr(
+            config,
+            "CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR",
+            getattr(config, "CAPTAIN_PREMIUM_PRICE_FLOOR", 9.0),
+        )
+        or getattr(config, "CAPTAIN_PREMIUM_PRICE_FLOOR", 9.0)
+    )
+    attackers = merged["pos"].astype(str).isin(["MID", "FWD"])
+    premium_attackers = int((attackers & (pd.to_numeric(merged.get("price_m"), errors="coerce").fillna(0.0) >= premium_floor)).sum())
+
+    future_double_gameweeks = []
+    future_double_players = pd.Series(False, index=merged.index)
+    for gw in list(gws)[1:]:
+        fixture_col = f"fixture_count_gw{gw}"
+        if fixture_col not in merged.columns:
+            continue
+        fixture_count = pd.to_numeric(merged[fixture_col], errors="coerce").fillna(0.0)
+        doubled = fixture_count > 1.0
+        if int(doubled.sum()) > 0:
+            future_double_gameweeks.append(
+                {
+                    "event_id": int(gw),
+                    "player_count": int(doubled.sum()),
+                }
+            )
+        future_double_players = future_double_players | doubled
+
+    return {
+        "summary": (
+            "Wildcard is being developed as a setup chip: it looks across the next fixtures, "
+            "keeps captaincy-grade premiums in play, and boosts later doubles inside the planning horizon so the squad can move toward a bench boost."
+        ),
+        "focus": ["next fixtures", "future double gameweeks", "captaincy premiums", "bench boost setup"],
+        "premium_attackers": int(premium_attackers),
+        "future_double_gameweeks": future_double_gameweeks,
+        "future_double_players": int(future_double_players.sum()),
+    }
+
+
+def _build_position_panels(proj_all, gws, teams_code, owned_ids=None, limit_per_pos=5, ranking_col="xpts_horizon"):
     """Build per-position top-player panels for all and not-owned pools."""
     if proj_all is None or proj_all.empty:
         return {"all": {}, "not_owned": {}}
 
     owned_ids = set([int(x) for x in (owned_ids or []) if _safe_int(x) is not None])
     limit_per_pos = max(1, int(limit_per_pos))
+    ranking_col = str(ranking_col or "xpts_horizon")
+    if ranking_col not in proj_all.columns:
+        ranking_col = "xpts_horizon" if "xpts_horizon" in proj_all.columns else ranking_col
 
     base_cols = ["id", "web_name", "pos", "team", "team_short", "team_name", "price_m", "code", "photo", "xpts_horizon"]
+    if ranking_col not in base_cols and ranking_col in proj_all.columns:
+        base_cols.append(ranking_col)
     gw_cols = []
     for gw in gws:
         for c in [f"xpts_gw{gw}", f"fixtures_gw{gw}", f"fixture_count_gw{gw}", f"diff_avg_gw{gw}"]:
@@ -398,7 +504,7 @@ def _build_position_panels(proj_all, gws, teams_code, owned_ids=None, limit_per_
     keep_cols = [c for c in base_cols + gw_cols if c in proj_all.columns]
 
     pool = proj_all[keep_cols].copy().rename(columns={"id": "player_id"})
-    pool = pool.sort_values("xpts_horizon", ascending=False)
+    pool = pool.sort_values(ranking_col, ascending=False)
 
     def pack(df):
         out = {"GKP": [], "DEF": [], "MID": [], "FWD": []}
@@ -1130,6 +1236,12 @@ def build_recommendations(payload):
             horizon_gws=horizon_gws,
             latest_n_matches=latest_n_matches,
         )
+        if chip_strategy == "wildcard":
+            proj_all = projections.add_wildcard_scores(
+                projections_df=proj_all,
+                gw_start=optimize_event_id,
+                horizon_gws=horizon_gws,
+            )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Projection failed: {e}")
     timings["projections_ms"] = _elapsed_ms(ts)
@@ -1145,11 +1257,14 @@ def build_recommendations(payload):
         "squad_cost_m": None,
         "remaining_budget_m": None,
         "objective_score_total": None,
+        "objective_components": _chip_objective_components(chip_strategy),
+        "explanation": None,
+        "profile": None,
         "reason": "No chip strategy applied.",
     }
 
     if chip_strategy in ("wildcard", "free_hit"):
-        chip_objective_col = "xpts_horizon" if chip_strategy == "wildcard" else score_col
+        chip_objective_col = "wildcard_score" if chip_strategy == "wildcard" else score_col
         chip_objective_horizon = int(horizon_gws) if chip_strategy == "wildcard" else 1
         ts = time.perf_counter()
         budget_m = _estimate_squad_budget_m(
@@ -1176,6 +1291,9 @@ def build_recommendations(payload):
                 "squad_cost_m": chip_build.get("squad_cost_m"),
                 "remaining_budget_m": chip_build.get("remaining_budget_m"),
                 "objective_score_total": chip_build.get("objective_score_total"),
+                "objective_components": _chip_objective_components(chip_strategy),
+                "explanation": None,
+                "profile": None,
                 "reason": chip_build.get("reason"),
             }
             notes.append(
@@ -1193,6 +1311,9 @@ def build_recommendations(payload):
                 "squad_cost_m": None,
                 "remaining_budget_m": None,
                 "objective_score_total": None,
+                "objective_components": _chip_objective_components(chip_strategy),
+                "explanation": None,
+                "profile": None,
                 "reason": chip_build.get("reason"),
             }
 
@@ -1227,8 +1348,19 @@ def build_recommendations(payload):
         teams_code=teams_code,
         owned_ids=owned_ids,
         limit_per_pos=panel_limit,
+        ranking_col=chip_info.get("objective_score_col") if chip_info.get("is_active") else "xpts_horizon",
     )
     timings["position_panels_ms"] = _elapsed_ms(ts)
+
+    if chip_info.get("is_active"):
+        chip_profile = _build_chip_profile(
+            chip_strategy=chip_strategy,
+            squad_df=lineup_squad_df,
+            proj_all=proj_all,
+            gws=gws,
+        )
+        chip_info["profile"] = chip_profile
+        chip_info["explanation"] = chip_profile.get("summary") if isinstance(chip_profile, dict) else None
 
     out = {
         "entry_id": int(entry_id),

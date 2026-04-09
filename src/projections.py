@@ -41,6 +41,28 @@ def difficulty_multiplier(diff_avg):
     return float(DIFFICULTY_MULTIPLIER.get(d, 1.0))
 
 
+def _numeric_series(df, col, default=0.0):
+    """Return a numeric Series for a column, or a constant default when missing."""
+    if col not in df.columns:
+        return pd.Series(float(default), index=df.index, dtype="float64")
+    return pd.to_numeric(df[col], errors="coerce").fillna(float(default))
+
+
+def _weight_list(raw_weights, length, fallback=1.0):
+    """Pad/truncate configured weights to the requested horizon length."""
+    weights = []
+    for value in list(raw_weights or []):
+        try:
+            weights.append(float(value))
+        except Exception:
+            continue
+    if not weights:
+        weights = [float(fallback)]
+    if len(weights) < int(length):
+        weights.extend([weights[-1]] * (int(length) - len(weights)))
+    return weights[: int(length)]
+
+
 def baseline_points_per_gw(
     elements,
     ppg_weight=config.PROJ_DEFAULT_PPG_WEIGHT,
@@ -306,6 +328,88 @@ def project_elements_next_gws(
 
     out = df[[c for c in keep if c in df.columns]].copy()
     out = out.sort_values("xpts_horizon", ascending=False)
+    return out
+
+
+def add_wildcard_scores(projections_df, gw_start, horizon_gws):
+    """
+    Add a dedicated wildcard score that favors:
+      - strong next-fixture runs,
+      - future double gameweeks within the horizon,
+      - premium captaincy-ready attackers.
+    """
+    if projections_df is None or projections_df.empty:
+        return projections_df
+
+    gw_start = int(gw_start)
+    horizon_gws = max(1, int(horizon_gws or 1))
+    out = projections_df.copy()
+
+    weights = _weight_list(
+        getattr(config, "CHIP_WILDCARD_GW_WEIGHTS", []),
+        length=horizon_gws,
+        fallback=1.0,
+    )
+    dgw_bonus_per_extra_fixture = float(getattr(config, "CHIP_WILDCARD_DGW_BONUS_PER_EXTRA_FIXTURE", 1.25) or 1.25)
+    dgw_xpts_weight = float(getattr(config, "CHIP_WILDCARD_DGW_XPTS_WEIGHT", 0.12) or 0.12)
+    late_dgw_weight_step = float(getattr(config, "CHIP_WILDCARD_LATE_DGW_WEIGHT_STEP", 0.08) or 0.08)
+
+    weighted_xpts = pd.Series(0.0, index=out.index, dtype="float64")
+    future_dgw_bonus = pd.Series(0.0, index=out.index, dtype="float64")
+    future_extra_fixtures = pd.Series(0.0, index=out.index, dtype="float64")
+
+    for idx in range(horizon_gws):
+        gw = int(gw_start) + idx
+        xpts = _numeric_series(out, f"xpts_gw{gw}", default=0.0)
+        fixture_count = _numeric_series(out, f"fixture_count_gw{gw}", default=0.0)
+        extra_fixtures = (fixture_count - 1.0).clip(lower=0.0)
+        weighted_xpts = weighted_xpts + (xpts * float(weights[idx]))
+
+        late_weight = 1.0 + float(idx) * late_dgw_weight_step
+        future_dgw_bonus = future_dgw_bonus + (
+            extra_fixtures * late_weight * (dgw_bonus_per_extra_fixture + (xpts * dgw_xpts_weight))
+        )
+        future_extra_fixtures = future_extra_fixtures + extra_fixtures
+
+    price_m = _numeric_series(out, "price_m", default=0.0)
+    form = _numeric_series(out, "form", default=0.0).clip(lower=0.0)
+    penalties_order = _numeric_series(out, "penalties_order", default=99.0)
+    next_xpts = _numeric_series(out, f"xpts_gw{gw_start}", default=0.0)
+
+    pos = out.get("pos", pd.Series("", index=out.index)).astype(str)
+    is_attacker = pos.isin(["MID", "FWD"]).astype(float)
+    pos_mult = pos.map(config.CAPTAIN_POSITION_MULTIPLIER).fillna(1.0).astype(float)
+
+    premium_floor = float(
+        getattr(
+            config,
+            "CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR",
+            getattr(config, "CAPTAIN_PREMIUM_PRICE_FLOOR", 9.0),
+        )
+        or getattr(config, "CAPTAIN_PREMIUM_PRICE_FLOOR", 9.0)
+    )
+    premium_base_bonus = float(getattr(config, "CHIP_WILDCARD_PREMIUM_ATTACKER_BASE_BONUS", 0.8) or 0.8)
+    captaincy_weight = float(getattr(config, "CHIP_WILDCARD_CAPTAINCY_WEIGHT", 0.32) or 0.32)
+
+    captain_signal = (
+        next_xpts * pos_mult
+        + ((price_m - premium_floor).clip(lower=0.0) * float(getattr(config, "CAPTAIN_PREMIUM_PRICE_BONUS_PER_M", 0.1)) * is_attacker)
+        + (form * float(getattr(config, "CAPTAIN_FORM_CEILING_WEIGHT", 0.04)) * is_attacker)
+        + (
+            (penalties_order == 1.0).astype(float)
+            * float(getattr(config, "CAPTAIN_SET_PIECE_PENALTY_WEIGHT", 0.55))
+            * is_attacker
+        )
+    )
+    is_premium_attacker = ((price_m >= premium_floor).astype(float) * is_attacker).astype(float)
+    captaincy_bonus = is_premium_attacker * (premium_base_bonus + (captain_signal * captaincy_weight))
+
+    out["wildcard_weighted_xpts"] = weighted_xpts.round(3)
+    out["wildcard_future_dgw_bonus"] = future_dgw_bonus.round(3)
+    out["wildcard_captaincy_bonus"] = captaincy_bonus.round(3)
+    out["wildcard_extra_fixtures"] = future_extra_fixtures.astype(int)
+    out["wildcard_score"] = (weighted_xpts + future_dgw_bonus + captaincy_bonus).round(3)
+    out = out.sort_values(["wildcard_score", "xpts_horizon"], ascending=[False, False]).reset_index(drop=True)
     return out
 
 

@@ -135,7 +135,23 @@ This file explains every parameter in `src/config.py`, what it controls, and whe
 | `STRATEGY_CHIP_TRIPLE_CAPTAIN_MIN_XPTS` | Captain xPts trigger for `triple_captain` suggestion. | `api/main.py` (`_build_strategy_recommendation`). |
 | `STRATEGY_MAX_BENCH_MOVES` | Maximum bench swaps returned in strategy block. | `api/main.py` (`_build_bench_moves`). |
 
-## 8) If you want to switch to ML tuning later
+## 8) Chip draft tuning
+
+| Parameter | What it controls | Logic lives in |
+|---|---|---|
+| `CHIP_WILDCARD_DEFAULT_HORIZON_GWS` | Default wildcard planning horizon when the request does not provide one. | `api/main.py` (`build_recommendations`). |
+| `CHIP_MAX_PER_TEAM` | Max players allowed per real-life team in chip drafts. | `src/optimizer.py` (`build_chip_squad`). |
+| `CHIP_SQUAD_SHAPE` | Required 15-man squad structure for chip drafts. | `src/optimizer.py` (`_chip_shape`, `build_chip_squad`). |
+| `CHIP_UPGRADE_MAX_ITERS` | Maximum greedy upgrade passes when building a chip draft. | `src/optimizer.py` (`build_chip_squad`). |
+| `CHIP_WILDCARD_GW_WEIGHTS` | Weights used to emphasize the next fixtures inside the wildcard score. | `src/projections.py` (`add_wildcard_scores`). |
+| `CHIP_WILDCARD_DGW_BONUS_PER_EXTRA_FIXTURE` | Base bonus for each extra fixture in a wildcard horizon double-GW. | `src/projections.py` (`add_wildcard_scores`). |
+| `CHIP_WILDCARD_DGW_XPTS_WEIGHT` | Extra wildcard bonus tied to the xPts of double-GW weeks. | `src/projections.py` (`add_wildcard_scores`). |
+| `CHIP_WILDCARD_LATE_DGW_WEIGHT_STEP` | Additional emphasis on doubles that arrive later in the wildcard horizon. | `src/projections.py` (`add_wildcard_scores`). |
+| `CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR` | Price threshold that defines a premium MID/FWD for wildcard captaincy coverage. | `src/projections.py` (`add_wildcard_scores`). |
+| `CHIP_WILDCARD_PREMIUM_ATTACKER_BASE_BONUS` | Flat wildcard bonus for premium captaincy-ready attackers. | `src/projections.py` (`add_wildcard_scores`). |
+| `CHIP_WILDCARD_CAPTAINCY_WEIGHT` | How strongly captaincy upside affects the wildcard score. | `src/projections.py` (`add_wildcard_scores`). |
+
+## 9) If you want to switch to ML tuning later
 
 - Keep `src/config.py` as your **fallback rules** even when ML is added.
 - Add a model output column (for example `xpts_model`) in `src/projections.py`.

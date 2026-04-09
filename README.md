@@ -18,7 +18,7 @@ It powers squad loading, xPts projections, lineup optimization, transfer plannin
 - Suggests transfers with multi-move planning and transfer application steps.
 - Builds chip drafts:
   - `free_hit`: optimize for next GW only.
-  - `wildcard`: optimize for horizon score.
+  - `wildcard`: optimize for a setup score that blends next-fixture xPts, future double-GW upside, and premium captaincy coverage.
 - Exposes evaluation endpoint for xPts vs actual points quality checks.
 
 ## Architecture Overview
@@ -75,7 +75,7 @@ From `/recommendations`:
 - `projected_points_with_captain`
 - `transfers` (moves, hot targets, plan metadata)
 - `squad_with_transfers_steps` (instant apply step 0..N for frontend)
-- `chip_strategy` (selected chip mode, objective, budget, remaining budget)
+- `chip_strategy` (selected chip mode, objective, budget, remaining budget, explanation/profile)
 - `strategy_recommendation` (roll / transfer / chip action block)
 - `timings_ms` (latency instrumentation per stage)
 
@@ -117,4 +117,3 @@ From `/recommendations`:
 ## Related Repos
 
 - Frontend: `<YOUR_FRONTEND_REPO_URL>`
-
