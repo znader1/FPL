@@ -407,6 +407,12 @@ def _build_chip_profile(chip_strategy, squad_df, proj_all, gws):
     if "player_id" not in squad_df.columns or "id" not in proj_all.columns:
         return None
 
+    def merged_series(df, col, default=None):
+        for cand in [col, f"{col}_x", f"{col}_y"]:
+            if cand in df.columns:
+                return df[cand]
+        return pd.Series(default, index=df.index)
+
     join_cols = ["id", "pos", "price_m"]
     for extra in ["wildcard_score", "wildcard_weighted_xpts", "wildcard_future_dgw_bonus", "wildcard_captaincy_bonus"]:
         if extra in proj_all.columns:
@@ -450,8 +456,10 @@ def _build_chip_profile(chip_strategy, squad_df, proj_all, gws):
         )
         or getattr(config, "CAPTAIN_PREMIUM_PRICE_FLOOR", 9.0)
     )
-    attackers = merged["pos"].astype(str).isin(["MID", "FWD"])
-    premium_attackers = int((attackers & (pd.to_numeric(merged.get("price_m"), errors="coerce").fillna(0.0) >= premium_floor)).sum())
+    pos_series = merged_series(merged, "pos", default="")
+    price_series = pd.to_numeric(merged_series(merged, "price_m", default=0.0), errors="coerce").fillna(0.0)
+    attackers = pos_series.astype(str).isin(["MID", "FWD"])
+    premium_attackers = int((attackers & (price_series >= premium_floor)).sum())
 
     future_double_gameweeks = []
     future_double_players = pd.Series(False, index=merged.index)
