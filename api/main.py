@@ -414,7 +414,14 @@ def _build_chip_profile(chip_strategy, squad_df, proj_all, gws):
         return pd.Series(default, index=df.index)
 
     join_cols = ["id", "pos", "price_m"]
-    for extra in ["wildcard_score", "wildcard_weighted_xpts", "wildcard_future_dgw_bonus", "wildcard_captaincy_bonus"]:
+    for extra in [
+        "wildcard_score",
+        "wildcard_weighted_xpts",
+        "wildcard_future_dgw_bonus",
+        "wildcard_captaincy_bonus",
+        "wildcard_form_bonus",
+        "wildcard_ownership_bonus",
+    ]:
         if extra in proj_all.columns:
             join_cols.append(extra)
     for gw in gws:
@@ -481,9 +488,9 @@ def _build_chip_profile(chip_strategy, squad_df, proj_all, gws):
     return {
         "summary": (
             "Wildcard is being developed as a setup chip: it looks across the next fixtures, "
-            "keeps captaincy-grade premiums in play, and boosts later doubles inside the planning horizon so the squad can move toward a bench boost."
+            "keeps captaincy-grade premiums in play, leans toward in-form picks, and boosts later doubles inside the planning horizon so the squad can move toward a bench boost."
         ),
-        "focus": ["next fixtures", "future double gameweeks", "captaincy premiums", "bench boost setup"],
+        "focus": ["next fixtures", "future double gameweeks", "captaincy premiums", "recent form", "bench boost setup"],
         "premium_attackers": int(premium_attackers),
         "future_double_gameweeks": future_double_gameweeks,
         "future_double_players": int(future_double_players.sum()),
@@ -595,7 +602,7 @@ def _build_score_breakdown(record, chip_strategy="none", objective_score_col=Non
 
     if chip_strategy == "wildcard" or record.get("wildcard_score") is not None:
         breakdown["objective_explanation"] = (
-            "Wildcard score is a planning score: weighted future xPts plus bonuses for future doubles and premium captaincy coverage. "
+            "Wildcard score is a planning score: weighted future xPts plus bonuses for future doubles, recent form, ownership confidence, and premium captaincy coverage. "
             "The underlying xPts baseline blends long-term FPL data with recent player gameweek averages when available."
         )
         breakdown["wildcard"] = {
@@ -608,6 +615,12 @@ def _build_score_breakdown(record, chip_strategy="none", objective_score_col=Non
             else None,
             "captaincy_bonus": _round_float(record.get("wildcard_captaincy_bonus"), 3, 0.0)
             if record.get("wildcard_captaincy_bonus") is not None
+            else None,
+            "form_bonus": _round_float(record.get("wildcard_form_bonus"), 3, 0.0)
+            if record.get("wildcard_form_bonus") is not None
+            else None,
+            "ownership_bonus": _round_float(record.get("wildcard_ownership_bonus"), 3, 0.0)
+            if record.get("wildcard_ownership_bonus") is not None
             else None,
         }
     else:
@@ -686,6 +699,8 @@ def _build_position_panels(
         "wildcard_weighted_xpts",
         "wildcard_future_dgw_bonus",
         "wildcard_captaincy_bonus",
+        "wildcard_form_bonus",
+        "wildcard_ownership_bonus",
         "baseline_long_term_xpts",
         "baseline_recent_gw_xpts",
         "baseline_blended_xpts",
@@ -751,6 +766,8 @@ def _lineup_projection_cols(proj_all, gws):
         "wildcard_weighted_xpts",
         "wildcard_future_dgw_bonus",
         "wildcard_captaincy_bonus",
+        "wildcard_form_bonus",
+        "wildcard_ownership_bonus",
         "baseline_long_term_xpts",
         "baseline_recent_gw_xpts",
         "baseline_blended_xpts",
@@ -1232,7 +1249,7 @@ def _build_scoring_guide(optimize_event_id, chip_strategy="none", objective_scor
     guide["bullets"].append("`xpts_horizon` is the sum of projected xPts across the selected planning window.")
     if chip_strategy == "wildcard":
         guide["bullets"].append(
-            "`wildcard_score` is a planning score for squad building: weighted future xPts plus bonuses for future doubles and premium captaincy cover."
+            "`wildcard_score` is a planning score for squad building: weighted future xPts plus bonuses for doubles, form, and premium captaincy cover."
         )
     else:
         guide["bullets"].append("Lineup selection still uses the selected gameweek xPts for the XI, captain, and bench order.")
@@ -1689,11 +1706,30 @@ def build_recommendations(payload):
             elements=elements,
             itb_m=_safe_float(itb_m, default=0.0) or 0.0,
         )
+        premium_floor = float(
+            getattr(
+                config,
+                "CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR",
+                getattr(config, "CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR", 9.0),
+            )
+            or getattr(config, "CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR", 9.0)
+        )
+        premium_positions = list(
+            getattr(config, "CHIP_WILDCARD_PREMIUM_CAPTAIN_POSITIONS", ["MID", "FWD"]) or ["MID", "FWD"]
+        )
+        min_premium_attackers = (
+            int(getattr(config, "CHIP_WILDCARD_MIN_PREMIUM_CAPTAINS", 1) or 0)
+            if chip_strategy == "wildcard"
+            else 0
+        )
         chip_build = optimizer.build_chip_squad(
             elements_all=proj_all,
             score_col=chip_objective_col,
             budget_m=budget_m,
             max_per_team=int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3),
+            min_premium_attackers=min_premium_attackers,
+            premium_floor=premium_floor,
+            premium_positions=premium_positions,
         )
         timings["chip_draft_ms"] = _elapsed_ms(ts)
 

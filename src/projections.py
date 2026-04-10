@@ -512,6 +512,9 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws):
     dgw_bonus_per_extra_fixture = float(getattr(config, "CHIP_WILDCARD_DGW_BONUS_PER_EXTRA_FIXTURE", 1.25) or 1.25)
     dgw_xpts_weight = float(getattr(config, "CHIP_WILDCARD_DGW_XPTS_WEIGHT", 0.12) or 0.12)
     late_dgw_weight_step = float(getattr(config, "CHIP_WILDCARD_LATE_DGW_WEIGHT_STEP", 0.08) or 0.08)
+    short_horizon_dgw_multiplier = float(
+        getattr(config, "CHIP_WILDCARD_SHORT_HORIZON_DGW_MULTIPLIER", 1.4) or 1.4
+    )
 
     weighted_xpts = pd.Series(0.0, index=out.index, dtype="float64")
     future_dgw_bonus = pd.Series(0.0, index=out.index, dtype="float64")
@@ -525,6 +528,8 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws):
         weighted_xpts = weighted_xpts + (xpts * float(weights[idx]))
 
         late_weight = 1.0 + float(idx) * late_dgw_weight_step
+        if horizon_gws <= 2:
+            late_weight = late_weight * short_horizon_dgw_multiplier
         future_dgw_bonus = future_dgw_bonus + (
             extra_fixtures * late_weight * (dgw_bonus_per_extra_fixture + (xpts * dgw_xpts_weight))
         )
@@ -532,8 +537,11 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws):
 
     price_m = _numeric_series(out, "price_m", default=0.0)
     form = _numeric_series(out, "form", default=0.0).clip(lower=0.0)
+    recent_avg_points = _numeric_series(out, "recent_gw_avg_points", default=0.0).clip(lower=0.0)
+    recent_samples = _numeric_series(out, "recent_gw_samples", default=0.0)
     penalties_order = _numeric_series(out, "penalties_order", default=99.0)
     next_xpts = _numeric_series(out, f"xpts_gw{gw_start}", default=0.0)
+    selected_by_percent = _numeric_series(out, "selected_by_percent", default=0.0).clip(lower=0.0)
 
     pos = out.get("pos", pd.Series("", index=out.index)).astype(str)
     is_attacker = pos.isin(["MID", "FWD"]).astype(float)
@@ -549,6 +557,9 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws):
     )
     premium_base_bonus = float(getattr(config, "CHIP_WILDCARD_PREMIUM_ATTACKER_BASE_BONUS", 0.8) or 0.8)
     captaincy_weight = float(getattr(config, "CHIP_WILDCARD_CAPTAINCY_WEIGHT", 0.32) or 0.32)
+    form_bonus_weight = float(getattr(config, "CHIP_WILDCARD_FORM_BONUS_WEIGHT", 0.12) or 0.12)
+    ownership_bonus_weight = float(getattr(config, "CHIP_WILDCARD_OWNERSHIP_BONUS_WEIGHT", 0.55) or 0.55)
+    ownership_bonus_scale = float(getattr(config, "CHIP_WILDCARD_OWNERSHIP_BONUS_SCALE", 40.0) or 40.0)
 
     captain_signal = (
         next_xpts * pos_mult
@@ -562,12 +573,21 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws):
     )
     is_premium_attacker = ((price_m >= premium_floor).astype(float) * is_attacker).astype(float)
     captaincy_bonus = is_premium_attacker * (premium_base_bonus + (captain_signal * captaincy_weight))
+    recent_signal = ((form * 0.55) + (recent_avg_points * 0.45)).where(recent_samples >= 2.0, form)
+    form_bonus = recent_signal * form_bonus_weight * (1.0 + (is_attacker * 0.2))
+    ownership_bonus = (
+        (selected_by_percent / max(1.0, ownership_bonus_scale)).clip(lower=0.0, upper=1.0)
+        * ownership_bonus_weight
+        * is_premium_attacker
+    )
 
     out["wildcard_weighted_xpts"] = weighted_xpts.round(3)
     out["wildcard_future_dgw_bonus"] = future_dgw_bonus.round(3)
     out["wildcard_captaincy_bonus"] = captaincy_bonus.round(3)
+    out["wildcard_form_bonus"] = form_bonus.round(3)
+    out["wildcard_ownership_bonus"] = ownership_bonus.round(3)
     out["wildcard_extra_fixtures"] = future_extra_fixtures.astype(int)
-    out["wildcard_score"] = (weighted_xpts + future_dgw_bonus + captaincy_bonus).round(3)
+    out["wildcard_score"] = (weighted_xpts + future_dgw_bonus + captaincy_bonus + form_bonus + ownership_bonus).round(3)
     out = out.sort_values(["wildcard_score", "xpts_horizon"], ascending=[False, False]).reset_index(drop=True)
     return out
 

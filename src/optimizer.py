@@ -61,6 +61,32 @@ def _swap_team_ok(team_counts, team_out, team_in, max_per_team):
     return (in_count + 1) <= int(max_per_team)
 
 
+def _is_premium_attack_row(row, premium_floor, premium_positions):
+    """Return True when a row is a premium attacker/captaincy slot."""
+    pos = str(row.get("pos") or "")
+    price = float(to_number(row.get("price_m"), 0.0))
+    return pos in set(premium_positions or []) and price >= float(to_number(premium_floor, 0.0))
+
+
+def _count_premium_attackers(df, premium_floor, premium_positions):
+    """Count premium attackers in a squad DataFrame."""
+    if df is None or df.empty:
+        return 0
+    positions = set(premium_positions or [])
+    price = pd.to_numeric(df.get("price_m"), errors="coerce").fillna(0.0)
+    pos = df.get("pos", pd.Series("", index=df.index)).astype(str)
+    return int(((pos.isin(list(positions))) & (price >= float(to_number(premium_floor, 0.0)))).sum())
+
+
+def _premium_count_after_swap(selected, idx, cand, premium_floor, premium_positions):
+    """Return premium-attacker count after replacing one row."""
+    row = selected.loc[idx]
+    count_now = _count_premium_attackers(selected, premium_floor, premium_positions)
+    count_now -= int(_is_premium_attack_row(row, premium_floor, premium_positions))
+    count_now += int(_is_premium_attack_row(cand, premium_floor, premium_positions))
+    return int(count_now)
+
+
 def _prepare_chip_market(elements_all, score_col, shape):
     """Build clean player market table with chip objective score."""
     if elements_all is None or elements_all.empty:
@@ -149,7 +175,15 @@ def _repair_team_cap(selected, market, max_per_team):
     return None
 
 
-def _reduce_cost_to_budget(selected, market, budget_m, max_per_team):
+def _reduce_cost_to_budget(
+    selected,
+    market,
+    budget_m,
+    max_per_team,
+    min_premium_attackers=0,
+    premium_floor=0.0,
+    premium_positions=None,
+):
     """Downgrade picks until total squad cost fits the budget."""
     if selected is None or selected.empty:
         return None
@@ -184,6 +218,16 @@ def _reduce_cost_to_budget(selected, market, budget_m, max_per_team):
                 cand_team = int(to_number(cand.get("team"), 0))
                 if not _swap_team_ok(counts, row_team, cand_team, max_per_team):
                     continue
+                if int(min_premium_attackers or 0) > 0:
+                    next_premium_count = _premium_count_after_swap(
+                        out,
+                        idx,
+                        cand,
+                        premium_floor=premium_floor,
+                        premium_positions=premium_positions,
+                    )
+                    if next_premium_count < int(min_premium_attackers):
+                        continue
 
                 cost_save = row_price - cand_price
                 if cost_save <= 0:
@@ -205,7 +249,15 @@ def _reduce_cost_to_budget(selected, market, budget_m, max_per_team):
     return None
 
 
-def _pick_best_upgrade(selected, market, budget_left, max_per_team):
+def _pick_best_upgrade(
+    selected,
+    market,
+    budget_left,
+    max_per_team,
+    min_premium_attackers=0,
+    premium_floor=0.0,
+    premium_positions=None,
+):
     """Find highest-value affordable upgrade for one selected slot."""
     if selected is None or selected.empty:
         return None
@@ -242,6 +294,16 @@ def _pick_best_upgrade(selected, market, budget_left, max_per_team):
                 continue
             if not _swap_team_ok(counts, row_team, cand_team, max_per_team):
                 continue
+            if int(min_premium_attackers or 0) > 0:
+                next_premium_count = _premium_count_after_swap(
+                    out,
+                    idx,
+                    cand,
+                    premium_floor=premium_floor,
+                    premium_positions=premium_positions,
+                )
+                if next_premium_count < int(min_premium_attackers):
+                    continue
 
             delta_score = cand_score - row_score
             efficiency = delta_score / (delta_cost + 0.05)
@@ -253,7 +315,85 @@ def _pick_best_upgrade(selected, market, budget_left, max_per_team):
     return best
 
 
-def build_chip_squad(elements_all, score_col, budget_m, max_per_team=None, shape=None):
+def _ensure_min_premium_attackers(
+    selected,
+    market,
+    budget_m,
+    max_per_team,
+    min_premium_attackers=0,
+    premium_floor=0.0,
+    premium_positions=None,
+):
+    """Best-effort swap-in of premium attackers for wildcard structure."""
+    out = selected.copy().reset_index(drop=True)
+    min_premium_attackers = int(min_premium_attackers or 0)
+    if min_premium_attackers <= 0 or out.empty:
+        return out, True
+
+    premium_positions = list(premium_positions or ["MID", "FWD"])
+    for _ in range(max(1, min_premium_attackers * 3)):
+        current_count = _count_premium_attackers(out, premium_floor, premium_positions)
+        if current_count >= min_premium_attackers:
+            return out, True
+
+        selected_ids = set(out["id"].astype(int).tolist())
+        best_trial = None
+        premium_pool = market[
+            market["pos"].isin(premium_positions)
+            & (market["price_m"] >= float(to_number(premium_floor, 0.0)))
+            & (~market["id"].astype(int).isin(selected_ids))
+        ].sort_values(["chip_score", "price_m"], ascending=[False, True])
+
+        if premium_pool.empty:
+            break
+
+        for _, cand in premium_pool.head(60).iterrows():
+            pos = str(cand.get("pos") or "")
+            candidates_out = out[out["pos"].astype(str) == pos].copy()
+            if candidates_out.empty:
+                continue
+            candidates_out = candidates_out.sort_values(["chip_score", "price_m"], ascending=[True, True])
+
+            for idx, _row in candidates_out.iterrows():
+                trial = _replace_row(out.copy(), idx, cand)
+                trial = _reduce_cost_to_budget(
+                    trial,
+                    market,
+                    budget_m=budget_m,
+                    max_per_team=max_per_team,
+                    min_premium_attackers=0,
+                    premium_floor=premium_floor,
+                    premium_positions=premium_positions,
+                )
+                if trial is None or trial.empty:
+                    continue
+                premium_count = _count_premium_attackers(trial, premium_floor, premium_positions)
+                if premium_count < current_count + 1:
+                    continue
+                trial_score = float(pd.to_numeric(trial["chip_score"], errors="coerce").fillna(0.0).sum())
+                trial_cost = float(pd.to_numeric(trial["price_m"], errors="coerce").fillna(0.0).sum())
+                key = (premium_count, trial_score, -trial_cost)
+                if best_trial is None or key > best_trial["key"]:
+                    best_trial = {"selected": trial, "key": key}
+
+        if not best_trial:
+            break
+        out = best_trial["selected"].copy().reset_index(drop=True)
+
+    final_ok = _count_premium_attackers(out, premium_floor, premium_positions) >= min_premium_attackers
+    return out, final_ok
+
+
+def build_chip_squad(
+    elements_all,
+    score_col,
+    budget_m,
+    max_per_team=None,
+    shape=None,
+    min_premium_attackers=0,
+    premium_floor=0.0,
+    premium_positions=None,
+):
     """
     Build a legal 15-man draft for wildcard/free-hit under budget and team caps.
 
@@ -291,14 +431,43 @@ def build_chip_squad(elements_all, score_col, budget_m, max_per_team=None, shape
     if selected is None or selected.empty:
         return {"ok": False, "reason": "Could not fit squad to budget.", "squad_df": None}
 
+    selected, premium_ok = _ensure_min_premium_attackers(
+        selected,
+        market,
+        budget_m=budget_m,
+        max_per_team=max_per_team,
+        min_premium_attackers=min_premium_attackers,
+        premium_floor=premium_floor,
+        premium_positions=premium_positions,
+    )
+
     max_iters = int(getattr(config, "CHIP_UPGRADE_MAX_ITERS", 320) or 320)
     for _ in range(max_iters):
         cost_now = float(pd.to_numeric(selected["price_m"], errors="coerce").fillna(0.0).sum())
         budget_left = max(0.0, float(budget_m - cost_now))
-        best = _pick_best_upgrade(selected, market, budget_left=budget_left, max_per_team=max_per_team)
+        best = _pick_best_upgrade(
+            selected,
+            market,
+            budget_left=budget_left,
+            max_per_team=max_per_team,
+            min_premium_attackers=min_premium_attackers,
+            premium_floor=premium_floor,
+            premium_positions=premium_positions,
+        )
         if not best:
             break
         selected = _replace_row(selected, best["idx"], best["cand"])
+
+    selected, premium_ok_after_upgrades = _ensure_min_premium_attackers(
+        selected,
+        market,
+        budget_m=budget_m,
+        max_per_team=max_per_team,
+        min_premium_attackers=min_premium_attackers,
+        premium_floor=premium_floor,
+        premium_positions=premium_positions,
+    )
+    premium_ok = bool(premium_ok and premium_ok_after_upgrades)
 
     selected = selected.copy().reset_index(drop=True)
     selected["player_id"] = selected["id"].astype(int)
@@ -310,7 +479,11 @@ def build_chip_squad(elements_all, score_col, budget_m, max_per_team=None, shape
     score = float(pd.to_numeric(selected["chip_score"], errors="coerce").fillna(0.0).sum())
     return {
         "ok": True,
-        "reason": "Chip draft built successfully.",
+        "reason": (
+            "Chip draft built successfully."
+            if premium_ok or int(min_premium_attackers or 0) <= 0
+            else "Chip draft built, but premium captaincy structure could not be fully satisfied under the budget."
+        ),
         "objective_score_col": score_col,
         "budget_m": float(round(budget_m, 2)),
         "squad_cost_m": float(round(cost, 2)),
