@@ -14,6 +14,9 @@ DIFFICULTY_MULTIPLIER = {
 }
 
 
+_PLAYER_GW_HISTORY_CACHE = {"path": None, "mtime": None, "data": None}
+
+
 def clamp(value, low, high):
     """Clamp a numeric value between low and high with safe fallbacks."""
     if value is None:
@@ -152,6 +155,97 @@ def team_recent_ppg_map(fixtures, gw_start, latest_n_matches=config.PROJ_DEFAULT
     return out
 
 
+def load_latest_player_gw_history(path=None, base_dir="data/processed/fpl"):
+    """Load and cache the latest player-by-GW history file when available."""
+    selected_path = str(path or find_latest_gw_history(base_dir=base_dir) or "")
+    if not selected_path:
+        return None
+
+    fp = Path(selected_path)
+    if not fp.exists():
+        return None
+
+    mtime = fp.stat().st_mtime
+    cached = _PLAYER_GW_HISTORY_CACHE
+    if cached.get("path") == selected_path and cached.get("mtime") == mtime and cached.get("data") is not None:
+        return cached["data"].copy()
+
+    try:
+        df = pd.read_csv(fp)
+    except Exception:
+        return None
+
+    required = ["player_id", "gw", "gw_total_points", "gw_fixture_count"]
+    if any(col not in df.columns for col in required):
+        return None
+
+    df = df.copy()
+    for col in ["player_id", "gw", "gw_total_points", "gw_fixture_count", "gw_minutes", "gw_starts"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = df[df["player_id"].notna() & df["gw"].notna()].copy()
+    if df.empty:
+        return None
+
+    df["player_id"] = df["player_id"].astype(int)
+    df["gw"] = df["gw"].astype(int)
+    df = df.sort_values(["player_id", "gw"]).reset_index(drop=True)
+
+    cached["path"] = selected_path
+    cached["mtime"] = mtime
+    cached["data"] = df
+    return df.copy()
+
+
+def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/processed/fpl"):
+    """
+    Build recent player-by-GW averages before `gw_start`.
+    Uses GW-level rows so missed/zero-minute weeks count when present.
+    """
+    hist = history_df if history_df is not None else load_latest_player_gw_history(base_dir=base_dir)
+    if hist is None or hist.empty:
+        return pd.DataFrame()
+
+    gw_start = int(gw_start)
+    window = max(1, int(window or getattr(config, "PROJ_PLAYER_RECENT_GW_WINDOW", 5) or 5))
+
+    df = hist[hist["gw"] < gw_start].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    history_max_gw = int(pd.to_numeric(df["gw"], errors="coerce").max())
+    df = df.sort_values(["player_id", "gw"]).groupby("player_id", group_keys=False).tail(window)
+    if df.empty:
+        return pd.DataFrame()
+
+    agg_map = {
+        "gw_total_points": "mean",
+        "gw_fixture_count": "mean",
+        "gw": ["count", "max"],
+    }
+    if "gw_minutes" in df.columns:
+        agg_map["gw_minutes"] = "mean"
+    if "gw_starts" in df.columns:
+        agg_map["gw_starts"] = "mean"
+
+    out = df.groupby("player_id", dropna=False).agg(agg_map)
+    out.columns = ["_".join(str(x) for x in tup if x) for tup in out.columns.to_flat_index()]
+    out = out.reset_index().rename(
+        columns={
+            "gw_total_points_mean": "recent_gw_avg_points",
+            "gw_fixture_count_mean": "recent_gw_avg_fixture_count",
+            "gw_count": "recent_gw_samples",
+            "gw_max": "recent_gw_last",
+            "gw_minutes_mean": "recent_gw_avg_minutes",
+            "gw_starts_mean": "recent_gw_avg_starts",
+        }
+    )
+    out["recent_history_window_gws"] = int(window)
+    out["recent_history_max_gw"] = int(history_max_gw)
+    return out
+
+
 def team_gw_context_multipliers(fixtures, gw, team_recent_ppg):
     """
     Per-team multipliers for a specific GW:
@@ -212,8 +306,8 @@ def project_elements_next_gws(
     """
     Lightweight next-N gameweeks projection table (FPL-only baseline).
 
-    - Uses `ep_next` for the first GW when available.
-    - Otherwise falls back to a simple `ppg+form` baseline.
+    - Uses `ep_next` for the first GW when available, blended with recent-GW player history.
+    - Falls back to a simple `ppg+form` baseline when no recent history is available.
     - Adjusts for fixture difficulty and doubles/blanks.
     - Applies playing probability (chance_of_playing_next_round) for the immediate GW only.
     """
@@ -233,11 +327,56 @@ def project_elements_next_gws(
         latest_n_matches=latest_n_matches,
     )
 
+    recent_window = max(1, int(getattr(config, "PROJ_PLAYER_RECENT_GW_WINDOW", 5) or 5))
+    recent_min_samples = max(1, int(getattr(config, "PROJ_PLAYER_RECENT_MIN_SAMPLES", 2) or 2))
+    recent_blend_weight = clamp(getattr(config, "PROJ_PLAYER_RECENT_BLEND_WEIGHT", 0.65), 0.0, 1.0)
+    ep_next_blend_weight = clamp(getattr(config, "PROJ_EP_NEXT_BLEND_WEIGHT", 0.45), 0.0, 1.0)
+
+    recent_gw = player_recent_gw_map(gw_start=gw_start, window=recent_window)
+    recent_history_max_gw = None
+    if recent_gw is not None and not recent_gw.empty:
+        if "recent_history_max_gw" in recent_gw.columns:
+            non_null_hist_gw = pd.to_numeric(recent_gw["recent_history_max_gw"], errors="coerce").dropna()
+            if not non_null_hist_gw.empty:
+                recent_history_max_gw = int(non_null_hist_gw.max())
+        df = df.merge(recent_gw, left_on="id", right_on="player_id", how="left")
+        df = df.drop(columns=["player_id"], errors="ignore")
+    else:
+        df["recent_gw_avg_points"] = pd.NA
+        df["recent_gw_avg_fixture_count"] = pd.NA
+        df["recent_gw_samples"] = pd.NA
+        df["recent_gw_last"] = pd.NA
+        df["recent_gw_avg_minutes"] = pd.NA
+        df["recent_gw_avg_starts"] = pd.NA
+        df["recent_history_window_gws"] = int(recent_window)
+        df["recent_history_max_gw"] = pd.NA
+
+    recent_avg_points = pd.to_numeric(df.get("recent_gw_avg_points"), errors="coerce")
+    recent_samples = pd.to_numeric(df.get("recent_gw_samples"), errors="coerce").fillna(0.0)
+    has_recent_history = recent_avg_points.notna() & (recent_samples >= float(recent_min_samples))
+    recent_player_base = recent_avg_points.where(has_recent_history, base_fallback)
+    blended_base = (
+        recent_player_base * float(recent_blend_weight)
+        + base_fallback * float(1.0 - recent_blend_weight)
+    ).where(has_recent_history, base_fallback)
+
+    df["baseline_long_term_xpts"] = base_fallback.round(3)
+    df["baseline_recent_gw_xpts"] = recent_avg_points.round(3)
+    df["baseline_blended_xpts"] = blended_base.round(3)
+    df["recent_history_available"] = has_recent_history.astype(bool)
+
     if "ep_next" in df.columns:
         ep_next = pd.to_numeric(df["ep_next"], errors="coerce")
     else:
         ep_next = pd.Series(pd.NA, index=df.index)
-    base_gw0 = ep_next.where(ep_next.notna(), base_fallback).fillna(0.0)
+    ep_next_only = ep_next.where(ep_next.notna(), blended_base).fillna(0.0)
+    base_gw0 = (
+        ep_next_only * float(ep_next_blend_weight)
+        + blended_base * float(1.0 - ep_next_blend_weight)
+    ).where(has_recent_history & ep_next.notna(), ep_next_only)
+    df["baseline_gw1_xpts"] = base_gw0.round(3)
+    if recent_history_max_gw is not None:
+        df["recent_history_max_gw"] = int(recent_history_max_gw)
 
     if "chance_of_playing_next_round" in df.columns:
         chance_next = pd.to_numeric(df["chance_of_playing_next_round"], errors="coerce")
@@ -272,7 +411,7 @@ def project_elements_next_gws(
             else 1.0
         )
 
-        base = base_gw0 if i == 0 else base_fallback
+        base = base_gw0 if i == 0 else blended_base
         xpts = base * fixture_count * diff_mult * home_away_mult * opp_form_mult * team_form_mult
         if i == 0:
             xpts = xpts * play_prob
@@ -305,6 +444,19 @@ def project_elements_next_gws(
         "total_points",
         "selected_by_percent",
         "ep_next",
+        "baseline_long_term_xpts",
+        "baseline_recent_gw_xpts",
+        "baseline_blended_xpts",
+        "baseline_gw1_xpts",
+        "recent_gw_avg_points",
+        "recent_gw_avg_fixture_count",
+        "recent_gw_avg_minutes",
+        "recent_gw_avg_starts",
+        "recent_gw_samples",
+        "recent_gw_last",
+        "recent_history_window_gws",
+        "recent_history_max_gw",
+        "recent_history_available",
         "transfers_in_event",
         "transfers_out_event",
         "penalties_order",

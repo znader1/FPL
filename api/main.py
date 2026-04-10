@@ -556,12 +556,47 @@ def _build_score_breakdown(record, chip_strategy="none", objective_score_col=Non
         "objective_score": None,
     }
 
+    breakdown["recent_form"] = {
+        "window_gws": _safe_int(record.get("recent_history_window_gws")),
+        "history_max_gw": _safe_int(record.get("recent_history_max_gw")),
+        "samples": _safe_int(record.get("recent_gw_samples")),
+        "last_gw": _safe_int(record.get("recent_gw_last")),
+        "available": bool(record.get("recent_history_available")),
+        "avg_points": _round_float(record.get("recent_gw_avg_points"), 2, None)
+        if record.get("recent_gw_avg_points") is not None
+        else None,
+        "avg_minutes": _round_float(record.get("recent_gw_avg_minutes"), 1, None)
+        if record.get("recent_gw_avg_minutes") is not None
+        else None,
+        "avg_fixture_count": _round_float(record.get("recent_gw_avg_fixture_count"), 2, None)
+        if record.get("recent_gw_avg_fixture_count") is not None
+        else None,
+        "avg_starts": _round_float(record.get("recent_gw_avg_starts"), 2, None)
+        if record.get("recent_gw_avg_starts") is not None
+        else None,
+    }
+    breakdown["baseline"] = {
+        "long_term": _round_float(record.get("baseline_long_term_xpts"), 3, None)
+        if record.get("baseline_long_term_xpts") is not None
+        else None,
+        "recent_gw": _round_float(record.get("baseline_recent_gw_xpts"), 3, None)
+        if record.get("baseline_recent_gw_xpts") is not None
+        else None,
+        "blended": _round_float(record.get("baseline_blended_xpts"), 3, None)
+        if record.get("baseline_blended_xpts") is not None
+        else None,
+        "gw1_after_ep_next_blend": _round_float(record.get("baseline_gw1_xpts"), 3, None)
+        if record.get("baseline_gw1_xpts") is not None
+        else None,
+    }
+
     if objective_score_col and record.get(objective_score_col) is not None:
         breakdown["objective_score"] = _round_float(record.get(objective_score_col), 3, 0.0)
 
     if chip_strategy == "wildcard" or record.get("wildcard_score") is not None:
         breakdown["objective_explanation"] = (
-            "Wildcard score is a planning score: weighted future xPts plus bonuses for future doubles and premium captaincy coverage."
+            "Wildcard score is a planning score: weighted future xPts plus bonuses for future doubles and premium captaincy coverage. "
+            "The underlying xPts baseline blends long-term FPL data with recent player gameweek averages when available."
         )
         breakdown["wildcard"] = {
             "score": _round_float(record.get("wildcard_score"), 3, 0.0) if record.get("wildcard_score") is not None else None,
@@ -576,7 +611,9 @@ def _build_score_breakdown(record, chip_strategy="none", objective_score_col=Non
             else None,
         }
     else:
-        breakdown["objective_explanation"] = "Single-gameweek xPts estimate for the selected lineup week."
+        breakdown["objective_explanation"] = (
+            "Single-gameweek xPts estimate for the selected lineup week, built from fixture context plus a blended player baseline."
+        )
 
     breakdown["fixtures_horizon"] = list(record.get("fixtures_horizon") or [])
     return breakdown
@@ -649,6 +686,19 @@ def _build_position_panels(
         "wildcard_weighted_xpts",
         "wildcard_future_dgw_bonus",
         "wildcard_captaincy_bonus",
+        "baseline_long_term_xpts",
+        "baseline_recent_gw_xpts",
+        "baseline_blended_xpts",
+        "baseline_gw1_xpts",
+        "recent_gw_avg_points",
+        "recent_gw_avg_fixture_count",
+        "recent_gw_avg_minutes",
+        "recent_gw_avg_starts",
+        "recent_gw_samples",
+        "recent_gw_last",
+        "recent_history_window_gws",
+        "recent_history_max_gw",
+        "recent_history_available",
     ]
     if ranking_col not in base_cols and ranking_col in proj_all.columns:
         base_cols.append(ranking_col)
@@ -701,6 +751,19 @@ def _lineup_projection_cols(proj_all, gws):
         "wildcard_weighted_xpts",
         "wildcard_future_dgw_bonus",
         "wildcard_captaincy_bonus",
+        "baseline_long_term_xpts",
+        "baseline_recent_gw_xpts",
+        "baseline_blended_xpts",
+        "baseline_gw1_xpts",
+        "recent_gw_avg_points",
+        "recent_gw_avg_fixture_count",
+        "recent_gw_avg_minutes",
+        "recent_gw_avg_starts",
+        "recent_gw_samples",
+        "recent_gw_last",
+        "recent_history_window_gws",
+        "recent_history_max_gw",
+        "recent_history_available",
     ]:
         if c in proj_all.columns:
             proj_cols.append(c)
@@ -1155,6 +1218,7 @@ def _build_strategy_recommendation(
 def _build_scoring_guide(optimize_event_id, chip_strategy="none", objective_score_col=None):
     """Explain the main scoring fields in plain language."""
     optimize_event_id = _safe_int(optimize_event_id)
+    recent_window = int(getattr(config, "PROJ_PLAYER_RECENT_GW_WINDOW", 5) or 5)
     guide = {
         "headline": "Scores in this app are projected points, not actual FPL points already earned.",
         "bullets": [],
@@ -1162,6 +1226,9 @@ def _build_scoring_guide(optimize_event_id, chip_strategy="none", objective_scor
     }
     if optimize_event_id:
         guide["bullets"].append(f"`xpts_gw{int(optimize_event_id)}` estimates points for GW{int(optimize_event_id)}.")
+    guide["bullets"].append(
+        f"Player baseline blends long-term FPL signals with the last {int(recent_window)} player gameweeks when history is available."
+    )
     guide["bullets"].append("`xpts_horizon` is the sum of projected xPts across the selected planning window.")
     if chip_strategy == "wildcard":
         guide["bullets"].append(
@@ -1575,6 +1642,17 @@ def build_recommendations(payload):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Projection failed: {e}")
     timings["projections_ms"] = _elapsed_ms(ts)
+
+    recent_history_max_gw = None
+    if proj_all is not None and not proj_all.empty and "recent_history_max_gw" in proj_all.columns:
+        hist_vals = pd.to_numeric(proj_all["recent_history_max_gw"], errors="coerce").dropna()
+        if not hist_vals.empty:
+            recent_history_max_gw = int(hist_vals.max())
+    if recent_history_max_gw is not None:
+        recent_window = int(getattr(config, "PROJ_PLAYER_RECENT_GW_WINDOW", 5) or 5)
+        notes.append(
+            f"Player baseline blends the last {int(recent_window)} gameweeks on file (latest player-history GW available: {int(recent_history_max_gw)})."
+        )
 
     score_col = f"xpts_gw{int(optimize_event_id)}"
     lineup_squad_df = squad_df
