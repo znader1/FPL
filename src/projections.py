@@ -205,10 +205,12 @@ def load_latest_player_gw_history(path=None, base_dir="data/processed/fpl"):
     return df.copy()
 
 
-def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/processed/fpl"):
+def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/processed/fpl", fixtures=None):
     """
     Build recent player-by-GW averages before `gw_start`.
-    Uses GW-level rows so missed/zero-minute weeks count when present.
+    Uses recent calendar GWs before `gw_start`.
+    If a player has no row for a GW but their team had a fixture, that GW is treated
+    as a zero-point appearance for recent-form purposes.
     """
     hist = history_df if history_df is not None else load_latest_player_gw_history(base_dir=resolve_history_base_dir(base_dir))
     if hist is None or hist.empty:
@@ -216,15 +218,70 @@ def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/
 
     gw_start = int(gw_start)
     window = max(1, int(window or getattr(config, "PROJ_PLAYER_RECENT_GW_WINDOW", 5) or 5))
+    window_start = max(1, int(gw_start) - int(window))
 
-    df = hist[hist["gw"] < gw_start].copy()
+    prior_hist = hist[hist["gw"] < gw_start].copy()
+    if prior_hist.empty:
+        return pd.DataFrame()
+
+    history_max_gw = int(pd.to_numeric(prior_hist["gw"], errors="coerce").max())
+    df = prior_hist[prior_hist["gw"] >= int(window_start)].copy()
     if df.empty:
         return pd.DataFrame()
 
-    history_max_gw = int(pd.to_numeric(df["gw"], errors="coerce").max())
-    df = df.sort_values(["player_id", "gw"]).groupby("player_id", group_keys=False).tail(window)
-    if df.empty:
-        return pd.DataFrame()
+    fixture_counts = {}
+    if fixtures is not None and not getattr(fixtures, "empty", True) and "gw_team_id_end" in prior_hist.columns:
+        fx = fixtures.copy()
+        if "event" in fx.columns:
+            fx["event"] = pd.to_numeric(fx["event"], errors="coerce")
+            fx = fx[fx["event"].notna()].copy()
+            fx["event"] = fx["event"].astype(int)
+            fx = fx[(fx["event"] >= int(window_start)) & (fx["event"] < int(gw_start))].copy()
+            if not fx.empty:
+                home = fx[["event", "team_h"]].rename(columns={"team_h": "team_id"}).copy() if "team_h" in fx.columns else pd.DataFrame()
+                away = fx[["event", "team_a"]].rename(columns={"team_a": "team_id"}).copy() if "team_a" in fx.columns else pd.DataFrame()
+                team_fx = pd.concat([home, away], ignore_index=True) if not home.empty or not away.empty else pd.DataFrame()
+                if not team_fx.empty:
+                    team_fx["team_id"] = pd.to_numeric(team_fx["team_id"], errors="coerce")
+                    team_fx = team_fx[team_fx["team_id"].notna()].copy()
+                    team_fx["team_id"] = team_fx["team_id"].astype(int)
+                    fixture_counts = (
+                        team_fx.groupby(["team_id", "event"]).size().rename("team_fixture_count").to_dict()
+                    )
+
+    if fixture_counts and "gw_team_id_end" in prior_hist.columns:
+        latest_team = (
+            prior_hist[["player_id", "gw", "gw_team_id_end"]]
+            .sort_values(["player_id", "gw"])
+            .dropna(subset=["player_id", "gw_team_id_end"])
+            .groupby("player_id", as_index=False)
+            .tail(1)[["player_id", "gw_team_id_end"]]
+        )
+        if not latest_team.empty:
+            latest_team["player_id"] = pd.to_numeric(latest_team["player_id"], errors="coerce").astype(int)
+            latest_team["gw_team_id_end"] = pd.to_numeric(latest_team["gw_team_id_end"], errors="coerce").astype(int)
+            gws_df = pd.DataFrame({"gw": list(range(int(window_start), int(gw_start)))})
+            latest_team["__tmp"] = 1
+            gws_df["__tmp"] = 1
+            grid = latest_team.merge(gws_df, on="__tmp", how="inner").drop(columns=["__tmp"])
+            grid["team_fixture_count"] = grid.apply(
+                lambda r: int(fixture_counts.get((int(r["gw_team_id_end"]), int(r["gw"])), 0)),
+                axis=1,
+            )
+            existing_cols = list(dict.fromkeys(df.columns.tolist() + ["player_id", "gw"]))
+            merged = grid.merge(df[existing_cols], on=["player_id", "gw"], how="left")
+            has_row = merged["gw_total_points"].notna() if "gw_total_points" in merged.columns else pd.Series(False, index=merged.index)
+            merged = merged[has_row | (merged["team_fixture_count"] > 0)].copy()
+            if not merged.empty:
+                for col in ["gw_total_points", "gw_minutes", "gw_starts"]:
+                    if col in merged.columns:
+                        merged[col] = pd.to_numeric(merged[col], errors="coerce").fillna(0.0)
+                if "gw_fixture_count" in merged.columns:
+                    merged["gw_fixture_count"] = pd.to_numeric(merged["gw_fixture_count"], errors="coerce")
+                    merged["gw_fixture_count"] = merged["gw_fixture_count"].fillna(merged["team_fixture_count"]).fillna(0.0)
+                else:
+                    merged["gw_fixture_count"] = merged["team_fixture_count"].fillna(0.0)
+                df = merged.drop(columns=["team_fixture_count"], errors="ignore")
 
     agg_map = {
         "gw_total_points": "mean",
@@ -339,7 +396,7 @@ def project_elements_next_gws(
     recent_blend_weight = clamp(getattr(config, "PROJ_PLAYER_RECENT_BLEND_WEIGHT", 0.65), 0.0, 1.0)
     ep_next_blend_weight = clamp(getattr(config, "PROJ_EP_NEXT_BLEND_WEIGHT", 0.45), 0.0, 1.0)
 
-    recent_gw = player_recent_gw_map(gw_start=gw_start, window=recent_window)
+    recent_gw = player_recent_gw_map(gw_start=gw_start, window=recent_window, fixtures=fixtures)
     recent_history_max_gw = None
     if recent_gw is not None and not recent_gw.empty:
         if "recent_history_max_gw" in recent_gw.columns:

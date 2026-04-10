@@ -603,7 +603,7 @@ def _build_score_breakdown(record, chip_strategy="none", objective_score_col=Non
     if chip_strategy == "wildcard" or record.get("wildcard_score") is not None:
         breakdown["objective_explanation"] = (
             "Wildcard score is a planning score: weighted future xPts plus bonuses for future doubles, recent form, ownership confidence, and premium captaincy coverage. "
-            "The underlying xPts baseline blends long-term FPL data with recent player gameweek averages when available."
+            "The underlying xPts baseline blends long-term FPL data with recent calendar-gameweek averages when available."
         )
         breakdown["wildcard"] = {
             "score": _round_float(record.get("wildcard_score"), 3, 0.0) if record.get("wildcard_score") is not None else None,
@@ -1244,7 +1244,10 @@ def _build_scoring_guide(optimize_event_id, chip_strategy="none", objective_scor
     if optimize_event_id:
         guide["bullets"].append(f"`xpts_gw{int(optimize_event_id)}` estimates points for GW{int(optimize_event_id)}.")
     guide["bullets"].append(
-        f"Player baseline blends long-term FPL signals with the last {int(recent_window)} player gameweeks when history is available."
+        f"Player baseline blends long-term FPL signals with the last {int(recent_window)} calendar gameweeks when history is available."
+    )
+    guide["bullets"].append(
+        "If a player misses a recent gameweek but their team had a fixture, that recent GW is treated as a zero in the player-history average."
     )
     guide["bullets"].append("`xpts_horizon` is the sum of projected xPts across the selected planning window.")
     if chip_strategy == "wildcard":
