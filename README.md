@@ -63,6 +63,7 @@ Local URLs:
 curl "http://127.0.0.1:8001/squad?entry_id=1234567&event_id=31"
 curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=31&horizon_gws=3&include_transfers=true"
 curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=33&chip_strategy=wildcard&chip_horizon_gws=5"
+curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=33&chip_strategy=wildcard&chip_play_event_id=32&chip_horizon_gws=5"
 curl "http://127.0.0.1:8001/recommendations?entry_id=1234567&event_id=33&chip_strategy=free_hit&horizon_gws=1"
 curl "http://127.0.0.1:8001/evaluation/xpts?window=3&min_gw=2&topk=25"
 ```
@@ -75,7 +76,9 @@ From `/recommendations`:
 - `projected_points_with_captain`
 - `transfers` (moves, hot targets, plan metadata)
 - `squad_with_transfers_steps` (instant apply step 0..N for frontend)
-- `chip_strategy` (selected chip mode, objective, budget, remaining budget, explanation/profile)
+- `chip_strategy` (selected chip mode, play GW, objective horizon, budget, remaining budget, explanation/profile)
+- `squad_insights` (bullet-ready warnings/opportunities for availability, blanks, doubles, bench)
+- `scoring_guide` + player `score_breakdown` (tooltips/hover details for xPts and wildcard score)
 - `strategy_recommendation` (roll / transfer / chip action block)
 - `timings_ms` (latency instrumentation per stage)
 

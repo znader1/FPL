@@ -490,7 +490,138 @@ def _build_chip_profile(chip_strategy, squad_df, proj_all, gws):
     }
 
 
-def _build_position_panels(proj_all, gws, teams_code, owned_ids=None, limit_per_pos=5, ranking_col="xpts_horizon"):
+def _build_player_alerts(record, optimize_event_id=None):
+    """Build lightweight per-player alerts for UI badges/tooltips."""
+    alerts = []
+    status = str(record.get("status") or "").strip().lower()
+    chance = _safe_float(record.get("chance_of_playing_next_round"), default=None)
+
+    if status and status != "a":
+        severity = "high" if status in ("i", "u") else "medium"
+        alerts.append(
+            {
+                "severity": severity,
+                "category": "availability",
+                "text": f"Availability risk ({status}).",
+            }
+        )
+    elif chance is not None and float(chance) < 100.0:
+        severity = "high" if float(chance) < 50.0 else "medium"
+        alerts.append(
+            {
+                "severity": severity,
+                "category": "availability",
+                "text": f"Chance of playing next round is {int(round(float(chance)))}%.",
+            }
+        )
+
+    fixtures_horizon = list(record.get("fixtures_horizon") or [])
+    blank_alert = None
+    double_alert = None
+    for item in fixtures_horizon:
+        event_id = _safe_int(item.get("event_id"))
+        fixture_count = int(_safe_int(item.get("fixture_count")) or 0)
+        if blank_alert is None and fixture_count == 0:
+            severity = "high" if event_id == _safe_int(optimize_event_id) else "medium"
+            blank_alert = {
+                "severity": severity,
+                "category": "blank",
+                "event_id": event_id,
+                "text": f"Blank gameweek in GW{int(event_id)}." if event_id else "Blank gameweek ahead.",
+            }
+        if double_alert is None and fixture_count > 1:
+            double_alert = {
+                "severity": "info",
+                "category": "double",
+                "event_id": event_id,
+                "text": f"Double gameweek in GW{int(event_id)}." if event_id else "Double gameweek ahead.",
+            }
+        if blank_alert and double_alert:
+            break
+
+    if blank_alert:
+        alerts.append(blank_alert)
+    if double_alert:
+        alerts.append(double_alert)
+    return alerts
+
+
+def _build_score_breakdown(record, chip_strategy="none", objective_score_col=None):
+    """Build player-facing score explanation payload."""
+    breakdown = {
+        "note": "xPts are projected points, not actual FPL points.",
+        "current_gw_xpts": _round_float(record.get("xpts"), 2, 0.0) if record.get("xpts") is not None else None,
+        "horizon_xpts": _round_float(record.get("xpts_horizon"), 2, 0.0) if record.get("xpts_horizon") is not None else None,
+        "objective_score_col": objective_score_col,
+        "objective_score": None,
+    }
+
+    if objective_score_col and record.get(objective_score_col) is not None:
+        breakdown["objective_score"] = _round_float(record.get(objective_score_col), 3, 0.0)
+
+    if chip_strategy == "wildcard" or record.get("wildcard_score") is not None:
+        breakdown["objective_explanation"] = (
+            "Wildcard score is a planning score: weighted future xPts plus bonuses for future doubles and premium captaincy coverage."
+        )
+        breakdown["wildcard"] = {
+            "score": _round_float(record.get("wildcard_score"), 3, 0.0) if record.get("wildcard_score") is not None else None,
+            "weighted_xpts": _round_float(record.get("wildcard_weighted_xpts"), 3, 0.0)
+            if record.get("wildcard_weighted_xpts") is not None
+            else None,
+            "future_dgw_bonus": _round_float(record.get("wildcard_future_dgw_bonus"), 3, 0.0)
+            if record.get("wildcard_future_dgw_bonus") is not None
+            else None,
+            "captaincy_bonus": _round_float(record.get("wildcard_captaincy_bonus"), 3, 0.0)
+            if record.get("wildcard_captaincy_bonus") is not None
+            else None,
+        }
+    else:
+        breakdown["objective_explanation"] = "Single-gameweek xPts estimate for the selected lineup week."
+
+    breakdown["fixtures_horizon"] = list(record.get("fixtures_horizon") or [])
+    return breakdown
+
+
+def _decorate_projection_record(record, gws, chip_strategy="none", objective_score_col=None, optimize_event_id=None):
+    """Normalize raw projection columns into frontend-friendly record fields."""
+    fixtures_h = []
+    for gw in gws:
+        fixtures_h.append(
+            {
+                "event_id": int(gw),
+                "fixtures": (record.get(f"fixtures_gw{gw}") or ""),
+                "fixture_count": int(_safe_int(record.get(f"fixture_count_gw{gw}")) or 0),
+                "diff_avg": float(_safe_float(record.get(f"diff_avg_gw{gw}"), default=0.0) or 0.0),
+                "xpts": float(_safe_float(record.get(f"xpts_gw{gw}"), default=0.0) or 0.0),
+            }
+        )
+        record.pop(f"fixtures_gw{gw}", None)
+        record.pop(f"fixture_count_gw{gw}", None)
+        record.pop(f"diff_avg_gw{gw}", None)
+        record.pop(f"xpts_gw{gw}", None)
+
+    record["fixtures_horizon"] = fixtures_h
+    record["next_fixtures"] = fixtures_h[0]["fixtures"] if fixtures_h else ""
+    record["alerts"] = _build_player_alerts(record, optimize_event_id=optimize_event_id)
+    record["score_breakdown"] = _build_score_breakdown(
+        record,
+        chip_strategy=chip_strategy,
+        objective_score_col=objective_score_col,
+    )
+    return record
+
+
+def _build_position_panels(
+    proj_all,
+    gws,
+    teams_code,
+    owned_ids=None,
+    limit_per_pos=5,
+    ranking_col="xpts_horizon",
+    chip_strategy="none",
+    objective_score_col=None,
+    optimize_event_id=None,
+):
     """Build per-position top-player panels for all and not-owned pools."""
     if proj_all is None or proj_all.empty:
         return {"all": {}, "not_owned": {}}
@@ -501,7 +632,24 @@ def _build_position_panels(proj_all, gws, teams_code, owned_ids=None, limit_per_
     if ranking_col not in proj_all.columns:
         ranking_col = "xpts_horizon" if "xpts_horizon" in proj_all.columns else ranking_col
 
-    base_cols = ["id", "web_name", "pos", "team", "team_short", "team_name", "price_m", "code", "photo", "xpts_horizon"]
+    base_cols = [
+        "id",
+        "web_name",
+        "pos",
+        "team",
+        "team_short",
+        "team_name",
+        "price_m",
+        "code",
+        "photo",
+        "status",
+        "chance_of_playing_next_round",
+        "xpts_horizon",
+        "wildcard_score",
+        "wildcard_weighted_xpts",
+        "wildcard_future_dgw_bonus",
+        "wildcard_captaincy_bonus",
+    ]
     if ranking_col not in base_cols and ranking_col in proj_all.columns:
         base_cols.append(ranking_col)
     gw_cols = []
@@ -520,23 +668,13 @@ def _build_position_panels(proj_all, gws, teams_code, owned_ids=None, limit_per_
             chunk = df[df["pos"] == pos].head(limit_per_pos)
             recs = _attach_media(_df_records(chunk), teams_code)
             for rec in recs:
-                fixtures_h = []
-                for gw in gws:
-                    fixtures_h.append(
-                        {
-                            "event_id": int(gw),
-                            "fixtures": (rec.get(f"fixtures_gw{gw}") or ""),
-                            "fixture_count": int(_safe_int(rec.get(f"fixture_count_gw{gw}")) or 0),
-                            "diff_avg": float(_safe_float(rec.get(f"diff_avg_gw{gw}"), default=0.0) or 0.0),
-                            "xpts": float(_safe_float(rec.get(f"xpts_gw{gw}"), default=0.0) or 0.0),
-                        }
-                    )
-                    rec.pop(f"fixtures_gw{gw}", None)
-                    rec.pop(f"fixture_count_gw{gw}", None)
-                    rec.pop(f"diff_avg_gw{gw}", None)
-                    rec.pop(f"xpts_gw{gw}", None)
-                rec["fixtures_horizon"] = fixtures_h
-                rec["next_fixtures"] = fixtures_h[0]["fixtures"] if fixtures_h else ""
+                _decorate_projection_record(
+                    rec,
+                    gws=gws,
+                    chip_strategy=chip_strategy,
+                    objective_score_col=objective_score_col or ranking_col,
+                    optimize_event_id=optimize_event_id,
+                )
             out[pos] = recs
         return out
 
@@ -555,8 +693,17 @@ def _elapsed_ms(start_ts):
 def _lineup_projection_cols(proj_all, gws):
     """List projection columns required to enrich lineup records."""
     proj_cols = ["id"]
-    if "xpts_horizon" in proj_all.columns:
-        proj_cols.append("xpts_horizon")
+    for c in [
+        "xpts_horizon",
+        "status",
+        "chance_of_playing_next_round",
+        "wildcard_score",
+        "wildcard_weighted_xpts",
+        "wildcard_future_dgw_bonus",
+        "wildcard_captaincy_bonus",
+    ]:
+        if c in proj_all.columns:
+            proj_cols.append(c)
     for gw in gws:
         for c in [f"xpts_gw{gw}", f"fixtures_gw{gw}", f"fixture_count_gw{gw}", f"diff_avg_gw{gw}"]:
             if c in proj_all.columns:
@@ -564,7 +711,17 @@ def _lineup_projection_cols(proj_all, gws):
     return list(dict.fromkeys(proj_cols))
 
 
-def _pack_lineup_records(starting_df, bench_df, elements, proj_all, gws, teams_code):
+def _pack_lineup_records(
+    starting_df,
+    bench_df,
+    elements,
+    proj_all,
+    gws,
+    teams_code,
+    chip_strategy="none",
+    objective_score_col=None,
+    optimize_event_id=None,
+):
     """Merge lineup with media/projection fields and return JSON-safe records."""
     el_img = elements.copy()
     cols = [c for c in ["id", "team", "code", "photo"] if c in el_img.columns]
@@ -576,26 +733,14 @@ def _pack_lineup_records(starting_df, bench_df, elements, proj_all, gws, teams_c
     starting_records = _attach_media(_df_records(starting), teams_code)
     bench_records = _attach_media(_df_records(bench), teams_code)
 
-    drop_keys = []
-    for gw in gws:
-        drop_keys.extend([f"xpts_gw{gw}", f"fixtures_gw{gw}", f"fixture_count_gw{gw}", f"diff_avg_gw{gw}"])
     for rec in starting_records + bench_records:
-        fixtures_h = []
-        for gw in gws:
-            fixtures_h.append(
-                {
-                    "event_id": int(gw),
-                    "fixtures": (rec.get(f"fixtures_gw{gw}") or ""),
-                    "fixture_count": int(_safe_int(rec.get(f"fixture_count_gw{gw}")) or 0),
-                    "diff_avg": float(_safe_float(rec.get(f"diff_avg_gw{gw}"), default=0.0) or 0.0),
-                    "xpts": float(_safe_float(rec.get(f"xpts_gw{gw}"), default=0.0) or 0.0),
-                }
-            )
-        rec["fixtures_horizon"] = fixtures_h
-        rec["next_fixtures"] = fixtures_h[0]["fixtures"] if fixtures_h else ""
-        for k in drop_keys:
-            if k in rec:
-                rec.pop(k, None)
+        _decorate_projection_record(
+            rec,
+            gws=gws,
+            chip_strategy=chip_strategy,
+            objective_score_col=objective_score_col,
+            optimize_event_id=optimize_event_id,
+        )
 
     return starting_records, bench_records
 
@@ -1007,6 +1152,142 @@ def _build_strategy_recommendation(
     }
 
 
+def _build_scoring_guide(optimize_event_id, chip_strategy="none", objective_score_col=None):
+    """Explain the main scoring fields in plain language."""
+    optimize_event_id = _safe_int(optimize_event_id)
+    guide = {
+        "headline": "Scores in this app are projected points, not actual FPL points already earned.",
+        "bullets": [],
+        "objective_score_col": objective_score_col,
+    }
+    if optimize_event_id:
+        guide["bullets"].append(f"`xpts_gw{int(optimize_event_id)}` estimates points for GW{int(optimize_event_id)}.")
+    guide["bullets"].append("`xpts_horizon` is the sum of projected xPts across the selected planning window.")
+    if chip_strategy == "wildcard":
+        guide["bullets"].append(
+            "`wildcard_score` is a planning score for squad building: weighted future xPts plus bonuses for future doubles and premium captaincy cover."
+        )
+    else:
+        guide["bullets"].append("Lineup selection still uses the selected gameweek xPts for the XI, captain, and bench order.")
+    return guide
+
+
+def _build_squad_insights(starting_records, bench_records, optimize_event_id, chip_strategy="none", chip_profile=None):
+    """Build quick bullet-point squad insights and player flags."""
+    optimize_event_id = _safe_int(optimize_event_id)
+    records = list(starting_records or []) + list(bench_records or [])
+    summary_points = []
+    player_flags = []
+
+    availability_names = []
+    blank_now_names = []
+    future_blanks = {}
+    future_doubles = {}
+
+    for rec in records:
+        name = rec.get("web_name") or "Player"
+        for alert in list(rec.get("alerts") or []):
+            item = {
+                "severity": alert.get("severity") or "info",
+                "category": alert.get("category"),
+                "text": f"{name}: {alert.get('text')}",
+                "player_id": _safe_player_id(rec.get("player_id")),
+                "player_name": name,
+                "event_id": _safe_int(alert.get("event_id")),
+            }
+            player_flags.append(item)
+
+            category = str(alert.get("category") or "")
+            event_id = _safe_int(alert.get("event_id"))
+            if category == "availability":
+                availability_names.append(name)
+            elif category == "blank":
+                if event_id == optimize_event_id:
+                    blank_now_names.append(name)
+                elif event_id:
+                    future_blanks.setdefault(int(event_id), []).append(name)
+            elif category == "double" and event_id:
+                future_doubles.setdefault(int(event_id), []).append(name)
+
+    if availability_names:
+        unique_names = list(dict.fromkeys(availability_names))
+        summary_points.append(
+            {
+                "severity": "high",
+                "category": "availability",
+                "text": f"Availability risk to review: {', '.join(unique_names[:3])}" + ("." if len(unique_names) <= 3 else ", ..."),
+            }
+        )
+
+    if blank_now_names:
+        unique_names = list(dict.fromkeys(blank_now_names))
+        summary_points.append(
+            {
+                "severity": "high",
+                "category": "blank",
+                "event_id": optimize_event_id,
+                "text": f"Blank in GW{int(optimize_event_id)} for {', '.join(unique_names[:3])}" + ("." if len(unique_names) <= 3 else ", ..."),
+            }
+        )
+
+    for event_id in sorted(future_blanks.keys())[:2]:
+        names = list(dict.fromkeys(future_blanks[event_id]))
+        summary_points.append(
+            {
+                "severity": "medium",
+                "category": "blank",
+                "event_id": int(event_id),
+                "text": f"Blank risk ahead in GW{int(event_id)} for {len(names)} squad players.",
+            }
+        )
+
+    for event_id in sorted(future_doubles.keys())[:2]:
+        names = list(dict.fromkeys(future_doubles[event_id]))
+        summary_points.append(
+            {
+                "severity": "info",
+                "category": "double",
+                "event_id": int(event_id),
+                "text": f"Double gameweek upside in GW{int(event_id)} for {len(names)} squad players.",
+            }
+        )
+
+    bench_xpts = sum(float(_safe_float(r.get("xpts"), default=0.0) or 0.0) for r in (bench_records or []))
+    if chip_strategy == "wildcard":
+        summary_points.append(
+            {
+                "severity": "info",
+                "category": "chip",
+                "text": f"Wildcard bench projects {_round_float(bench_xpts, 1, 0.0)} xPts for the selected week.",
+            }
+        )
+        if isinstance(chip_profile, dict) and chip_profile.get("future_double_players"):
+            summary_points.append(
+                {
+                    "severity": "info",
+                    "category": "chip",
+                    "text": f"Wildcard draft already carries {int(chip_profile.get('future_double_players') or 0)} players with later doubles in the planning window.",
+                }
+            )
+
+    if not summary_points:
+        summary_points.append(
+            {
+                "severity": "info",
+                "category": "stable",
+                "text": "No major squad warning flags detected in the selected planning window.",
+            }
+        )
+
+    severity_rank = {"high": 0, "medium": 1, "info": 2, "low": 3}
+    summary_points = sorted(summary_points, key=lambda item: severity_rank.get(str(item.get("severity")), 9))[:6]
+    player_flags = sorted(player_flags, key=lambda item: severity_rank.get(str(item.get("severity")), 9))[:12]
+    return {
+        "summary_points": summary_points,
+        "player_flags": player_flags,
+    }
+
+
 def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
     """Load and normalize bootstrap, fixtures, elements, and squad for an entry."""
     notes = []
@@ -1158,6 +1439,7 @@ def build_recommendations(payload):
     squad_event_id_raw = payload.get("squad_event_id")
     horizon_gws_raw = payload.get("horizon_gws", 3)
     chip_horizon_gws_raw = payload.get("chip_horizon_gws")
+    chip_play_event_id_raw = payload.get("chip_play_event_id")
     chip_strategy_raw = payload.get("chip_strategy")
     chip_strategy = _normalize_chip_strategy(chip_strategy_raw)
     latest_n_matches_raw = payload.get("latest_n_matches", getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3))
@@ -1181,6 +1463,7 @@ def build_recommendations(payload):
     entry_id = ctx["entry_id"]
     squad_event_id = ctx["squad_event_id"]
     max_event_id = ctx["max_event_id"]
+    next_event_id = _event_id(ctx["bootstrap"], "is_next")
 
     explicit_optimize_event = optimize_event_id_raw is not None and str(optimize_event_id_raw).strip() != ""
     optimize_event_id = _safe_int(optimize_event_id_raw)
@@ -1199,25 +1482,53 @@ def build_recommendations(payload):
         notes.append(f"event_id > {int(max_event_id)}; clamped to {int(max_event_id)}.")
         optimize_event_id = int(max_event_id)
 
-    chosen_horizon_raw = horizon_gws_raw
-    if chip_strategy == "wildcard":
-        if chip_horizon_gws_raw is not None and str(chip_horizon_gws_raw).strip() != "":
-            chosen_horizon_raw = chip_horizon_gws_raw
-        elif horizon_gws_raw is None or str(horizon_gws_raw).strip() == "":
-            chosen_horizon_raw = int(getattr(config, "CHIP_WILDCARD_DEFAULT_HORIZON_GWS", 5) or 5)
-            notes.append(f"wildcard horizon defaulted to {int(chosen_horizon_raw)} GWs.")
-
-    horizon_gws = _safe_int(chosen_horizon_raw)
-    if horizon_gws is None:
+    display_horizon_gws = _safe_int(horizon_gws_raw)
+    if display_horizon_gws is None:
         notes.append("Invalid horizon_gws; using 3.")
-        horizon_gws = 3
-    horizon_gws = max(1, min(8, int(horizon_gws)))
-    remaining = int(max_event_id) - int(optimize_event_id) + 1
-    if remaining < 1:
-        remaining = 1
-    if int(horizon_gws) > int(remaining):
-        notes.append(f"horizon_gws trimmed to {int(remaining)} (season end).")
-        horizon_gws = int(remaining)
+        display_horizon_gws = 3
+    display_horizon_gws = max(1, min(8, int(display_horizon_gws)))
+    display_remaining = max(1, int(max_event_id) - int(optimize_event_id) + 1)
+    if int(display_horizon_gws) > int(display_remaining):
+        notes.append(f"horizon_gws trimmed to {int(display_remaining)} (season end).")
+        display_horizon_gws = int(display_remaining)
+
+    wildcard_play_event_id = None
+    if chip_strategy == "wildcard":
+        wildcard_play_event_id = _safe_int(chip_play_event_id_raw)
+        if chip_play_event_id_raw is not None and str(chip_play_event_id_raw).strip() != "" and wildcard_play_event_id is None:
+            notes.append("Invalid chip_play_event_id; using next playable GW.")
+        if wildcard_play_event_id is None:
+            wildcard_play_event_id = int(next_event_id or optimize_event_id)
+        wildcard_play_event_id = max(1, min(int(max_event_id), int(wildcard_play_event_id)))
+        if next_event_id:
+            wildcard_play_event_id = max(int(next_event_id), int(wildcard_play_event_id))
+        if int(optimize_event_id) > int(wildcard_play_event_id):
+            notes.append(
+                f"Wildcard squad is anchored at GW{int(wildcard_play_event_id)} and propagated forward to GW{int(optimize_event_id)}."
+            )
+
+    if chip_strategy == "wildcard":
+        chip_build_horizon_gws = _safe_int(chip_horizon_gws_raw)
+        if chip_build_horizon_gws is None:
+            chip_build_horizon_gws = int(getattr(config, "CHIP_WILDCARD_DEFAULT_HORIZON_GWS", 5) or 5)
+            if chip_horizon_gws_raw is None or str(chip_horizon_gws_raw).strip() == "":
+                notes.append(f"wildcard build horizon defaulted to {int(chip_build_horizon_gws)} GWs.")
+            else:
+                notes.append(f"Invalid chip_horizon_gws; using {int(chip_build_horizon_gws)}.")
+    elif chip_strategy == "free_hit":
+        chip_build_horizon_gws = 1
+    else:
+        chip_build_horizon_gws = int(display_horizon_gws)
+
+    chip_build_horizon_gws = max(1, min(8, int(chip_build_horizon_gws)))
+    chip_build_start_event_id = int(wildcard_play_event_id or optimize_event_id)
+    chip_build_remaining = max(1, int(max_event_id) - int(chip_build_start_event_id) + 1)
+    if int(chip_build_horizon_gws) > int(chip_build_remaining):
+        notes.append(f"chip_horizon_gws trimmed to {int(chip_build_remaining)} (season end).")
+        chip_build_horizon_gws = int(chip_build_remaining)
+
+    wildcard_is_active = chip_strategy == "wildcard" and int(optimize_event_id) >= int(wildcard_play_event_id or optimize_event_id)
+    chip_is_active = chip_strategy == "free_hit" or wildcard_is_active
 
     latest_n_matches = _safe_int(latest_n_matches_raw)
     if latest_n_matches is None:
@@ -1234,21 +1545,32 @@ def build_recommendations(payload):
     teams_code = ctx["teams_code"]
     squad_df = ctx["squad_df"]
 
+    projection_start_event_id = int(optimize_event_id)
+    if wildcard_is_active:
+        projection_start_event_id = min(int(optimize_event_id), int(wildcard_play_event_id))
+    projection_end_event_id = int(optimize_event_id) + int(display_horizon_gws) - 1
+    if wildcard_is_active:
+        projection_end_event_id = max(
+            int(projection_end_event_id),
+            int(wildcard_play_event_id) + int(chip_build_horizon_gws) - 1,
+        )
+    projection_horizon_gws = max(1, int(projection_end_event_id) - int(projection_start_event_id) + 1)
+
     ts = time.perf_counter()
     try:
         proj_all = projections.project_elements_next_gws(
             elements=elements,
             fixtures=fixtures,
             teams_short_map=teams_short,
-            gw_start=optimize_event_id,
-            horizon_gws=horizon_gws,
+            gw_start=projection_start_event_id,
+            horizon_gws=projection_horizon_gws,
             latest_n_matches=latest_n_matches,
         )
-        if chip_strategy == "wildcard":
+        if wildcard_is_active:
             proj_all = projections.add_wildcard_scores(
                 projections_df=proj_all,
-                gw_start=optimize_event_id,
-                horizon_gws=horizon_gws,
+                gw_start=wildcard_play_event_id,
+                horizon_gws=chip_build_horizon_gws,
             )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Projection failed: {e}")
@@ -1258,9 +1580,11 @@ def build_recommendations(payload):
     lineup_squad_df = squad_df
     chip_info = {
         "selected": chip_strategy,
-        "is_active": chip_strategy in ("wildcard", "free_hit"),
+        "is_active": chip_is_active,
         "objective_score_col": None,
-        "objective_horizon_gws": int(horizon_gws),
+        "objective_horizon_gws": int(chip_build_horizon_gws),
+        "play_event_id": int(wildcard_play_event_id) if wildcard_play_event_id is not None else None,
+        "propagates_to_future_gws": bool(chip_strategy == "wildcard"),
         "budget_m": None,
         "squad_cost_m": None,
         "remaining_budget_m": None,
@@ -1271,9 +1595,9 @@ def build_recommendations(payload):
         "reason": "No chip strategy applied.",
     }
 
-    if chip_strategy in ("wildcard", "free_hit"):
+    if chip_is_active:
         chip_objective_col = "wildcard_score" if chip_strategy == "wildcard" else score_col
-        chip_objective_horizon = int(horizon_gws) if chip_strategy == "wildcard" else 1
+        chip_objective_horizon = int(chip_build_horizon_gws) if chip_strategy == "wildcard" else 1
         ts = time.perf_counter()
         budget_m = _estimate_squad_budget_m(
             squad_df=squad_df,
@@ -1295,6 +1619,8 @@ def build_recommendations(payload):
                 "is_active": True,
                 "objective_score_col": chip_objective_col,
                 "objective_horizon_gws": int(chip_objective_horizon),
+                "play_event_id": int(wildcard_play_event_id) if wildcard_play_event_id is not None else None,
+                "propagates_to_future_gws": bool(chip_strategy == "wildcard"),
                 "budget_m": chip_build.get("budget_m"),
                 "squad_cost_m": chip_build.get("squad_cost_m"),
                 "remaining_budget_m": chip_build.get("remaining_budget_m"),
@@ -1315,6 +1641,8 @@ def build_recommendations(payload):
                 "is_active": True,
                 "objective_score_col": chip_objective_col,
                 "objective_horizon_gws": int(chip_objective_horizon),
+                "play_event_id": int(wildcard_play_event_id) if wildcard_play_event_id is not None else None,
+                "propagates_to_future_gws": bool(chip_strategy == "wildcard"),
                 "budget_m": budget_m,
                 "squad_cost_m": None,
                 "remaining_budget_m": None,
@@ -1324,6 +1652,8 @@ def build_recommendations(payload):
                 "profile": None,
                 "reason": chip_build.get("reason"),
             }
+    elif chip_strategy == "wildcard" and wildcard_play_event_id is not None:
+        chip_info["reason"] = f"Wildcard is planned from GW{int(wildcard_play_event_id)} and is not yet active for GW{int(optimize_event_id)}."
 
     ts = time.perf_counter()
     try:
@@ -1334,7 +1664,10 @@ def build_recommendations(payload):
         raise HTTPException(status_code=500, detail="Could not optimize lineup for this squad.")
     timings["optimize_base_ms"] = _elapsed_ms(ts)
 
-    gws = [int(optimize_event_id) + i for i in range(int(horizon_gws))]
+    gws = [int(optimize_event_id) + i for i in range(int(display_horizon_gws))]
+    chip_profile_gws = gws
+    if wildcard_is_active:
+        chip_profile_gws = [int(wildcard_play_event_id) + i for i in range(int(chip_build_horizon_gws))]
     ts = time.perf_counter()
     starting_records, bench_records = _pack_lineup_records(
         starting_df=res["starting_xi"],
@@ -1343,6 +1676,9 @@ def build_recommendations(payload):
         proj_all=proj_all,
         gws=gws,
         teams_code=teams_code,
+        chip_strategy=chip_strategy if chip_info.get("is_active") else "none",
+        objective_score_col=chip_info.get("objective_score_col"),
+        optimize_event_id=optimize_event_id,
     )
     timings["pack_base_lineup_ms"] = _elapsed_ms(ts)
 
@@ -1357,6 +1693,9 @@ def build_recommendations(payload):
         owned_ids=owned_ids,
         limit_per_pos=panel_limit,
         ranking_col=chip_info.get("objective_score_col") if chip_info.get("is_active") else "xpts_horizon",
+        chip_strategy=chip_strategy if chip_info.get("is_active") else "none",
+        objective_score_col=chip_info.get("objective_score_col"),
+        optimize_event_id=optimize_event_id,
     )
     timings["position_panels_ms"] = _elapsed_ms(ts)
 
@@ -1365,7 +1704,7 @@ def build_recommendations(payload):
             chip_strategy=chip_strategy,
             squad_df=lineup_squad_df,
             proj_all=proj_all,
-            gws=gws,
+            gws=chip_profile_gws,
         )
         chip_info["profile"] = chip_profile
         chip_info["explanation"] = chip_profile.get("summary") if isinstance(chip_profile, dict) else None
@@ -1374,7 +1713,7 @@ def build_recommendations(payload):
         "entry_id": int(entry_id),
         "squad_event_id": int(squad_event_id),
         "event_id": int(optimize_event_id),
-        "horizon_gws": int(horizon_gws),
+        "horizon_gws": int(display_horizon_gws),
         "gws": gws,
         "notes": notes,
         "formation": list(res["formation"]),
@@ -1387,6 +1726,11 @@ def build_recommendations(payload):
         "active_chip": ctx.get("myteam", {}).get("active_chip"),
         "squad_source": "chip_draft" if chip_info.get("is_active") else "entry_picks",
         "chip_strategy": chip_info,
+        "scoring_guide": _build_scoring_guide(
+            optimize_event_id=optimize_event_id,
+            chip_strategy=chip_strategy if chip_info.get("is_active") else "none",
+            objective_score_col=chip_info.get("objective_score_col"),
+        ),
     }
 
     free_transfers_value = _safe_int(free_transfers)
@@ -1398,7 +1742,7 @@ def build_recommendations(payload):
             "note": f"Transfers planner skipped when chip strategy `{chip_strategy}` is active.",
             "transfer_plan": {
                 "free_transfers": int(free_transfers_value),
-                "horizon_gws": int(horizon_gws),
+                "horizon_gws": int(display_horizon_gws),
                 "hit_cap": int(_safe_int(hit_cap) or 0),
                 "transfer_count_target": 0,
                 "transfer_count_built": 0,
@@ -1416,7 +1760,7 @@ def build_recommendations(payload):
             free_transfers=free_transfers_value,
             hit_cap=_safe_int(hit_cap) or 0,
             score_col="xpts_horizon",
-            horizon_gws=int(horizon_gws),
+            horizon_gws=int(display_horizon_gws),
         )
     timings["transfer_preview_ms"] = _elapsed_ms(ts)
     if include_transfers:
@@ -1490,11 +1834,18 @@ def build_recommendations(payload):
         bench_records=bench_records,
         captain_player_id=res.get("captain_player_id"),
         vice_player_id=res.get("vice_player_id"),
-        horizon_gws=horizon_gws,
+        horizon_gws=display_horizon_gws,
         free_transfers=free_transfers_value,
         transfer_preview=transfer_preview,
         active_chip=ctx.get("myteam", {}).get("active_chip"),
-        selected_chip_strategy=chip_strategy,
+        selected_chip_strategy=chip_strategy if chip_info.get("is_active") else "none",
+    )
+    out["squad_insights"] = _build_squad_insights(
+        starting_records=starting_records,
+        bench_records=bench_records,
+        optimize_event_id=optimize_event_id,
+        chip_strategy=chip_strategy if chip_info.get("is_active") else "none",
+        chip_profile=chip_info.get("profile"),
     )
 
     timings["total_ms"] = _elapsed_ms(total_start)
@@ -1504,7 +1855,7 @@ def build_recommendations(payload):
         int(entry_id),
         int(squad_event_id),
         int(optimize_event_id),
-        int(horizon_gws),
+        int(display_horizon_gws),
         chip_strategy,
         timings,
     )
@@ -1648,6 +1999,7 @@ def recommendations_get(
     squad_event_id=None,
     horizon_gws=3,
     chip_horizon_gws=None,
+    chip_play_event_id=None,
     chip_strategy="none",
     latest_n_matches=3,
     include_transfers=False,
@@ -1670,6 +2022,7 @@ def recommendations_get(
         "squad_event_id": squad_event_id,
         "horizon_gws": horizon_gws,
         "chip_horizon_gws": chip_horizon_gws,
+        "chip_play_event_id": chip_play_event_id,
         "chip_strategy": chip_strategy,
         "latest_n_matches": latest_n_matches,
         "include_transfers": include_transfers,
