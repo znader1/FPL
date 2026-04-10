@@ -5,10 +5,13 @@
 - **Frontend**: Lovable-hosted website
 - **Backend**: this repo (`FastAPI`) on Azure (always-on)
 - **Scheduler**: GitHub Action every 6h calling `POST /admin/refresh`
+- **Player history storage**: Azure Files mounted into Container Apps
+- **History refresh job**: scheduled run of `python3 -m src.season_history` writing into the mounted share
 
 This gives:
 - stable URL for Lovable
 - auto refresh of FPL cache/snapshots
+- persistent player history across revisions/restarts
 - no dependency on your local terminal
 
 ## 2) Required backend env vars
@@ -22,6 +25,7 @@ Set these in Azure app settings:
 - `BOOTSTRAP_TTL=300`
 - `FIXTURES_TTL=300`
 - `FPL_SNAPSHOT_OUT_BASE=data/processed`
+- `FPL_PLAYER_HISTORY_BASE_DIR=/mnt/fpl-history/processed/fpl`
 
 ## 3) Deploy with Docker
 
@@ -78,7 +82,15 @@ If you want to avoid query `api_key`, pass `X-API-Key` from your frontend proxy 
 - `GET /recommendations`
 - `POST /admin/refresh` (admin key required)
 
-## 7) Product defaults to keep UX stable
+## 7) Recommended production history setup
+
+- Mount an Azure Files share into the Container App, for example at `/mnt/fpl-history`
+- Point `FPL_PLAYER_HISTORY_BASE_DIR` to `/mnt/fpl-history/processed/fpl`
+- Run `python3 -m src.season_history --out-dir /mnt/fpl-history/processed/fpl --raw-dir /mnt/fpl-history/raw/fpl`
+- Do not rely on Git for `data/` because this repo ignores generated CSV/JSON/parquet files
+- Do not rely on `POST /admin/refresh` for player-history refresh; it refreshes caches/snapshots, not `player_gw_history`
+
+## 8) Product defaults to keep UX stable
 
 - Default `event_id` to next GW (already in backend logic)
 - Show `notes[]` from API to explain fallback behavior

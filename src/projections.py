@@ -1,3 +1,5 @@
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -15,6 +17,11 @@ DIFFICULTY_MULTIPLIER = {
 
 
 _PLAYER_GW_HISTORY_CACHE = {"path": None, "mtime": None, "data": None}
+
+
+def resolve_history_base_dir(base_dir=None):
+    """Resolve player-history directory from explicit arg or environment."""
+    return str(base_dir or os.environ.get("FPL_PLAYER_HISTORY_BASE_DIR") or "data/processed/fpl")
 
 
 def clamp(value, low, high):
@@ -157,7 +164,7 @@ def team_recent_ppg_map(fixtures, gw_start, latest_n_matches=config.PROJ_DEFAULT
 
 def load_latest_player_gw_history(path=None, base_dir="data/processed/fpl"):
     """Load and cache the latest player-by-GW history file when available."""
-    selected_path = str(path or find_latest_gw_history(base_dir=base_dir) or "")
+    selected_path = str(path or find_latest_gw_history(base_dir=resolve_history_base_dir(base_dir)) or "")
     if not selected_path:
         return None
 
@@ -203,7 +210,7 @@ def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/
     Build recent player-by-GW averages before `gw_start`.
     Uses GW-level rows so missed/zero-minute weeks count when present.
     """
-    hist = history_df if history_df is not None else load_latest_player_gw_history(base_dir=base_dir)
+    hist = history_df if history_df is not None else load_latest_player_gw_history(base_dir=resolve_history_base_dir(base_dir))
     if hist is None or hist.empty:
         return pd.DataFrame()
 
@@ -577,13 +584,60 @@ def _spearman_rank_corr(a, b):
 
 def find_latest_gw_history(base_dir="data/processed/fpl"):
     """Return latest `player_gw_history_*.csv` file path under base_dir."""
-    base = Path(base_dir)
+    base = Path(resolve_history_base_dir(base_dir))
     if not base.exists():
         return None
     paths = list(base.glob("*/player_gw_history_*.csv"))
     if not paths:
         return None
     return str(max(paths, key=lambda p: p.stat().st_mtime))
+
+
+def latest_player_gw_history_info(path=None, base_dir="data/processed/fpl"):
+    """Return metadata about the latest available player history CSV."""
+    resolved_base = resolve_history_base_dir(base_dir)
+    selected_path = str(path or find_latest_gw_history(base_dir=resolved_base) or "")
+    if not selected_path:
+        return {
+            "source": "fallback",
+            "base_dir": resolved_base,
+            "path": None,
+            "max_gw": None,
+            "updated_at_utc": None,
+            "season": None,
+        }
+
+    fp = Path(selected_path)
+    if not fp.exists():
+        return {
+            "source": "fallback",
+            "base_dir": resolved_base,
+            "path": selected_path,
+            "max_gw": None,
+            "updated_at_utc": None,
+            "season": None,
+        }
+
+    max_gw = None
+    try:
+        hist = load_latest_player_gw_history(path=selected_path, base_dir=resolved_base)
+        if hist is not None and not hist.empty and "gw" in hist.columns:
+            vals = pd.to_numeric(hist["gw"], errors="coerce").dropna()
+            if not vals.empty:
+                max_gw = int(vals.max())
+    except Exception:
+        max_gw = None
+
+    updated_at_utc = datetime.fromtimestamp(fp.stat().st_mtime, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    season = fp.parent.name if fp.parent.name else None
+    return {
+        "source": "csv",
+        "base_dir": resolved_base,
+        "path": str(fp),
+        "max_gw": max_gw,
+        "updated_at_utc": updated_at_utc,
+        "season": season,
+    }
 
 
 def evaluate_xpts_history(history_df, window=3, min_gw=2, topk=25):
@@ -696,7 +750,7 @@ def evaluate_xpts_history(history_df, window=3, min_gw=2, topk=25):
 
 def evaluate_xpts_history_file(path=None, base_dir="data/processed/fpl", window=3, min_gw=2, topk=25):
     """Load history CSV and run xPts-vs-actual evaluation metrics."""
-    selected_path = path or find_latest_gw_history(base_dir=base_dir)
+    selected_path = path or find_latest_gw_history(base_dir=resolve_history_base_dir(base_dir))
     if not selected_path:
         return {"ok": False, "error": "No player_gw_history CSV found.", "input_path": None}
 

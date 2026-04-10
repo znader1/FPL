@@ -1611,6 +1611,13 @@ def build_recommendations(payload):
     teams_short = ctx["teams_short"]
     teams_code = ctx["teams_code"]
     squad_df = ctx["squad_df"]
+    history_context = projections.latest_player_gw_history_info()
+    if history_context.get("source") == "csv" and history_context.get("max_gw") is not None:
+        notes.append(
+            f"Player history source: CSV ({history_context.get('season') or 'season'}), latest GW on file {int(history_context.get('max_gw'))}."
+        )
+    else:
+        notes.append("Player history source: fallback live FPL fields (no player_gw_history CSV available).")
 
     projection_start_event_id = int(optimize_event_id)
     if wildcard_is_active:
@@ -1804,6 +1811,7 @@ def build_recommendations(payload):
         "active_chip": ctx.get("myteam", {}).get("active_chip"),
         "squad_source": "chip_draft" if chip_info.get("is_active") else "entry_picks",
         "chip_strategy": chip_info,
+        "history_context": history_context,
         "scoring_guide": _build_scoring_guide(
             optimize_event_id=optimize_event_id,
             chip_strategy=chip_strategy if chip_info.get("is_active") else "none",
