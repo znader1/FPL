@@ -240,6 +240,17 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
     if not myteam or not used_event_id:
         raise HTTPException(status_code=502, detail=f"Failed to fetch entry picks. Last error: {last_err}")
 
+    # Free hit picks are temporary — the real permanent squad is from the GW before.
+    # If no explicit event was requested and the fetched GW used free hit, step back one GW.
+    if not explicit_squad_event and myteam.get("active_chip") == "freehit" and used_event_id > 1:
+        try:
+            prev_team = fpl_client.get_entry_picks(entry_id, used_event_id - 1)
+            notes.append(f"Free hit active in GW{used_event_id}; using permanent squad from GW{used_event_id - 1}.")
+            myteam = prev_team
+            used_event_id = used_event_id - 1
+        except Exception:
+            notes.append(f"Free hit active in GW{used_event_id}; could not fetch GW{used_event_id - 1}, using free hit squad.")
+
     if explicit_squad_event and requested_squad_event_id and int(used_event_id) != int(requested_squad_event_id):
         notes.append(f"squad_event_id {int(requested_squad_event_id)} not available; used {int(used_event_id)}.")
 
@@ -525,15 +536,23 @@ def build_recommendations(payload):
             if chip_strategy == "wildcard"
             else 0
         )
-        chip_build = optimizer.build_chip_squad(
-            elements_all=proj_all,
-            score_col=chip_objective_col,
-            budget_m=budget_m,
-            max_per_team=int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3),
-            min_premium_attackers=min_premium_attackers,
-            premium_floor=premium_floor,
-            premium_positions=premium_positions,
-        )
+        if chip_strategy == "free_hit":
+            chip_build = optimizer.build_free_hit_squad(
+                elements_all=proj_all,
+                score_col=chip_objective_col,
+                budget_m=budget_m,
+                max_per_team=int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3),
+            )
+        else:
+            chip_build = optimizer.build_chip_squad(
+                elements_all=proj_all,
+                score_col=chip_objective_col,
+                budget_m=budget_m,
+                max_per_team=int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3),
+                min_premium_attackers=min_premium_attackers,
+                premium_floor=premium_floor,
+                premium_positions=premium_positions,
+            )
         timings["chip_draft_ms"] = elapsed_ms(ts)
 
         if chip_build.get("ok"):

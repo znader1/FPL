@@ -380,6 +380,7 @@ def project_elements_next_gws(
     gws = [gw_start + i for i in range(horizon_gws)]
 
     df = elements.copy()
+    df = df.loc[:, ~df.columns.duplicated()]
     latest_n_matches = max(
         config.PROJ_LATEST_N_MIN,
         min(config.PROJ_LATEST_N_MAX, int(latest_n_matches or config.PROJ_DEFAULT_LATEST_N_MATCHES)),
@@ -405,6 +406,7 @@ def project_elements_next_gws(
                 recent_history_max_gw = int(non_null_hist_gw.max())
         df = df.merge(recent_gw, left_on="id", right_on="player_id", how="left")
         df = df.drop(columns=["player_id"], errors="ignore")
+        df = df.loc[:, ~df.columns.duplicated()]
     else:
         df["recent_gw_avg_points"] = pd.NA
         df["recent_gw_avg_fixture_count"] = pd.NA
@@ -475,10 +477,30 @@ def project_elements_next_gws(
             else 1.0
         )
 
-        base = base_gw0 if i == 0 else blended_base
-        xpts = base * fixture_count * diff_mult * home_away_mult * opp_form_mult * team_form_mult
+        dgw_discount = float(getattr(config, "PROJ_DGW_EXTRA_FIXTURE_DISCOUNT", 0.65))
+        extra_fixtures = (fixture_count - 1.0).clip(lower=0.0)
+        effective_fixtures = fixture_count.clip(upper=1.0) + extra_fixtures * dgw_discount
+        effective_fixtures = effective_fixtures.where(fixture_count > 0, 0.0)
+
         if i == 0:
+            # GW1: ep_next from FPL already bakes in fixture count (DGW-aware).
+            # For players where ep_next is available, treat base_gw0 as a per-GW total
+            # and only apply difficulty/home/form context multipliers, not fixture scaling.
+            has_ep = ep_next.notna()
+            xpts_with_ep = base_gw0 * diff_mult * home_away_mult * opp_form_mult * team_form_mult
+            xpts_no_ep = blended_base * effective_fixtures * diff_mult * home_away_mult * opp_form_mult * team_form_mult
+            xpts = xpts_with_ep.where(has_ep, xpts_no_ep)
+            # Zero out blanks for non-ep players
+            xpts = xpts.where(has_ep | (fixture_count > 0), 0.0)
             xpts = xpts * play_prob
+        else:
+            base = blended_base
+            xpts = base * effective_fixtures * diff_mult * home_away_mult * opp_form_mult * team_form_mult
+            if i <= 2:
+                # Partial injury discount for next 2 GWs (availability often resolves).
+                injury_fade = float(getattr(config, "PROJ_INJURY_FUTURE_GW_FADE", 0.5))
+                future_play_prob = 1.0 - (1.0 - play_prob) * injury_fade
+                xpts = xpts * future_play_prob
 
         df[f"fixtures_gw{gw}"] = ann["gw_fixtures"].fillna("")
         df[f"fixture_count_gw{gw}"] = fixture_count.astype(int)

@@ -209,7 +209,7 @@ def build_position_panels(
         for c in [f"xpts_gw{gw}", f"fixtures_gw{gw}", f"fixture_count_gw{gw}", f"diff_avg_gw{gw}"]:
             if c in proj_all.columns:
                 gw_cols.append(c)
-    keep_cols = [c for c in base_cols + gw_cols if c in proj_all.columns]
+    keep_cols = list(dict.fromkeys(c for c in base_cols + gw_cols if c in proj_all.columns))
 
     pool = proj_all[keep_cols].copy().rename(columns={"id": "player_id"})
     pool = pool.sort_values(ranking_col, ascending=False)

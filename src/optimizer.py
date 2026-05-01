@@ -384,6 +384,162 @@ def _ensure_min_premium_attackers(
     return out, final_ok
 
 
+def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
+    """
+    Build a legal free-hit 15-man squad optimised for a single gameweek.
+
+    Strategy:
+    - Starting XI: pick the best 11 players by xPts across all valid formations,
+      concentrating budget on high-scoring starters (premiums welcome).
+    - Bench (4 slots): fill with the cheapest legal players in the required
+      positions (1 GKP + remaining outfield to complete the shape), keeping
+      budget available for the XI.
+
+    This reflects real free-hit usage: the bench only exists to satisfy the
+    squad rules, not to score points.
+    """
+    max_per_team = int(max_per_team or getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3)
+    budget_m = float(to_number(budget_m, 100.0))
+
+    market = _prepare_chip_market(
+        elements_all,
+        score_col=score_col,
+        shape={"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3},
+    )
+    if market.empty:
+        return {"ok": False, "reason": f"Market missing columns or score `{score_col}`.", "squad_df": None}
+
+    # --- Step 1: pick bench fillers first (cheapest per position) ---
+    # Bench shape: 1 GKP + enough outfield to complete the 15.
+    # We defer deciding the exact outfield bench split until after picking the XI.
+    # Cheapest available GKP for bench slot.
+    gkp_pool = market[market["pos"] == "GKP"].sort_values("price_m", ascending=True)
+    if len(gkp_pool) < 2:
+        return {"ok": False, "reason": "Not enough GKPs in market.", "squad_df": None}
+
+    bench_gkp = gkp_pool.iloc[[0]]  # cheapest GKP
+    xi_gkp = gkp_pool.iloc[[1]]     # second GKP goes to XI
+
+    # --- Step 2: pick best XI across all valid formations ---
+    best_xi = None
+    best_xi_score = -1.0
+    best_formation = None
+
+    # Outfield pool excludes both GKPs already assigned
+    used_ids = set(bench_gkp["id"].astype(int).tolist() + xi_gkp["id"].astype(int).tolist())
+
+    for d, m, f in VALID_FORMATIONS:
+        # Need d DEF + m MID + f FWD in XI, then bench = (5-d) DEF + (5-m) MID + (3-f) FWD
+        bench_d, bench_m, bench_f = 5 - d, 5 - m, 3 - f
+
+        # Pick bench outfielders (cheapest) first to know budget left for XI
+        bench_outfield = []
+        team_counts_bench = _team_counts(bench_gkp)
+        ok = True
+        for pos, need in [("DEF", bench_d), ("MID", bench_m), ("FWD", bench_f)]:
+            pool = market[
+                (market["pos"] == pos)
+                & (~market["id"].astype(int).isin(used_ids | {r["id"] for r in bench_outfield}))
+            ].sort_values("price_m", ascending=True)
+            picked = []
+            for _, row in pool.iterrows():
+                t = int(row["team"])
+                if team_counts_bench.get(t, 0) < max_per_team:
+                    picked.append(row)
+                    team_counts_bench[t] = team_counts_bench.get(t, 0) + 1
+                if len(picked) == need:
+                    break
+            if len(picked) < need:
+                ok = False
+                break
+            bench_outfield.extend(picked)
+
+        if not ok:
+            continue
+
+        bench_cost = (
+            float(bench_gkp["price_m"].sum())
+            + sum(float(r["price_m"]) for r in bench_outfield)
+        )
+        xi_budget = budget_m - bench_cost
+        if xi_budget < 0:
+            continue
+
+        bench_ids = used_ids | {int(r["id"]) for r in bench_outfield}
+
+        # Pick XI outfielders (best by score within xi_budget)
+        xi_outfield = []
+        team_counts_xi = _team_counts(xi_gkp)
+        # Merge bench team counts since they share the same 15-man squad
+        for t, c in team_counts_bench.items():
+            team_counts_xi[t] = team_counts_xi.get(t, 0) + c
+
+        xi_ok = True
+        xi_cost = float(xi_gkp["price_m"].sum())
+        for pos, need in [("DEF", d), ("MID", m), ("FWD", f)]:
+            pool = market[
+                (market["pos"] == pos)
+                & (~market["id"].astype(int).isin(bench_ids | {int(r["id"]) for r in xi_outfield}))
+            ].sort_values("chip_score", ascending=False)
+            picked = []
+            for _, row in pool.iterrows():
+                t = int(row["team"])
+                cost_so_far = xi_cost + sum(float(r["price_m"]) for r in xi_outfield) + float(row["price_m"])
+                remaining_slots = (d + m + f) - len(xi_outfield) - 1
+                # rough budget check: leave min budget for remaining slots
+                if cost_so_far + remaining_slots * 4.0 > xi_budget:
+                    continue
+                if team_counts_xi.get(t, 0) < max_per_team:
+                    picked.append(row)
+                    team_counts_xi[t] = team_counts_xi.get(t, 0) + 1
+                if len(picked) == need:
+                    break
+            if len(picked) < need:
+                xi_ok = False
+                break
+            xi_outfield.extend(picked)
+
+        if not xi_ok:
+            continue
+
+        xi_score = float(xi_gkp["chip_score"].sum()) + sum(float(r["chip_score"]) for r in xi_outfield)
+        if xi_score > best_xi_score:
+            best_xi_score = xi_score
+            best_formation = (d, m, f)
+            best_xi = pd.concat(
+                [xi_gkp] + [pd.DataFrame([r]) for r in xi_outfield],
+                ignore_index=True,
+            )
+            best_bench = pd.concat(
+                [bench_gkp] + [pd.DataFrame([r]) for r in bench_outfield],
+                ignore_index=True,
+            )
+
+    if best_xi is None:
+        return {"ok": False, "reason": "Could not build a valid free-hit XI under budget.", "squad_df": None}
+
+    selected = pd.concat([best_xi, best_bench], ignore_index=True)
+    selected = selected.copy().reset_index(drop=True)
+    selected["player_id"] = selected["id"].astype(int)
+    selected["multiplier"] = 0
+    selected["is_captain"] = False
+    selected["is_vice_captain"] = False
+
+    cost = float(pd.to_numeric(selected["price_m"], errors="coerce").fillna(0.0).sum())
+    xi_score_total = float(pd.to_numeric(best_xi["chip_score"], errors="coerce").fillna(0.0).sum())
+
+    return {
+        "ok": True,
+        "reason": f"Free-hit draft built: {best_formation[0]}-{best_formation[1]}-{best_formation[2]} formation, XI xPts={round(xi_score_total, 1)}.",
+        "objective_score_col": score_col,
+        "budget_m": float(round(budget_m, 2)),
+        "squad_cost_m": float(round(cost, 2)),
+        "remaining_budget_m": float(round(max(0.0, budget_m - cost), 2)),
+        "objective_score_total": float(round(xi_score_total, 2)),
+        "squad_df": selected,
+    }
+
+
 def build_chip_squad(
     elements_all,
     score_col,
@@ -560,7 +716,12 @@ def optimize_lineup(squad_df, projections_df, score_col, formations=None):
         remaining = df[~df["player_id"].isin(starting["player_id"])].copy()
 
         start_sorted = starting.sort_values("xpts", ascending=False).reset_index(drop=True)
-        start_sorted["captain_score"] = start_sorted.apply(
+        captain_eligible = start_sorted[start_sorted["pos"].isin(["MID", "FWD"])].copy()
+        if captain_eligible.empty:
+            captain_eligible = start_sorted[start_sorted["pos"] != "GKP"].copy()
+        if captain_eligible.empty:
+            captain_eligible = start_sorted.copy()
+        captain_eligible["captain_score"] = captain_eligible.apply(
             lambda r: (
                 float(r["xpts"]) * float(CAPTAIN_POSITION_MULTIPLIER.get(r["pos"], 1.0))
                 + (
@@ -586,7 +747,7 @@ def optimize_lineup(squad_df, projections_df, score_col, formations=None):
             ),
             axis=1,
         )
-        captain_rank = start_sorted.sort_values(["captain_score", "xpts"], ascending=[False, False]).reset_index(drop=True)
+        captain_rank = captain_eligible.sort_values(["captain_score", "xpts"], ascending=[False, False]).reset_index(drop=True)
         captain_id = int(captain_rank.loc[0, "player_id"])
         vice_pool = captain_rank[captain_rank["player_id"] != captain_id].copy()
         vice_id = int(vice_pool.iloc[0]["player_id"]) if not vice_pool.empty else captain_id
