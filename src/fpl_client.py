@@ -181,6 +181,31 @@ def get_entry_picks(
     return r.json()
 
 
+def get_entry(entry_id, session=None):
+    s = session or new_session()
+    r = s.get(
+        f"https://fantasy.premierleague.com/api/entry/{int(entry_id)}/",
+        verify=_verify(), timeout=20,
+    )
+    if r.status_code == 403:
+        raise RuntimeError("403 /api/entry/ (blocked).")
+    r.raise_for_status()
+    return r.json()
+
+
+def get_classic_league_standings(league_id, page=1, session=None):
+    s = session or new_session()
+    r = s.get(
+        f"https://fantasy.premierleague.com/api/leagues-classic/{int(league_id)}/standings/",
+        params={"page_standings": int(page)},
+        verify=_verify(), timeout=20,
+    )
+    if r.status_code == 403:
+        raise RuntimeError("403 /api/leagues-classic (blocked).")
+    r.raise_for_status()
+    return r.json()
+
+
 def get_my_team(session, entry_id, event_id):
     """
     Backwards-compatible wrapper (older code called this 'my team').

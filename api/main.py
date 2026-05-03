@@ -3,13 +3,19 @@ import time
 import logging
 from datetime import datetime, timezone
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 import pandas as pd
 from fastapi import Body, FastAPI, Header, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src import config, fpl_client, fpl_refresh_next_gw, optimizer, projections, recommender, transforms
+from src import config, explainer, fpl_client, fpl_refresh_next_gw, league as league_mod, league_strategy, optimizer, projections, recommender, transforms
 from src.auth import check_api_key, check_admin_key
 from src.insights import (
     build_chip_profile,
@@ -935,6 +941,95 @@ def recommendations_post(
     if err:
         return err
     out = build_recommendations(payload)
+    return JSONResponse(content=jsonable_encoder(out))
+
+
+@app.get("/league/list")
+def league_list(
+    entry_id=None,
+    api_key=None, x_api_key=Header(None), authorization=Header(None),
+):
+    err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
+    if err:
+        return err
+    if entry_id is None:
+        raise HTTPException(status_code=400, detail="entry_id required")
+    leagues = league_mod.list_user_leagues(int(entry_id))
+    return JSONResponse(content=jsonable_encoder({"entry_id": int(entry_id), "leagues": leagues}))
+
+
+@app.post("/league/strategy")
+def league_strategy_post(
+    payload=Body(None),
+    api_key=None, x_api_key=Header(None), authorization=Header(None),
+):
+    payload = payload or {}
+    err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key or payload.get("api_key"))
+    if err:
+        return err
+
+    entry_id = payload.get("entry_id")
+    league_id = payload.get("league_id")
+    mode = payload.get("mode") or "chase"
+    if entry_id is None or league_id is None:
+        raise HTTPException(status_code=400, detail="entry_id and league_id required")
+
+    bootstrap = get_bootstrap_cached()
+    fixtures = get_fixtures_cached()
+    event_id = payload.get("event_id") or _default_picks_event_id(bootstrap)
+    horizon_gws = int(payload.get("horizon_gws") or 3)
+    latest_n_matches = int(payload.get("latest_n_matches") or 3)
+
+    elements_df, teams_df, _ = transforms.tables_from_bootstrap(bootstrap)
+    teams_short = teams_df.set_index("id")["short_name"].to_dict()
+    proj_df = None
+    proj_error = None
+    try:
+        proj_df = projections.project_elements_next_gws(
+            elements=elements_df,
+            fixtures=fixtures,
+            teams_short_map=teams_short,
+            gw_start=int(event_id),
+            horizon_gws=horizon_gws,
+            latest_n_matches=latest_n_matches,
+        )
+    except Exception as e:
+        proj_error = str(e)
+
+    out = league_strategy.build_strategy(
+        entry_id=int(entry_id),
+        league_id=int(league_id),
+        event_id=int(event_id),
+        mode=mode,
+        bootstrap=bootstrap,
+        projections_df=proj_df,
+        model=payload.get("model"),
+    )
+    if proj_error:
+        out["projection_error"] = proj_error
+    out["projection_horizon_gws"] = horizon_gws
+    return JSONResponse(content=jsonable_encoder(out))
+
+
+@app.post("/explain")
+def explain_post(
+    payload=Body(None),
+    api_key=None, x_api_key=Header(None), authorization=Header(None),
+):
+    payload = payload or {}
+    err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key or payload.get("api_key"))
+    if err:
+        return err
+
+    recs = payload.get("recommendations")
+    if not recs:
+        entry_id = payload.get("entry_id")
+        if entry_id is None:
+            raise HTTPException(status_code=400, detail="provide 'recommendations' or 'entry_id'")
+        rec_payload = {k: v for k, v in payload.items() if k != "recommendations"}
+        recs = build_recommendations(rec_payload)
+
+    out = explainer.explain(recs, model=payload.get("model"))
     return JSONResponse(content=jsonable_encoder(out))
 
 
