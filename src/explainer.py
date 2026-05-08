@@ -86,31 +86,29 @@ def _compact_context(recommendations):
 
 
 SYSTEM_PROMPT = (
-    "You are an FPL (Fantasy Premier League) assistant. "
-    "Given a deterministic optimizer's recommendation, write short, concrete narratives "
-    "explaining WHY each decision is good. Be specific: cite projected points, fixtures, or form. "
-    "Never invent numbers. If data is missing, omit that field. "
-    "Respond ONLY with valid JSON matching the schema the user provides."
+    "You are an FPL optimizer assistant. "
+    "Explain each decision in one short sentence using ONLY numbers from the input — "
+    "projected points, cost, form, fixtures. Never invent numbers. No filler. "
+    "Respond ONLY with valid JSON."
 )
 
 
-USER_TEMPLATE = """Here is the optimizer's output (compact form):
-
+USER_TEMPLATE = """Optimizer output:
 {context}
 
-Return JSON with this exact shape:
+Return JSON:
 {{
   "transfers": [
-    {{"out_id": <int|null>, "in_id": <int|null>, "rationale": "<1-2 sentences>"}}
+    {{"out_id": <int|null>, "in_id": <int|null>, "rationale": "<one sentence citing projected points or fixtures>"}}
   ],
-  "captain": {{"player_id": <int|null>, "rationale": "<1 sentence>"}},
-  "chip": {{"name": "<string|null>", "rationale": "<1 sentence|null>"}}
+  "captain": {{"player_id": <int|null>, "rationale": "<one sentence citing projected points>"}},
+  "chip": {{"name": "<string|null>", "rationale": "<one sentence|null>"}}
 }}
 
 Rules:
-- One entry in "transfers" per transfer in the input (skip if input has none — return []).
-- Each rationale: max 2 sentences, plain prose, no markdown.
-- If chip strategy is "none" or null, set chip to {{"name": null, "rationale": null}}.
+- One transfer entry per transfer (return [] if no transfers).
+- One sentence per rationale — direct, no padding.
+- Chip null if strategy is none.
 """
 
 

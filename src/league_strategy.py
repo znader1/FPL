@@ -12,13 +12,15 @@ def _player_meta(bootstrap, projections_df=None):
     proj_lookup = {}
     if projections_df is not None and not projections_df.empty:
         gw_cols = [c for c in projections_df.columns if c.startswith("xpts_gw")]
+        fix_cols = [c for c in projections_df.columns if c.startswith("fixtures_gw")]
         for _, row in projections_df.iterrows():
             pid = row.get("id")
             if pid is None:
                 continue
             entry = {
                 "xpts_horizon": float(row.get("xpts_horizon") or 0.0),
-                "xpts_per_gw": {c.replace("xpts_", ""): float(row.get(c) or 0.0) for c in gw_cols},
+                "xpts_per_gw": {c.replace("xpts_", ""): round(float(row.get(c) or 0.0), 2) for c in gw_cols},
+                "fixtures": {c.replace("fixtures_", ""): row.get(c) for c in fix_cols if row.get(c)},
             }
             proj_lookup[int(pid)] = entry
 
@@ -37,6 +39,7 @@ def _player_meta(bootstrap, projections_df=None):
             "form": el.get("form"),
             "model_xpts_horizon": proj.get("xpts_horizon"),
             "model_xpts_per_gw": proj.get("xpts_per_gw"),
+            "fixtures": proj.get("fixtures"),
         }
     return elements
 
@@ -149,42 +152,34 @@ def _candidate_targets(analysis, elements_meta, mode):
 
 
 SYSTEM_PROMPT = (
-    "You are an FPL mini-league strategist. Given an analysis of the user's league position, "
-    "their squad, rival squads, differentials, and a list of candidate target players, write a "
-    "concise strategy. Be specific: cite ranks, point gaps, ownership percentages, and player "
-    "names from the input. Never invent numbers. Respond ONLY with valid JSON."
+    "You are an FPL mini-league strategist. "
+    "Use ONLY numbers from the input — model_xpts_horizon, model_xpts_per_gw, fixtures, point gaps, ranks. "
+    "Never invent or estimate numbers. Be direct and short. Respond ONLY with valid JSON."
 )
 
 
 USER_TEMPLATE = """Mode: {mode}
+User: {user_name} rank {user_rank} ({user_total} pts) in {league_name}
+Rivals above: {rivals_above_short}
+Rivals below: {rivals_below_short}
 
-League position summary:
-- League: {league_name} (id {league_id})
-- User: {user_name} — rank {user_rank}, total {user_total}
-- Rivals above (closer = harder to chase): {rivals_above}
-- Rivals below (closer = harder to defend): {rivals_below}
+Top candidates (ranked by model xPts over {horizon_gws} GWs — includes fixture difficulty and recent form):
+{candidates_short}
 
-Your differentials:
-- You own, rivals don't: {diff_owned_by_me}
-- Rivals own, you don't: {diff_owned_by_rivals}
-
-Candidate target players (pre-ranked by OUR model's projected points over the horizon — `model_xpts_horizon` — which accounts for fixture difficulty, recent form, and opponent strength). Use `model_xpts_horizon` and `model_xpts_per_gw` in your reasoning, not `ep_next` (FPL's number is shown only as reference):
-{candidates}
-
-Return JSON:
+Return JSON exactly:
 {{
-  "headline": "<1 sentence framing the strategy for this mode>",
-  "key_gap": "<1 sentence on the most important point gap>",
+  "headline": "<one punchy sentence: what to do and why, citing the exact point gap>",
   "recommended_targets": [
-    {{"player_id": <int>, "rationale": "<1-2 sentences citing model_xpts_horizon, league ownership, or rival overlap. Prefer our model's projection over ep_next.>"}}
+    {{"player_id": <int>, "name": "<web_name>", "rationale": "<one sentence: cite model_xpts_horizon and at least one fixture from the fixtures field>"}}
   ],
-  "watchouts": "<1 sentence on what could go wrong>"
+  "watchouts": "<one sentence on the biggest risk>"
 }}
 
 Rules:
-- Up to 3 entries in recommended_targets.
-- Plain prose, no markdown.
-- If candidates list is empty, return recommended_targets: [] and explain in headline.
+- Max 3 recommended_targets, picked from the candidates above only.
+- Every rationale MUST quote model_xpts_horizon (e.g. '13.7 xPts') and at least one fixture (e.g. 'BOU/h').
+- No markdown, no filler phrases like 'it is worth noting'. Plain short sentences.
+- If candidates is empty: recommended_targets: [], headline explains why.
 """
 
 
@@ -200,18 +195,28 @@ def _llm_narrative(analysis, mode, candidates, model=None):
 
     import json
 
+    def _short_rival(r):
+        return f"{r.get('player_name')} #{r.get('rank')} ({r.get('total')} pts, GW {r.get('event_total')})"
+
+    def _short_candidate(c):
+        fixes = " | ".join(f"{k}:{v}" for k, v in (c.get("fixtures") or {}).items()) or "—"
+        per_gw = " ".join(f"{k}:{v}" for k, v in (c.get("model_xpts_per_gw") or {}).items())
+        return (
+            f"id={c['id']} {c.get('web_name')} ({c.get('team_short')}) "
+            f"xPts={c.get('model_xpts_horizon', '?')} [{per_gw}] fixtures: {fixes} "
+            f"league_own={c.get('league_ownership', '?')}"
+        )
+
     user_msg = USER_TEMPLATE.format(
         mode=mode,
         league_name=analysis["league"].get("name"),
-        league_id=analysis["league"].get("id"),
         user_name=(analysis["user"] or {}).get("player_name"),
         user_rank=(analysis["user"] or {}).get("rank"),
         user_total=(analysis["user"] or {}).get("total"),
-        rivals_above=json.dumps(analysis["rivals_above"], default=str),
-        rivals_below=json.dumps(analysis["rivals_below"], default=str),
-        diff_owned_by_me=analysis["differentials"]["owned_by_me_not_rivals"],
-        diff_owned_by_rivals=analysis["differentials"]["owned_by_rivals_not_me"],
-        candidates=json.dumps(candidates, indent=2, default=str),
+        rivals_above_short=" / ".join(_short_rival(r) for r in analysis["rivals_above"]) or "none",
+        rivals_below_short=" / ".join(_short_rival(r) for r in analysis["rivals_below"]) or "none",
+        horizon_gws=len(next(iter(candidates), {}).get("model_xpts_per_gw") or {}) or 3,
+        candidates_short="\n".join(_short_candidate(c) for c in candidates) or "(none)",
     )
 
     client = Anthropic(api_key=api_key)
