@@ -45,6 +45,9 @@ def fetch_bootstrap():
 def fetch_fixtures():
     return _get_json(f"{BASE}/fixtures/")
 
+def fetch_element_summary(element_id):
+    return _get_json(f"{BASE}/element-summary/{int(element_id)}/")
+
 # ---------- Builders ----------
 def normalize_bootstrap(boot):
     players = pd.DataFrame(boot.get("elements", []))
@@ -93,6 +96,62 @@ def build_players_table(players, teams, types):
         p["price_m"] = p["now_cost"].astype(float) / 10.0
     return p.sort_values(["pos","team_name","web_name"])
 
+def build_player_gw_history(player_ids, max_workers=8):
+    """Fetch per-GW history for every player and stack into one DataFrame.
+
+    Schema matches what src/projections.py expects:
+      player_id, gw, gw_total_points, gw_fixture_count, gw_minutes, gw_starts
+    Multiple fixtures in one GW (DGW) are aggregated.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    rows = []
+
+    def _one(pid):
+        try:
+            data = fetch_element_summary(pid)
+        except Exception:
+            return pid, None
+        return pid, data.get("history") or []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [pool.submit(_one, pid) for pid in player_ids]
+        for fut in as_completed(futures):
+            pid, history = fut.result()
+            if not history:
+                continue
+            for h in history:
+                rows.append({
+                    "player_id": pid,
+                    "gw": h.get("round"),
+                    "gw_total_points": h.get("total_points"),
+                    "gw_minutes": h.get("minutes"),
+                    "gw_starts": h.get("starts"),
+                })
+
+    if not rows:
+        return pd.DataFrame(columns=["player_id", "gw", "gw_total_points", "gw_fixture_count", "gw_minutes", "gw_starts"])
+
+    df = pd.DataFrame(rows)
+    df["player_id"] = pd.to_numeric(df["player_id"], errors="coerce")
+    df["gw"] = pd.to_numeric(df["gw"], errors="coerce")
+    df["gw_total_points"] = pd.to_numeric(df["gw_total_points"], errors="coerce")
+    df["gw_minutes"] = pd.to_numeric(df["gw_minutes"], errors="coerce")
+    df["gw_starts"] = pd.to_numeric(df["gw_starts"], errors="coerce")
+    df = df.dropna(subset=["player_id", "gw"]).copy()
+    df["player_id"] = df["player_id"].astype(int)
+    df["gw"] = df["gw"].astype(int)
+
+    # Aggregate DGWs into one row per (player, gw); fixture_count = number of rows merged
+    grouped = df.groupby(["player_id", "gw"], as_index=False).agg(
+        gw_total_points=("gw_total_points", "sum"),
+        gw_minutes=("gw_minutes", "sum"),
+        gw_starts=("gw_starts", "sum"),
+        gw_fixture_count=("gw_total_points", "size"),
+    )
+    return grouped.sort_values(["player_id", "gw"]).reset_index(drop=True)
+
+
 # ---------- Main task ----------
 def refresh_next_gw_snapshot(out_base="data/processed"):
     out_dir = _stamp_folder(out_base)
@@ -118,11 +177,28 @@ def refresh_next_gw_snapshot(out_base="data/processed"):
     _save_json(boot, os.path.join(out_dir, "bootstrap_static.json"))
     _save_json(fixtures_json, os.path.join(out_dir, "fixtures_raw.json"))
 
+    # Build per-GW history table that the projection layer expects.
+    # Lives under <out_base>/fpl/<DATE>/player_gw_history_<MAXGW>.csv
+    history_dir_base = os.path.join(out_base, "fpl")
+    history_dir = os.path.join(history_dir_base, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+    _ensure_dir(history_dir)
+    player_ids = players["id"].dropna().astype(int).tolist()
+    history_df = build_player_gw_history(player_ids)
+    history_path = None
+    history_max_gw = None
+    if not history_df.empty and "gw" in history_df.columns:
+        history_max_gw = int(pd.to_numeric(history_df["gw"], errors="coerce").max())
+        history_path = os.path.join(history_dir, f"player_gw_history_{history_max_gw}")
+        _save_table(history_df, history_path)
+
     return {
         "out_dir": out_dir,
         "next_event_id": str(next_event_id),
         "fixtures_path": os.path.join(out_dir, f"fixtures_gw{next_event_id}.csv"),
         "players_path": os.path.join(out_dir, "players_current.csv"),
+        "history_path": (history_path + ".csv") if history_path else None,
+        "history_max_gw": history_max_gw,
+        "history_rows": int(len(history_df)),
     }
 
 if __name__ == "__main__":
