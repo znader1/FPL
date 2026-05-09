@@ -14,7 +14,7 @@ ELEMENTS_KEEP = [
     "id","web_name","team","element_type","total_points","form",
     "points_per_game","now_cost","selected_by_percent",
     # Useful for projections / risk
-    "ep_next","ep_this","minutes",
+    "ep_next","ep_this","minutes","event_points",
     "status","news",
     "chance_of_playing_this_round","chance_of_playing_next_round",
     # Transfer momentum

@@ -389,6 +389,23 @@ def build_recommendations(payload):
         notes.append(f"event_id > {int(max_event_id)}; clamped to {int(max_event_id)}.")
         optimize_event_id = int(max_event_id)
 
+    # Guard: if the deadline for the requested GW has passed, bump to next GW
+    # so projections aren't computed on a partly-played gameweek.
+    requested_event_row = next(
+        (ev for ev in ctx["bootstrap"].get("events", []) if int(ev.get("id") or 0) == int(optimize_event_id)),
+        None,
+    )
+    if requested_event_row is not None:
+        deadline = pd.to_datetime(requested_event_row.get("deadline_time"), errors="coerce", utc=True)
+        if pd.notna(deadline) and deadline < datetime.now(timezone.utc):
+            new_event_id = int(optimize_event_id) + 1
+            if new_event_id <= int(max_event_id):
+                notes.append(
+                    f"Deadline for GW{int(optimize_event_id)} has passed; "
+                    f"recommending for GW{new_event_id} instead."
+                )
+                optimize_event_id = new_event_id
+
     display_horizon_gws = safe_int(horizon_gws_raw)
     if display_horizon_gws is None:
         notes.append("Invalid horizon_gws; using 3.")

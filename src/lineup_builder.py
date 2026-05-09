@@ -195,6 +195,7 @@ def build_position_panels(
     base_cols = [
         "id", "web_name", "pos", "team", "team_short", "team_name", "price_m", "code", "photo",
         "status", "chance_of_playing_next_round", "xpts_horizon",
+        "event_points",
         "wildcard_score", "wildcard_weighted_xpts", "wildcard_future_dgw_bonus",
         "wildcard_captaincy_bonus", "wildcard_form_bonus", "wildcard_ownership_bonus",
         "baseline_long_term_xpts", "baseline_recent_gw_xpts", "baseline_blended_xpts", "baseline_gw1_xpts",
