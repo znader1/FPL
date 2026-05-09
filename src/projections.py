@@ -530,6 +530,7 @@ def project_elements_next_gws(
         "total_points",
         "selected_by_percent",
         "ep_next",
+        "event_points",
         "baseline_long_term_xpts",
         "baseline_recent_gw_xpts",
         "baseline_blended_xpts",
