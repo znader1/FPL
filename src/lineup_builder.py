@@ -126,6 +126,7 @@ def _lineup_projection_cols(proj_all, gws):
     proj_cols = ["id"]
     for c in [
         "xpts_horizon", "status", "chance_of_playing_next_round",
+        "event_points", "total_points", "form",
         "wildcard_score", "wildcard_weighted_xpts", "wildcard_future_dgw_bonus",
         "wildcard_captaincy_bonus", "wildcard_form_bonus", "wildcard_ownership_bonus",
         "baseline_long_term_xpts", "baseline_recent_gw_xpts", "baseline_blended_xpts", "baseline_gw1_xpts",

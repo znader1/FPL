@@ -22,6 +22,10 @@ Right now `/league/strategy` and `/recommendations` both build a projections Dat
 Split per-domain routers: `api/routes_squad.py`, `api/routes_recommendations.py`, `api/routes_league.py`, `api/routes_explain.py`. Mount them on the main `FastAPI` app. Keeps the top-level file as composition only.
 **Trigger:** when a single endpoint change requires scrolling through unrelated handlers.
 
+## Column whitelist sprawl
+Adding a single new field from FPL bootstrap to the API response requires editing **four** column whitelists in three files: `src/config.ELEMENTS_KEEP`, `src/projections.keep_base`, `src/lineup_builder._lineup_projection_cols`, and `src/lineup_builder.build_position_panels.base_cols`. Easy to miss one and have the field silently dropped. Consolidate into a single shared list (or refactor to "keep all columns by default, drop only what's noisy").
+**Why deferred:** new field additions are rare; consolidation is cheap once you hit the next pain point.
+
 ## Defensive: cap rival squad fetch
 `league_strategy.analyze_league` fetches one `/event/{gw}/picks/` per rival sequentially. Up to 6 calls per request. Fine now; if max_rivals grows beyond ~10, batch them with `concurrent.futures.ThreadPoolExecutor` (FPL API tolerates parallel reads).
 
