@@ -260,6 +260,30 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
     if explicit_squad_event and requested_squad_event_id and int(used_event_id) != int(requested_squad_event_id):
         notes.append(f"squad_event_id {int(requested_squad_event_id)} not available; used {int(used_event_id)}.")
 
+    # Derive ITB and free transfers from real FPL state.
+    eh = myteam.get("entry_history") or {}
+    bank_tenths = eh.get("bank")
+    derived_itb_m = float(bank_tenths) / 10.0 if isinstance(bank_tenths, (int, float)) else None
+
+    # Free transfers: if last GW used 0 transfers, you saved one → FT = 2 (capped at 5).
+    # Otherwise FT = 1. Wildcard/Free Hit GWs reset to 1.
+    derived_free_transfers = 1
+    last_active_chip = (myteam.get("active_chip") or "").lower()
+    if last_active_chip not in ("wildcard", "freehit") and used_event_id > 1:
+        try:
+            prev_picks = fpl_client.get_entry_picks(entry_id, int(used_event_id) - 1)
+            prev_eh = prev_picks.get("entry_history") or {}
+            prev_transfers = int(prev_eh.get("event_transfers") or 0)
+            prev_chip = (prev_picks.get("active_chip") or "").lower()
+            if prev_chip in ("wildcard", "freehit"):
+                derived_free_transfers = 1
+            elif prev_transfers == 0:
+                derived_free_transfers = 2
+            else:
+                derived_free_transfers = 1
+        except Exception:
+            pass  # keep default of 1
+
     squad_df = transforms.picks_to_df(myteam, elements)
     if squad_df is None or squad_df.empty:
         raise HTTPException(status_code=404, detail="No picks returned for that entry/event.")
@@ -277,6 +301,8 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
         "myteam": myteam,
         "squad_df": squad_df,
         "notes": notes,
+        "derived_itb_m": derived_itb_m,
+        "derived_free_transfers": derived_free_transfers,
     }
 
 
@@ -353,6 +379,8 @@ def build_recommendations(payload):
     apply_transfer_count_raw = payload.get("apply_transfer_count")
 
     include_transfers = parse_bool(payload.get("include_transfers"), default=False)
+    itb_m_explicit = "itb_m" in payload and payload.get("itb_m") is not None
+    free_transfers_explicit = "free_transfers" in payload and payload.get("free_transfers") is not None
     itb_m = payload.get("itb_m", 0.5)
     free_transfers = payload.get("free_transfers", 1)
     hit_cap = payload.get("hit_cap", 0)
@@ -371,6 +399,14 @@ def build_recommendations(payload):
     squad_event_id = ctx["squad_event_id"]
     max_event_id = ctx["max_event_id"]
     next_event_id = _event_id(ctx["bootstrap"], "is_next")
+
+    # Use real FPL state if the user didn't override
+    if not itb_m_explicit and ctx.get("derived_itb_m") is not None:
+        itb_m = ctx["derived_itb_m"]
+        notes.append(f"Using bank from FPL: £{itb_m:.1f}m.")
+    if not free_transfers_explicit and ctx.get("derived_free_transfers") is not None:
+        free_transfers = ctx["derived_free_transfers"]
+        notes.append(f"Using free transfers from FPL: {free_transfers}.")
 
     explicit_optimize_event = optimize_event_id_raw is not None and str(optimize_event_id_raw).strip() != ""
     optimize_event_id = safe_int(optimize_event_id_raw)
