@@ -265,19 +265,17 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
     bank_tenths = eh.get("bank")
     derived_itb_m = float(bank_tenths) / 10.0 if isinstance(bank_tenths, (int, float)) else None
 
-    # Free transfers: if last GW used 0 transfers, you saved one → FT = 2 (capped at 5).
-    # Otherwise FT = 1. Wildcard/Free Hit GWs reset to 1.
+    # Free transfers for the NEXT planning GW:
+    # FPL carries over 1 unused FT (max 2 total). Check the current squad GW's own
+    # event_transfers — if the manager used 0 transfers this GW, they banked one → 2 FT next GW.
+    # Chip GWs (wildcard/freehit) reset the count to 1.
     derived_free_transfers = 1
     last_active_chip = (myteam.get("active_chip") or "").lower()
-    if last_active_chip not in ("wildcard", "freehit") and used_event_id > 1:
+    if last_active_chip not in ("wildcard", "freehit"):
         try:
-            prev_picks = fpl_client.get_entry_picks(entry_id, int(used_event_id) - 1)
-            prev_eh = prev_picks.get("entry_history") or {}
-            prev_transfers = int(prev_eh.get("event_transfers") or 0)
-            prev_chip = (prev_picks.get("active_chip") or "").lower()
-            if prev_chip in ("wildcard", "freehit"):
-                derived_free_transfers = 1
-            elif prev_transfers == 0:
+            # eh is already the entry_history for used_event_id (the current squad GW).
+            cur_transfers = int(eh.get("event_transfers") or 0)
+            if cur_transfers == 0:
                 derived_free_transfers = 2
             else:
                 derived_free_transfers = 1
