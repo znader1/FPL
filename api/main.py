@@ -379,10 +379,10 @@ def build_recommendations(payload):
     apply_transfer_count_raw = payload.get("apply_transfer_count")
 
     include_transfers = parse_bool(payload.get("include_transfers"), default=False)
-    itb_m_explicit = "itb_m" in payload and payload.get("itb_m") is not None
-    free_transfers_explicit = "free_transfers" in payload and payload.get("free_transfers") is not None
-    itb_m = payload.get("itb_m", 0.5)
-    free_transfers = payload.get("free_transfers", 1)
+    itb_m_explicit = payload.get("itb_m") is not None
+    free_transfers_explicit = payload.get("free_transfers") is not None
+    itb_m = payload.get("itb_m") if itb_m_explicit else 0.5
+    free_transfers = payload.get("free_transfers") if free_transfers_explicit else 1
     hit_cap = payload.get("hit_cap", 0)
     panel_limit = safe_int(payload.get("panel_limit"))
     if panel_limit is None:
@@ -966,7 +966,7 @@ def recommendations_get(
     entry_id=None, event_id=None, squad_event_id=None,
     horizon_gws=3, chip_horizon_gws=None, chip_play_event_id=None,
     chip_strategy="none", latest_n_matches=3, include_transfers=False,
-    apply_transfer_count=None, itb_m=0.5, free_transfers=1, hit_cap=0, panel_limit=5,
+    apply_transfer_count=None, itb_m=None, free_transfers=None, hit_cap=0, panel_limit=5,
     api_key=None, x_api_key=Header(None), authorization=Header(None),
 ):
     err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
