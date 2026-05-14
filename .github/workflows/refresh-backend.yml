@@ -23,20 +23,84 @@ jobs:
             exit 1
           fi
 
+      - name: Wake machine (retry until alive)
+        env:
+          FPL_API_BASE_URL: ${{ secrets.FPL_API_BASE_URL }}
+        run: |
+          for i in 1 2 3 4 5; do
+            status=$(curl -o /dev/null -s -w "%{http_code}" --max-time 15 "${FPL_API_BASE_URL%/}/health" || echo "000")
+            echo "Attempt $i — HTTP $status"
+            if [ "$status" = "200" ]; then break; fi
+            sleep 10
+          done
+
       - name: Refresh API caches and snapshot
         env:
           FPL_API_BASE_URL: ${{ secrets.FPL_API_BASE_URL }}
           FPL_ADMIN_KEY: ${{ secrets.FPL_ADMIN_KEY }}
         run: |
-          curl -fsS -X POST "${FPL_API_BASE_URL%/}/admin/refresh" \
+          curl -fsS --max-time 120 -X POST "${FPL_API_BASE_URL%/}/admin/refresh" \
             -H "Content-Type: application/json" \
             -H "X-API-Key: ${FPL_ADMIN_KEY}" \
             -d '{"run_snapshot": true}' | tee refresh-response.json
+
+      - name: Validate refresh response
+        run: |
+          echo "=== Refresh response ==="
+          cat refresh-response.json | python3 -m json.tool
+
+          # Extract key fields and fail if anything looks wrong
+          python3 - <<'EOF'
+          import json, sys
+
+          with open("refresh-response.json") as f:
+              d = json.load(f)
+
+          ok = d.get("ok")
+          snap = d.get("snapshot_info") or {}
+          snap_err = d.get("snapshot_error")
+          next_event = d.get("next_event") or {}
+
+          next_gw = snap.get("next_event_id") or next_event.get("event_id")
+          history_gw = snap.get("history_max_gw")
+          history_path = snap.get("history_path")
+          players_path = snap.get("players_path")
+
+          print(f"✓ ok={ok}")
+          print(f"✓ Next GW targeted : {next_gw}")
+          print(f"✓ History max GW   : {history_gw}")
+          print(f"✓ Players CSV      : {players_path}")
+          print(f"✓ History CSV      : {history_path}")
+          print(f"✓ Refreshed at     : {d.get('cache_refreshed_at_utc')}")
+
+          errors = []
+          if not ok:
+              errors.append("refresh endpoint returned ok=false")
+          if snap_err:
+              errors.append(f"snapshot error: {snap_err}")
+          if not next_gw:
+              errors.append("next_event_id missing — FPL bootstrap may be stale")
+          if not history_gw:
+              errors.append("history_max_gw missing — player history CSV not written")
+          if history_gw and next_gw and int(history_gw) < int(next_gw) - 2:
+              errors.append(f"history is {int(next_gw) - int(history_gw)} GWs behind next GW — data may be stale")
+
+          if errors:
+              print("\n❌ VALIDATION FAILED:")
+              for e in errors:
+                  print(f"  - {e}")
+              sys.exit(1)
+          else:
+              print("\n✅ All checks passed")
+          EOF
 
       - name: Print next deadline summary
         env:
           FPL_API_BASE_URL: ${{ secrets.FPL_API_BASE_URL }}
           FPL_ADMIN_KEY: ${{ secrets.FPL_ADMIN_KEY }}
         run: |
-          curl -fsS "${FPL_API_BASE_URL%/}/events/next" \
+          curl -fsS --max-time 30 "${FPL_API_BASE_URL%/}/events/next" \
             -H "X-API-Key: ${FPL_ADMIN_KEY}" | tee next-event.json
+          echo ""
+          echo "=== Next event summary ==="
+          cat next-event.json | python3 -m json.tool

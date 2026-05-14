@@ -58,8 +58,10 @@ PROJ_LATEST_N_MIN = 1
 PROJ_LATEST_N_MAX = 8
 PROJ_PLAYER_RECENT_GW_WINDOW = 5
 PROJ_PLAYER_RECENT_MIN_SAMPLES = 2
-PROJ_PLAYER_RECENT_BLEND_WEIGHT = 0.65
-PROJ_EP_NEXT_BLEND_WEIGHT = 0.50
+PROJ_PLAYER_RECENT_BLEND_WEIGHT = 0.75  # higher weight — no longer diluted by ep_next
+PROJ_EP_NEXT_BLEND_WEIGHT = 0.0         # ep_next removed; using own model only
+PROJ_LATE_SEASON_GW_THRESHOLD = 30      # shrink window after this GW (recent form matters more)
+PROJ_LATE_SEASON_GW_WINDOW = 3
 PROJ_DGW_EXTRA_FIXTURE_DISCOUNT = 0.65   # DGW extra fixture counts as 65% of a normal fixture
 PROJ_INJURY_FUTURE_GW_FADE = 0.50        # Future GW injury discount fades by 50% per GW
 

@@ -8,11 +8,11 @@ from . import config, transforms
 
 
 DIFFICULTY_MULTIPLIER = {
-    1: 1.15,
-    2: 1.08,
+    1: 1.25,
+    2: 1.12,
     3: 1.00,
-    4: 0.93,
-    5: 0.86,
+    4: 0.88,
+    5: 0.75,
 }
 
 
@@ -271,7 +271,10 @@ def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/
             existing_cols = list(dict.fromkeys(df.columns.tolist() + ["player_id", "gw"]))
             merged = grid.merge(df[existing_cols], on=["player_id", "gw"], how="left")
             has_row = merged["gw_total_points"].notna() if "gw_total_points" in merged.columns else pd.Series(False, index=merged.index)
-            merged = merged[has_row | (merged["team_fixture_count"] > 0)].copy()
+            # Only keep GWs where the team had a fixture — blank GWs (no fixture)
+            # are excluded entirely so they don't drag down the player's average.
+            # Bench appearances (row exists, minutes=0) still count: the team played.
+            merged = merged[merged["team_fixture_count"] > 0].copy()
             if not merged.empty:
                 for col in ["gw_total_points", "gw_minutes", "gw_starts"]:
                     if col in merged.columns:
@@ -283,28 +286,38 @@ def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/
                     merged["gw_fixture_count"] = merged["team_fixture_count"].fillna(0.0)
                 df = merged.drop(columns=["team_fixture_count"], errors="ignore")
 
-    agg_map = {
-        "gw_total_points": "mean",
-        "gw_fixture_count": "mean",
-        "gw": ["count", "max"],
-    }
-    if "gw_minutes" in df.columns:
-        agg_map["gw_minutes"] = "mean"
-    if "gw_starts" in df.columns:
-        agg_map["gw_starts"] = "mean"
+    # Recency weighting: last 2 GWs count double — recent form matters more than
+    # a 5-GW simple average, especially late in the season.
+    if not df.empty and "gw" in df.columns:
+        max_gw_per_player = df.groupby("player_id")["gw"].transform("max")
+        df["_recency_weight"] = 1.0
+        df.loc[df["gw"] >= (max_gw_per_player - 1), "_recency_weight"] = 2.0
+    else:
+        df["_recency_weight"] = 1.0
 
-    out = df.groupby("player_id", dropna=False).agg(agg_map)
-    out.columns = ["_".join(str(x) for x in tup if x) for tup in out.columns.to_flat_index()]
-    out = out.reset_index().rename(
-        columns={
-            "gw_total_points_mean": "recent_gw_avg_points",
-            "gw_fixture_count_mean": "recent_gw_avg_fixture_count",
-            "gw_count": "recent_gw_samples",
-            "gw_max": "recent_gw_last",
-            "gw_minutes_mean": "recent_gw_avg_minutes",
-            "gw_starts_mean": "recent_gw_avg_starts",
-        }
-    )
+    def _wavg(group, col):
+        w = group["_recency_weight"]
+        v = pd.to_numeric(group[col], errors="coerce")
+        mask = v.notna()
+        if mask.sum() == 0:
+            return float("nan")
+        return float((v[mask] * w[mask]).sum() / w[mask].sum())
+
+    rows = []
+    for pid, group in df.groupby("player_id", dropna=False):
+        row = {"player_id": pid}
+        row["recent_gw_avg_points"] = _wavg(group, "gw_total_points") if "gw_total_points" in group.columns else float("nan")
+        row["recent_gw_avg_fixture_count"] = _wavg(group, "gw_fixture_count") if "gw_fixture_count" in group.columns else float("nan")
+        row["recent_gw_avg_minutes"] = _wavg(group, "gw_minutes") if "gw_minutes" in group.columns else float("nan")
+        row["recent_gw_avg_starts"] = _wavg(group, "gw_starts") if "gw_starts" in group.columns else float("nan")
+        row["recent_gw_samples"] = int(group["gw"].count())
+        row["recent_gw_last"] = int(group["gw"].max()) if group["gw"].notna().any() else None
+        rows.append(row)
+
+    out = pd.DataFrame(rows) if rows else pd.DataFrame(columns=[
+        "player_id", "recent_gw_avg_points", "recent_gw_avg_fixture_count",
+        "recent_gw_avg_minutes", "recent_gw_avg_starts", "recent_gw_samples", "recent_gw_last",
+    ])
     out["recent_history_window_gws"] = int(window)
     out["recent_history_max_gw"] = int(history_max_gw)
     return out
@@ -392,7 +405,10 @@ def project_elements_next_gws(
         latest_n_matches=latest_n_matches,
     )
 
-    recent_window = max(1, int(getattr(config, "PROJ_PLAYER_RECENT_GW_WINDOW", 5) or 5))
+    late_threshold = int(getattr(config, "PROJ_LATE_SEASON_GW_THRESHOLD", 30) or 30)
+    late_window = int(getattr(config, "PROJ_LATE_SEASON_GW_WINDOW", 3) or 3)
+    default_window = int(getattr(config, "PROJ_PLAYER_RECENT_GW_WINDOW", 5) or 5)
+    recent_window = max(1, late_window if int(gw_start) > late_threshold else default_window)
     recent_min_samples = max(1, int(getattr(config, "PROJ_PLAYER_RECENT_MIN_SAMPLES", 2) or 2))
     recent_blend_weight = clamp(getattr(config, "PROJ_PLAYER_RECENT_BLEND_WEIGHT", 0.65), 0.0, 1.0)
     ep_next_blend_weight = clamp(getattr(config, "PROJ_EP_NEXT_BLEND_WEIGHT", 0.45), 0.0, 1.0)
@@ -483,15 +499,10 @@ def project_elements_next_gws(
         effective_fixtures = effective_fixtures.where(fixture_count > 0, 0.0)
 
         if i == 0:
-            # GW1: ep_next from FPL already bakes in fixture count (DGW-aware).
-            # For players where ep_next is available, treat base_gw0 as a per-GW total
-            # and only apply difficulty/home/form context multipliers, not fixture scaling.
-            has_ep = ep_next.notna()
-            xpts_with_ep = base_gw0 * diff_mult * home_away_mult * opp_form_mult * team_form_mult
-            xpts_no_ep = blended_base * effective_fixtures * diff_mult * home_away_mult * opp_form_mult * team_form_mult
-            xpts = xpts_with_ep.where(has_ep, xpts_no_ep)
-            # Zero out blanks for non-ep players
-            xpts = xpts.where(has_ep | (fixture_count > 0), 0.0)
+            # GW1: use our own blended model — no ep_next dependency.
+            # blended_base is per-GW points, scaled by fixture count + all context multipliers.
+            xpts = blended_base * effective_fixtures * diff_mult * home_away_mult * opp_form_mult * team_form_mult
+            xpts = xpts.where(fixture_count > 0, 0.0)
             xpts = xpts * play_prob
         else:
             base = blended_base
