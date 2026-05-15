@@ -32,6 +32,8 @@ from src.backtest_data import (
     player_actuals_at,
     player_actuals_through,
 )
+from src.backtest_adapter import build_engine_inputs
+from src import projections as engine_projections
 
 
 DIFFICULTY_MULTIPLIER = {1: 1.25, 2: 1.12, 3: 1.0, 4: 0.88, 5: 0.75}
@@ -145,6 +147,51 @@ def _fixture_count_by_team_name(fx_gw: pd.DataFrame, teams: pd.DataFrame) -> dic
             if name:
                 counts[name] = counts.get(name, 0) + 1
     return counts
+
+
+def project_gw_engine(target_gw: int, season: str = "2025-26", horizon: int = 3) -> pd.DataFrame:
+    """
+    Run the real src/projections.py engine on Vaastav data via the adapter.
+    Returns a DataFrame with the same columns as project_gw (simple proxy) so
+    the simulator can drop it in interchangeably.
+    """
+    elements, fixtures, teams_short, history_df = build_engine_inputs(target_gw, season, horizon)
+
+    # Patch the engine to use our in-memory history (it normally loads from disk)
+    orig_load = engine_projections.load_latest_player_gw_history
+    engine_projections.load_latest_player_gw_history = lambda **kw: history_df
+    try:
+        proj = engine_projections.project_elements_next_gws(
+            elements=elements,
+            fixtures=fixtures,
+            teams_short_map=teams_short,
+            gw_start=target_gw,
+            horizon_gws=horizon,
+        )
+    finally:
+        engine_projections.load_latest_player_gw_history = orig_load
+
+    # Reshape engine output -> simulator schema (player_id, name, pos, team, price_m, xpts, fixture_count)
+    teams_full = load_teams(season)
+    team_name_by_id = dict(zip(teams_full["id"], teams_full["name"]))
+
+    if "pos" in proj.columns:
+        pos_col = proj["pos"]
+    else:
+        pos_col = proj["element_type"].map({1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"})
+
+    out = pd.DataFrame({
+        "player_id": proj["id"].astype(int),
+        "name": proj["web_name"],
+        "pos": pos_col.values,
+        "team": proj["team"].map(team_name_by_id).values,
+        "price_m": (pd.to_numeric(proj["now_cost"], errors="coerce") / 10.0).values,
+        "xpts": pd.to_numeric(proj.get(f"xpts_gw{target_gw}"), errors="coerce").fillna(0).values,
+        "fixture_count": 1,
+        "ppg": pd.to_numeric(proj.get("points_per_game"), errors="coerce").fillna(0).values,
+        "samples": 5,
+    })
+    return out
 
 
 # ---------- squad ops ----------
@@ -294,6 +341,7 @@ def run_backtest(
     end_gw: int,
     initial_squad_csv: str | None,
     min_transfer_gain: float,
+    use_engine: bool = False,
 ) -> pd.DataFrame:
     teams = load_teams(season)
     fixtures_all = load_fixtures(season)
@@ -331,8 +379,11 @@ def run_backtest(
     log = []
 
     for gw in range(start_gw, end_gw + 1):
-        history_before = full_history[full_history["gw"] < gw]
-        market = project_gw(gw, history_before, fixtures_all, teams)
+        if use_engine:
+            market = project_gw_engine(gw, season=season, horizon=3)
+        else:
+            history_before = full_history[full_history["gw"] < gw]
+            market = project_gw(gw, history_before, fixtures_all, teams)
 
         if market.empty or "xpts" not in market.columns:
             print(f"  ! GW{gw}: empty market, skipping")
@@ -411,9 +462,11 @@ def main():
     ap.add_argument("--initial-squad", default=None, help="CSV path with one column player_id")
     ap.add_argument("--min-gain", type=float, default=0.6, help="Minimum xPts gain to make a transfer")
     ap.add_argument("--out", default="data/backtest/results.csv")
+    ap.add_argument("--use-engine", action="store_true",
+                    help="Use the real src/projections.py engine (slower) instead of the simple proxy")
     args = ap.parse_args()
 
-    log = run_backtest(args.season, args.start, args.end, args.initial_squad, args.min_gain)
+    log = run_backtest(args.season, args.start, args.end, args.initial_squad, args.min_gain, args.use_engine)
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
