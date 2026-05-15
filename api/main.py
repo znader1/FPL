@@ -763,7 +763,7 @@ def build_recommendations(payload):
             itb_m=safe_float(itb_m, default=0.0) or 0.0,
             free_transfers=free_transfers_value,
             hit_cap=safe_int(hit_cap) or 0,
-            score_col="xpts_horizon",
+            score_col=score_col if int(display_horizon_gws) <= 1 else "xpts_horizon",
             horizon_gws=int(display_horizon_gws),
         )
     timings["transfer_preview_ms"] = elapsed_ms(ts)
