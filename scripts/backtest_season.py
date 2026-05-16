@@ -431,6 +431,7 @@ def run_backtest(
     use_engine: bool = False,
     enable_chips: bool = False,
     enable_can_bonus: bool = False,
+    manual_chip_plan: dict | None = None,
 ) -> pd.DataFrame:
     teams = load_teams(season)
     fixtures_all = load_fixtures(season)
@@ -468,9 +469,12 @@ def run_backtest(
     log = []
 
     chip_plan = {}
-    if enable_chips:
+    if manual_chip_plan:
+        chip_plan = manual_chip_plan
+        print(f"Manual chip plan: {chip_plan}")
+    elif enable_chips:
         chip_plan = plan_chips(season, start_gw, end_gw, teams, fixtures_all, use_engine, full_history)
-        print(f"Chip plan: {chip_plan}")
+        print(f"Auto chip plan: {chip_plan}")
 
     for gw in range(start_gw, end_gw + 1):
         # CAN bonus: 5 FT at GW16 (real FPL gave this in 2025/26 for AFCON)
@@ -481,7 +485,8 @@ def run_backtest(
         chip_this_gw = None
         for chip, planned_gw in chip_plan.items():
             if planned_gw == gw:
-                chip_this_gw = chip
+                # Strip "_2" suffix so Phase 2 chips behave the same as Phase 1
+                chip_this_gw = chip.replace("_2", "")
                 break
         if use_engine:
             market = project_gw_engine(gw, season=season, horizon=3)
@@ -596,13 +601,22 @@ def main():
                     help="Use the real src/projections.py engine (slower) instead of the simple proxy")
     ap.add_argument("--chips", action="store_true",
                     help="Enable chip strategy (WC, FH, BB, TC)")
+    ap.add_argument("--chip-plan", default=None,
+                    help="Manual chip plan as comma-separated 'chip:gw' pairs, e.g. 'wildcard:6,bench_boost:8,free_hit:15,triple_captain:17,triple_captain_2:26'")
     ap.add_argument("--can-bonus", action="store_true",
                     help="Apply CAN/AFCON 5-FT bonus at GW16 (2025/26 season)")
     args = ap.parse_args()
 
+    manual_chip_plan = None
+    if args.chip_plan:
+        manual_chip_plan = {}
+        for pair in args.chip_plan.split(","):
+            chip, gw_str = pair.split(":")
+            manual_chip_plan[chip.strip()] = int(gw_str.strip())
+
     log = run_backtest(
         args.season, args.start, args.end, args.initial_squad, args.min_gain,
-        args.use_engine, args.chips, args.can_bonus,
+        args.use_engine, args.chips, args.can_bonus, manual_chip_plan,
     )
 
     out = Path(args.out)
