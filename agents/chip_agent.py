@@ -79,6 +79,7 @@ def run_chip_agent(
     gw_projections: dict,
     chips_remaining: list[str],
     verbose: bool = False,
+    extra_context: str | None = None,
 ) -> str:
     """
     Entry point. Returns a natural-language recommendation string.
@@ -96,9 +97,11 @@ def run_chip_agent(
     user_msg = (
         f"Current GW: {current_gw}\n"
         f"Chips still available: {', '.join(chips_remaining)}\n"
-        f"Squad size: {len(squad)} players\n\n"
-        f"Should I play a chip this GW, or hold? Use the tool to see options."
+        f"Squad size: {len(squad)} players\n"
     )
+    if extra_context:
+        user_msg += f"\n{extra_context}\n"
+    user_msg += "\nShould I play a chip this GW, or hold? Use the tool to see options."
 
     messages = [{"role": "user", "content": user_msg}]
 

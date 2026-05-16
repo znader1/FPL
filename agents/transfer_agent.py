@@ -102,6 +102,7 @@ def run_transfer_agent(
     captain_id: int | None = None,
     upcoming_chip_gw: int | None = None,
     verbose: bool = False,
+    extra_context: str | None = None,
 ) -> str:
     """
     Entry point. Returns a natural-language transfer recommendation string.
@@ -127,6 +128,8 @@ def run_transfer_agent(
     )
     if upcoming_chip_gw is not None:
         user_msg += f"Upcoming chip play planned at: GW{upcoming_chip_gw}\n"
+    if extra_context:
+        user_msg += f"\n{extra_context}\n"
     user_msg += "\nShould I make a transfer, take a hit, or roll my FT?"
 
     messages = [{"role": "user", "content": user_msg}]

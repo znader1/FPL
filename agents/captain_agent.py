@@ -70,6 +70,7 @@ def run_captain_agent(
     current_gw: int | None = None,
     tc_active: bool = False,
     verbose: bool = False,
+    extra_context: str | None = None,
 ) -> str:
     """
     Entry point. Returns a natural-language captain recommendation.
@@ -89,6 +90,8 @@ def run_captain_agent(
         user_msg += f"Current GW: {current_gw}\n"
     if tc_active:
         user_msg += "Triple Captain chip is ACTIVE this GW — captain points will be ×3\n"
+    if extra_context:
+        user_msg += f"\n{extra_context}\n"
     user_msg += "\nWho should I captain (and vice-captain)?"
 
     messages = [{"role": "user", "content": user_msg}]

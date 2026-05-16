@@ -220,6 +220,18 @@ def _resolve_chips(req: SpecialistRequest, current_gw: int) -> list[str]:
         return ["wildcard", "free_hit", "bench_boost", "triple_captain"]
 
 
+def _load_rules_text() -> str | None:
+    """Load active strategy rules from memory store, if present."""
+    try:
+        from src.agent_memory import MemoryStore
+        from agents.reflection_agent import load_active_rules_text
+        store = MemoryStore()
+        return load_active_rules_text(store) or None
+    except Exception as e:
+        logger.warning(f"Could not load strategy rules: {e}")
+        return None
+
+
 @router.post("/chat/captain", response_model=ChatResponse)
 def chat_captain(req: SpecialistRequest = Body(...)):
     """Direct captain-agent call — skips orchestrator for speed."""
@@ -230,7 +242,10 @@ def chat_captain(req: SpecialistRequest = Body(...)):
     ctx = _build_context_for_entry(req.entry_id, current_gw)
 
     try:
-        answer = run_captain_agent(starting_xi=ctx["starting_xi"], current_gw=current_gw)
+        answer = run_captain_agent(
+            starting_xi=ctx["starting_xi"], current_gw=current_gw,
+            extra_context=_load_rules_text(),
+        )
     except Exception as e:
         logger.exception("captain agent failed")
         raise HTTPException(status_code=500, detail=f"Agent error: {e}")
@@ -267,6 +282,7 @@ def chat_transfer(req: SpecialistRequest = Body(...)):
             gw_projections=ctx["gw_projections"], current_gw=current_gw,
             bank_m=ctx["bank_m"], free_transfers=ctx["free_transfers"],
             captain_id=model_captain_id,
+            extra_context=_load_rules_text(),
         )
     except Exception as e:
         logger.exception("transfer agent failed")
@@ -297,6 +313,7 @@ def chat_chip(req: SpecialistRequest = Body(...)):
         answer = run_chip_agent(
             squad=ctx["squad"], current_gw=current_gw,
             gw_projections=ctx["gw_projections"], chips_remaining=chips_remaining,
+            extra_context=_load_rules_text(),
         )
     except Exception as e:
         logger.exception("chip agent failed")
