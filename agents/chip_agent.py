@@ -22,7 +22,7 @@ from anthropic import Anthropic
 from src.chip_advisor import recommend_chips
 
 
-MODEL = "claude-sonnet-4-6"  # latest Sonnet 4.x
+MODEL = "claude-haiku-4-5-20251001"  # fast specialist; Sonnet is overkill here
 SYSTEM_PROMPT_PATH = Path(__file__).parent / "chip_agent.md"
 SYSTEM_PROMPT = SYSTEM_PROMPT_PATH.read_text() if SYSTEM_PROMPT_PATH.exists() else ""
 

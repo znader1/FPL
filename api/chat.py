@@ -42,6 +42,47 @@ class ChatResponse(BaseModel):
     latency_ms: int
 
 
+def _derive_chips_remaining(entry_id: int, current_gw: int) -> list[str]:
+    """
+    Returns the list of chip types still available, taking Phase 1/2 into account.
+    2025/26: 2 of each chip — Phase 1 (GW1-19), Phase 2 (GW20-38).
+    """
+    from src import fpl_client
+
+    all_chips = {"wildcard", "free_hit", "bench_boost", "triple_captain"}
+    # FPL chip names → our canonical names
+    chip_name_map = {
+        "wildcard": "wildcard",
+        "freehit": "free_hit",
+        "bboost": "bench_boost",
+        "3xc": "triple_captain",
+    }
+
+    try:
+        history = fpl_client.get_entry_history(entry_id)
+    except Exception:
+        # On failure, assume all chips remaining (safe default)
+        return sorted(all_chips)
+
+    chips_played = history.get("chips") or []
+    # Figure out current phase
+    in_phase_1 = current_gw <= 19
+    phase_gw_range = (1, 19) if in_phase_1 else (20, 38)
+
+    # Count chips used in the current phase
+    used_in_phase = set()
+    for c in chips_played:
+        played_gw = int(c.get("event", 0))
+        canonical = chip_name_map.get(c.get("name", "").lower())
+        if not canonical:
+            continue
+        if phase_gw_range[0] <= played_gw <= phase_gw_range[1]:
+            used_in_phase.add(canonical)
+
+    remaining = all_chips - used_in_phase
+    return sorted(remaining)
+
+
 def _build_context_for_entry(entry_id: int, current_gw: int):
     """
     Build the data context needed by the orchestrator:
@@ -165,6 +206,15 @@ def chat(req: ChatRequest = Body(...)):
         logger.exception("Failed to build chat context")
         raise HTTPException(status_code=500, detail=f"Context build failed: {e}")
 
+    # Derive chips_remaining from live FPL state if not supplied
+    chips_remaining = req.chips_remaining
+    if chips_remaining is None:
+        try:
+            chips_remaining = _derive_chips_remaining(req.entry_id, current_gw)
+        except Exception as e:
+            logger.warning(f"Failed to derive chips_remaining: {e}")
+            chips_remaining = ["wildcard", "free_hit", "bench_boost", "triple_captain"]
+
     try:
         answer = run_orchestrator(
             user_question=req.message,
@@ -176,9 +226,7 @@ def chat(req: ChatRequest = Body(...)):
             bank_m=ctx["bank_m"],
             free_transfers=ctx["free_transfers"],
             captain_id=ctx["captain_id"],
-            chips_remaining=req.chips_remaining or [
-                "wildcard", "free_hit", "bench_boost", "triple_captain",
-            ],
+            chips_remaining=chips_remaining,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))

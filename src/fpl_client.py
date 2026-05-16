@@ -193,6 +193,22 @@ def get_entry(entry_id, session=None):
     return r.json()
 
 
+def get_entry_history(entry_id, session=None):
+    """
+    Returns the entry's history including 'chips' (list of chips played) and
+    'current' (per-GW summary). Used to derive remaining chip availability.
+    """
+    s = session or new_session()
+    r = s.get(
+        f"https://fantasy.premierleague.com/api/entry/{int(entry_id)}/history/",
+        verify=_verify(), timeout=20,
+    )
+    if r.status_code == 403:
+        raise RuntimeError("403 /api/entry/.../history (blocked).")
+    r.raise_for_status()
+    return r.json()
+
+
 def get_classic_league_standings(league_id, page=1, session=None):
     s = session or new_session()
     r = s.get(

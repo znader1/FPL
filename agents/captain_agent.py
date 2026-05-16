@@ -22,7 +22,7 @@ from anthropic import Anthropic
 from src.captain_advisor import recommend_captain
 
 
-MODEL = "claude-sonnet-4-6"
+MODEL = "claude-haiku-4-5-20251001"  # fast specialist
 SYSTEM_PROMPT_PATH = Path(__file__).parent / "captain_agent.md"
 SYSTEM_PROMPT = SYSTEM_PROMPT_PATH.read_text() if SYSTEM_PROMPT_PATH.exists() else ""
 
