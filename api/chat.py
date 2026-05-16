@@ -69,14 +69,15 @@ def _derive_chips_remaining(entry_id: int, current_gw: int) -> list[str]:
     in_phase_1 = current_gw <= 19
     phase_gw_range = (1, 19) if in_phase_1 else (20, 38)
 
-    # Count chips used in the current phase
+    # Count chips used in the current phase AND played strictly before current_gw
+    # (we're advising for current_gw, so chips already played in past GWs are gone)
     used_in_phase = set()
     for c in chips_played:
         played_gw = int(c.get("event", 0))
         canonical = chip_name_map.get(c.get("name", "").lower())
         if not canonical:
             continue
-        if phase_gw_range[0] <= played_gw <= phase_gw_range[1]:
+        if phase_gw_range[0] <= played_gw <= phase_gw_range[1] and played_gw < current_gw:
             used_in_phase.add(canonical)
 
     remaining = all_chips - used_in_phase
