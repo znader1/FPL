@@ -35,6 +35,8 @@ from src.backtest_data import (
 from src.backtest_adapter import build_engine_inputs
 from src import projections as engine_projections
 from src.chip_advisor import plan_chips_smart, recommend_chips
+from src.captain_advisor import pick_captain_id as advisor_pick_captain
+from src.transfer_advisor import top_transfer as advisor_top_transfer
 
 
 DIFFICULTY_MULTIPLIER = {1: 1.25, 2: 1.12, 3: 1.0, 4: 0.88, 5: 0.75}
@@ -421,6 +423,104 @@ def plan_chips(
     return chips
 
 
+# ---------- weekly chip decision ----------
+
+PHASE1_END = 19
+PHASE2_END = 38
+
+
+def decide_chip_weekly(
+    squad: pd.DataFrame,
+    gw: int,
+    end_gw: int,
+    season: str,
+    use_engine: bool,
+    full_history: pd.DataFrame,
+    fixtures_all: pd.DataFrame,
+    teams: pd.DataFrame,
+    chips_remaining_phase1: set,
+    chips_remaining_phase2: set,
+    lookahead: int = 5,
+) -> tuple[str | None, str | None]:
+    """
+    Decide whether to play a chip THIS GW.
+    Logic:
+      1. Determine which chips are available for this phase
+      2. Project xPts for [gw, gw+lookahead]
+      3. Score each chip × candidate GW combination
+      4. If the best option for any chip is THIS GW and it beats the next-best
+         alternative by enough OR the chip is about to expire, play it.
+    Returns (chip_name, reason_string) or (None, None).
+    """
+    # Which chips can we play this GW?
+    if gw <= PHASE1_END:
+        available = list(chips_remaining_phase1)
+        phase_end = PHASE1_END
+    else:
+        available = list(chips_remaining_phase2)
+        phase_end = PHASE2_END
+    if not available:
+        return None, None
+
+    # Project xPts for the lookahead window
+    lookahead_end = min(gw + lookahead, end_gw)
+    gw_proj = {}
+    for g in range(gw, lookahead_end + 1):
+        try:
+            if use_engine:
+                gw_proj[g] = project_gw_engine(g, season=season, horizon=1)
+            else:
+                hist = full_history[full_history["gw"] < g]
+                gw_proj[g] = project_gw(g, hist, fixtures_all, teams)
+        except Exception:
+            continue
+    if not gw_proj:
+        return None, None
+
+    # Get ranked recommendations
+    recs = recommend_chips(
+        squad=squad,
+        current_gw=gw,
+        gw_projections=gw_proj,
+        chips_remaining=available,
+        gws_ahead=lookahead,
+    )
+
+    # For each available chip, find its best GW
+    best_per_chip = {}
+    for r in recs:
+        if r.chip not in best_per_chip:
+            best_per_chip[r.chip] = r
+
+    # Decision rules per chip
+    gws_to_phase_end = phase_end - gw
+
+    for chip in available:
+        if chip not in best_per_chip:
+            continue
+        best = best_per_chip[chip]
+        # The "play now" condition:
+        # - best.gw IS this GW
+        # - OR forced by phase deadline (very few GWs left in phase)
+        # - AND expected_value is above minimum useful threshold per chip
+        min_value = {
+            "wildcard": 25.0,
+            "free_hit": 15.0,
+            "bench_boost": 10.0,
+            "triple_captain": 6.0,
+        }.get(chip, 5.0)
+
+        forced_by_deadline = gws_to_phase_end <= 1
+        is_best_now = best.gw == gw
+
+        if is_best_now and best.expected_value >= min_value:
+            return chip, f"best {chip} GW now (+{best.expected_value:.1f} pts uplift)"
+        if forced_by_deadline and best.expected_value > 0:
+            return chip, f"forced — phase ends GW{phase_end}"
+
+    return None, None
+
+
 # ---------- main loop ----------
 
 def run_backtest(
@@ -433,6 +533,7 @@ def run_backtest(
     enable_chips: bool = False,
     enable_can_bonus: bool = False,
     manual_chip_plan: dict | None = None,
+    smart_transfers: bool = False,
 ) -> pd.DataFrame:
     teams = load_teams(season)
     fixtures_all = load_fixtures(season)
@@ -470,9 +571,18 @@ def run_backtest(
     log = []
 
     chip_plan = {}
+    # For weekly mode, track which chips are still available
+    chips_remaining_phase1 = set()
+    chips_remaining_phase2 = set()
+
     if manual_chip_plan:
         chip_plan = manual_chip_plan
         print(f"Manual chip plan: {chip_plan}")
+    elif enable_chips == "weekly":
+        # Track chips per phase; the loop decides each GW whether to play one
+        chips_remaining_phase1 = {"wildcard", "free_hit", "bench_boost", "triple_captain"}
+        chips_remaining_phase2 = {"wildcard", "free_hit", "bench_boost", "triple_captain"}
+        print("Weekly chip decision mode — chips decided each GW based on current squad")
     elif enable_chips == "smart":
         # Pre-compute projections for all GWs in the window (heavy but worth it)
         print("Pre-computing projections for smart chip planning...")
@@ -498,11 +608,25 @@ def run_backtest(
             print(f"  GW{gw}: CAN bonus applied → {free_transfers} free transfers")
 
         chip_this_gw = None
-        for chip, planned_gw in chip_plan.items():
-            if planned_gw == gw:
-                # Strip "_2" suffix so Phase 2 chips behave the same as Phase 1
-                chip_this_gw = chip.replace("_2", "")
-                break
+        chip_reasoning = None
+        if enable_chips == "weekly":
+            chip_this_gw, chip_reasoning = decide_chip_weekly(
+                squad, gw, end_gw, season, use_engine, full_history,
+                fixtures_all, teams, chips_remaining_phase1, chips_remaining_phase2,
+            )
+            if chip_this_gw:
+                # Remove from appropriate phase
+                if gw <= 19:
+                    chips_remaining_phase1.discard(chip_this_gw)
+                else:
+                    chips_remaining_phase2.discard(chip_this_gw)
+                print(f"  GW{gw}: playing {chip_this_gw} — {chip_reasoning}")
+        else:
+            for chip, planned_gw in chip_plan.items():
+                if planned_gw == gw:
+                    # Strip "_2" suffix so Phase 2 chips behave the same as Phase 1
+                    chip_this_gw = chip.replace("_2", "")
+                    break
         if use_engine:
             market = project_gw_engine(gw, season=season, horizon=3)
         else:
@@ -539,7 +663,39 @@ def run_backtest(
             free_hit_temp_squad = fh_squad[["player_id", "name", "pos", "team", "price_m"]].reset_index(drop=True)
         elif chip_this_gw is None or chip_this_gw in ("triple_captain", "bench_boost"):
             # Normal transfer flow (TC and BB don't affect transfers)
-            transfer = suggest_transfer(squad_proj, market, bank_m, min_gain=min_transfer_gain)
+            if smart_transfers:
+                # Build 3-GW projection cache for the advisor
+                horizon_proj = {gw: market}
+                for fgw in range(gw + 1, min(gw + 3, end_gw + 1)):
+                    try:
+                        if use_engine:
+                            horizon_proj[fgw] = project_gw_engine(fgw, season=season, horizon=1)
+                        else:
+                            horizon_proj[fgw] = project_gw(fgw, full_history[full_history["gw"] < fgw], fixtures_all, teams)
+                    except Exception:
+                        pass
+                advisor_rec = advisor_top_transfer(
+                    squad=squad_proj,
+                    market=market,
+                    gw_projections=horizon_proj,
+                    current_gw=gw,
+                    bank_m=bank_m,
+                    horizon=3,
+                    min_gain=min_transfer_gain,
+                )
+                if advisor_rec:
+                    transfer = {
+                        "sell_id": advisor_rec.sell_id,
+                        "sell_name": advisor_rec.sell_name,
+                        "buy_id": advisor_rec.buy_id,
+                        "buy_name": advisor_rec.buy_name,
+                        "pos": advisor_rec.sell_pos,
+                        "gain": advisor_rec.expected_gain,
+                        "sell_price": advisor_rec.sell_price,
+                        "buy_price": advisor_rec.buy_price,
+                    }
+            else:
+                transfer = suggest_transfer(squad_proj, market, bank_m, min_gain=min_transfer_gain)
             if transfer:
                 sell = squad[squad["player_id"] == transfer["sell_id"]].iloc[0]
                 buy_row = market[market["player_id"] == transfer["buy_id"]].iloc[0]
@@ -566,9 +722,9 @@ def run_backtest(
         squad_proj = active_clean.merge(market[["player_id", "xpts"]], on="player_id", how="left")
         squad_proj["xpts"] = squad_proj["xpts"].fillna(0)
 
-        # Captain + starting XI
+        # Captain + starting XI (use the captain advisor for better picks)
         starting = pick_starting_xi(squad_proj)
-        captain_id = pick_captain(starting)
+        captain_id = advisor_pick_captain(starting)
 
         # Actual points
         actuals = player_actuals_at(gw, season)[["player_id", "total_points", "minutes"]]
@@ -617,7 +773,11 @@ def main():
     ap.add_argument("--chips", action="store_true",
                     help="Enable simple/dumb chip strategy (WC, FH, BB, TC) based on fixture structure only")
     ap.add_argument("--smart-chips", action="store_true",
-                    help="Enable chip_advisor based chip planning (uses xPts projections to pick best GWs)")
+                    help="Enable chip_advisor pre-planning (one-shot at season start)")
+    ap.add_argument("--weekly-chips", action="store_true",
+                    help="Decide chips week-by-week using chip_advisor (recommended)")
+    ap.add_argument("--smart-transfers", action="store_true",
+                    help="Use transfer_advisor (multi-GW horizon, captain-aware)")
     ap.add_argument("--chip-plan", default=None,
                     help="Manual chip plan as comma-separated 'chip:gw' pairs, e.g. 'wildcard:6,bench_boost:8,free_hit:15,triple_captain:17,triple_captain_2:26'")
     ap.add_argument("--can-bonus", action="store_true",
@@ -631,10 +791,16 @@ def main():
             chip, gw_str = pair.split(":")
             manual_chip_plan[chip.strip()] = int(gw_str.strip())
 
-    chips_mode = "smart" if args.smart_chips else (args.chips and True)
+    if args.weekly_chips:
+        chips_mode = "weekly"
+    elif args.smart_chips:
+        chips_mode = "smart"
+    else:
+        chips_mode = args.chips and True
     log = run_backtest(
         args.season, args.start, args.end, args.initial_squad, args.min_gain,
         args.use_engine, chips_mode, args.can_bonus, manual_chip_plan,
+        smart_transfers=args.smart_transfers,
     )
 
     out = Path(args.out)

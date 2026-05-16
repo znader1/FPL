@@ -44,6 +44,13 @@ from src.utils import (
 app = FastAPI(title="FPL Assistant API", version="0.3.0")
 logger = logging.getLogger(__name__)
 
+# Mount /chat endpoint (orchestrator agent over HTTP)
+try:
+    from api.chat import router as chat_router
+    app.include_router(chat_router)
+except Exception as e:
+    logger.warning(f"Chat router not loaded: {e}")
+
 
 def _csv_env(name):
     raw = (os.environ.get(name) or "").strip()
