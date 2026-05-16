@@ -98,11 +98,23 @@ def _build_context_for_entry(entry_id: int, current_gw: int):
     fixtures = transforms.fixtures_df(fpl_client.get_fixtures())
     elements, teams, teams_short_map = transforms.tables_from_bootstrap(bootstrap)
 
-    # Pull entry's current picks
-    try:
-        picks_data = fpl_client.get_entry_picks(entry_id, current_gw)
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Entry {entry_id} picks not found: {e}")
+    # Pull entry's picks for current_gw, falling back to the previous GW if it
+    # hasn't happened yet (FPL only serves picks for in-progress / past GWs)
+    picks_data = None
+    last_error = None
+    picks_event_id = current_gw
+    for candidate in [current_gw, current_gw - 1, current_gw - 2]:
+        if candidate < 1:
+            break
+        try:
+            picks_data = fpl_client.get_entry_picks(entry_id, candidate)
+            picks_event_id = candidate
+            break
+        except Exception as e:
+            last_error = e
+            continue
+    if picks_data is None:
+        raise HTTPException(status_code=404, detail=f"Entry {entry_id} picks not found: {last_error}")
 
     picks = picks_data.get("picks", [])
     if not picks:
@@ -181,9 +193,122 @@ def _build_context_for_entry(entry_id: int, current_gw: int):
     }
 
 
+class SpecialistRequest(BaseModel):
+    entry_id: int
+    current_gw: Optional[int] = None
+    chips_remaining: Optional[list[str]] = None
+
+
+def _resolve_current_gw(req_gw: Optional[int]) -> int:
+    from api.main import build_next_event_summary, get_bootstrap_cached, get_fixtures_cached
+    if req_gw is not None:
+        return int(req_gw)
+    summary = build_next_event_summary(
+        bootstrap=get_bootstrap_cached(),
+        fixtures=get_fixtures_cached(),
+    )
+    return int(summary.get("event_id") or 1)
+
+
+def _resolve_chips(req: SpecialistRequest, current_gw: int) -> list[str]:
+    if req.chips_remaining is not None:
+        return req.chips_remaining
+    try:
+        return _derive_chips_remaining(req.entry_id, current_gw)
+    except Exception as e:
+        logger.warning(f"chip derivation failed: {e}")
+        return ["wildcard", "free_hit", "bench_boost", "triple_captain"]
+
+
+@router.post("/chat/captain", response_model=ChatResponse)
+def chat_captain(req: SpecialistRequest = Body(...)):
+    """Direct captain-agent call — skips orchestrator for speed."""
+    from agents.captain_agent import run_captain_agent
+
+    t0 = time.perf_counter()
+    current_gw = _resolve_current_gw(req.current_gw)
+    ctx = _build_context_for_entry(req.entry_id, current_gw)
+
+    try:
+        answer = run_captain_agent(starting_xi=ctx["starting_xi"], current_gw=current_gw)
+    except Exception as e:
+        logger.exception("captain agent failed")
+        raise HTTPException(status_code=500, detail=f"Agent error: {e}")
+
+    return ChatResponse(answer=answer, current_gw=current_gw,
+                        latency_ms=int((time.perf_counter() - t0) * 1000))
+
+
+@router.post("/chat/transfer", response_model=ChatResponse)
+def chat_transfer(req: SpecialistRequest = Body(...)):
+    """
+    Direct transfer-agent call — skips orchestrator for speed.
+    Computes the model-recommended captain (deterministic, fast) and protects
+    them from being suggested as a sell target.
+    """
+    from agents.transfer_agent import run_transfer_agent
+    from src.captain_advisor import pick_captain_id
+
+    t0 = time.perf_counter()
+    current_gw = _resolve_current_gw(req.current_gw)
+    ctx = _build_context_for_entry(req.entry_id, current_gw)
+
+    # Deterministic captain pick (no LLM) — protects from being sold
+    try:
+        from scripts.backtest_season import pick_starting_xi
+        # already have starting_xi in ctx
+        model_captain_id = pick_captain_id(ctx["starting_xi"])
+    except Exception:
+        model_captain_id = ctx["captain_id"]
+
+    try:
+        answer = run_transfer_agent(
+            squad=ctx["squad"], market=ctx["market"],
+            gw_projections=ctx["gw_projections"], current_gw=current_gw,
+            bank_m=ctx["bank_m"], free_transfers=ctx["free_transfers"],
+            captain_id=model_captain_id,
+        )
+    except Exception as e:
+        logger.exception("transfer agent failed")
+        raise HTTPException(status_code=500, detail=f"Agent error: {e}")
+
+    return ChatResponse(answer=answer, current_gw=current_gw,
+                        latency_ms=int((time.perf_counter() - t0) * 1000))
+
+
+@router.post("/chat/chip", response_model=ChatResponse)
+def chat_chip(req: SpecialistRequest = Body(...)):
+    """Direct chip-agent call — skips orchestrator for speed."""
+    from agents.chip_agent import run_chip_agent
+
+    t0 = time.perf_counter()
+    current_gw = _resolve_current_gw(req.current_gw)
+    ctx = _build_context_for_entry(req.entry_id, current_gw)
+    chips_remaining = _resolve_chips(req, current_gw)
+
+    if not chips_remaining:
+        return ChatResponse(
+            answer=f"You have no chips remaining for GW{current_gw}. Focus on transfers and captaincy.",
+            current_gw=current_gw,
+            latency_ms=int((time.perf_counter() - t0) * 1000),
+        )
+
+    try:
+        answer = run_chip_agent(
+            squad=ctx["squad"], current_gw=current_gw,
+            gw_projections=ctx["gw_projections"], chips_remaining=chips_remaining,
+        )
+    except Exception as e:
+        logger.exception("chip agent failed")
+        raise HTTPException(status_code=500, detail=f"Agent error: {e}")
+
+    return ChatResponse(answer=answer, current_gw=current_gw,
+                        latency_ms=int((time.perf_counter() - t0) * 1000))
+
+
 @router.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest = Body(...)):
-    """Route a user question to the FPL orchestrator agent."""
+    """Route a user question to the FPL orchestrator agent (free-form questions)."""
     from agents.orchestrator import run_orchestrator
     from api.main import build_next_event_summary, get_bootstrap_cached, get_fixtures_cached
 
