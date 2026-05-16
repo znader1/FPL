@@ -34,6 +34,7 @@ from src.backtest_data import (
 )
 from src.backtest_adapter import build_engine_inputs
 from src import projections as engine_projections
+from src.chip_advisor import plan_chips_smart, recommend_chips
 
 
 DIFFICULTY_MULTIPLIER = {1: 1.25, 2: 1.12, 3: 1.0, 4: 0.88, 5: 0.75}
@@ -472,6 +473,20 @@ def run_backtest(
     if manual_chip_plan:
         chip_plan = manual_chip_plan
         print(f"Manual chip plan: {chip_plan}")
+    elif enable_chips == "smart":
+        # Pre-compute projections for all GWs in the window (heavy but worth it)
+        print("Pre-computing projections for smart chip planning...")
+        gw_proj_cache = {}
+        for gw in range(start_gw, end_gw + 1):
+            try:
+                if use_engine:
+                    gw_proj_cache[gw] = project_gw_engine(gw, season=season, horizon=1)
+                else:
+                    gw_proj_cache[gw] = project_gw(gw, full_history[full_history["gw"] < gw], fixtures_all, teams)
+            except Exception as e:
+                print(f"  ! GW{gw} projection failed: {e}")
+        chip_plan = plan_chips_smart(squad, start_gw, end_gw, gw_proj_cache)
+        print(f"Smart chip plan: {chip_plan}")
     elif enable_chips:
         chip_plan = plan_chips(season, start_gw, end_gw, teams, fixtures_all, use_engine, full_history)
         print(f"Auto chip plan: {chip_plan}")
@@ -600,7 +615,9 @@ def main():
     ap.add_argument("--use-engine", action="store_true",
                     help="Use the real src/projections.py engine (slower) instead of the simple proxy")
     ap.add_argument("--chips", action="store_true",
-                    help="Enable chip strategy (WC, FH, BB, TC)")
+                    help="Enable simple/dumb chip strategy (WC, FH, BB, TC) based on fixture structure only")
+    ap.add_argument("--smart-chips", action="store_true",
+                    help="Enable chip_advisor based chip planning (uses xPts projections to pick best GWs)")
     ap.add_argument("--chip-plan", default=None,
                     help="Manual chip plan as comma-separated 'chip:gw' pairs, e.g. 'wildcard:6,bench_boost:8,free_hit:15,triple_captain:17,triple_captain_2:26'")
     ap.add_argument("--can-bonus", action="store_true",
@@ -614,9 +631,10 @@ def main():
             chip, gw_str = pair.split(":")
             manual_chip_plan[chip.strip()] = int(gw_str.strip())
 
+    chips_mode = "smart" if args.smart_chips else (args.chips and True)
     log = run_backtest(
         args.season, args.start, args.end, args.initial_squad, args.min_gain,
-        args.use_engine, args.chips, args.can_bonus, manual_chip_plan,
+        args.use_engine, chips_mode, args.can_bonus, manual_chip_plan,
     )
 
     out = Path(args.out)
