@@ -44,6 +44,11 @@ INITIAL_BUDGET_M = 100.0
 # Captaincy preference: heavily favor attackers since they have higher ceilings
 CAPTAIN_POSITION_MULT = {"FWD": 1.16, "MID": 1.12, "DEF": 0.92, "GKP": 0.70}
 
+# CAN/AFCON 2025/26: FPL gave 5 free transfers at GW16 to compensate for African players
+# being unavailable at the Africa Cup of Nations
+CAN_BONUS_GW = 16
+CAN_BONUS_FT = 5
+
 
 # ---------- projection ----------
 
@@ -333,6 +338,88 @@ def auto_pick_initial_squad(gw1_projection: pd.DataFrame, budget: float = INITIA
     return pd.DataFrame(chosen)
 
 
+# ---------- chip planning ----------
+
+def plan_chips(
+    season: str,
+    start_gw: int,
+    end_gw: int,
+    teams: pd.DataFrame,
+    fixtures_all: pd.DataFrame,
+    use_engine: bool,
+    full_history: pd.DataFrame,
+) -> dict:
+    """
+    Pre-scan GWs to identify best chip moments. Returns:
+        {"wildcard": gw, "triple_captain": gw, "bench_boost": gw, "free_hit": gw}
+    Looks at fixture structure (single/double/blank GWs) for each GW in the range.
+    """
+    # Per-GW fixture stats
+    gw_stats = []
+    for gw in range(start_gw, end_gw + 1):
+        fx_gw = fixtures_all[pd.to_numeric(fixtures_all["event"], errors="coerce") == gw]
+        teams_playing = set()
+        for _, fx in fx_gw.iterrows():
+            teams_playing.add(int(fx["team_h"]))
+            teams_playing.add(int(fx["team_a"]))
+        fixture_count_by_team = {}
+        for _, fx in fx_gw.iterrows():
+            for t in (int(fx["team_h"]), int(fx["team_a"])):
+                fixture_count_by_team[t] = fixture_count_by_team.get(t, 0) + 1
+        n_doubles = sum(1 for c in fixture_count_by_team.values() if c >= 2)
+        n_blanks = 20 - len(teams_playing)  # 20 PL teams
+        gw_stats.append({
+            "gw": gw,
+            "n_fixtures": len(fx_gw),
+            "n_doubles": n_doubles,
+            "n_blanks": n_blanks,
+            "teams_doubling": [t for t, c in fixture_count_by_team.items() if c >= 2],
+        })
+    gw_df = pd.DataFrame(gw_stats)
+
+    chips = {"wildcard": None, "triple_captain": None, "bench_boost": None, "free_hit": None}
+
+    # Free Hit: biggest blank GW (most teams without fixtures)
+    blanks = gw_df[gw_df["n_blanks"] > 0].sort_values("n_blanks", ascending=False)
+    if not blanks.empty:
+        chips["free_hit"] = int(blanks.iloc[0]["gw"])
+
+    # Bench Boost: biggest double GW (most teams with 2 fixtures)
+    doubles = gw_df[gw_df["n_doubles"] > 0].sort_values("n_doubles", ascending=False)
+    if not doubles.empty:
+        chips["bench_boost"] = int(doubles.iloc[0]["gw"])
+
+    # Triple Captain: pick a DIFFERENT DGW from BB if possible
+    if not doubles.empty:
+        for _, row in doubles.iterrows():
+            gw_cand = int(row["gw"])
+            if gw_cand != chips["bench_boost"]:
+                chips["triple_captain"] = gw_cand
+                break
+        if chips["triple_captain"] is None and not doubles.empty:
+            chips["triple_captain"] = int(doubles.iloc[0]["gw"])
+
+    # If still no DGW found, fall back to "biggest projected captain GW" — use a GW where Haaland-tier
+    # players have good fixtures. Heuristic: GW with most fixtures (proxy for opportunity).
+    if chips["triple_captain"] is None:
+        big_gw = gw_df.sort_values("n_fixtures", ascending=False).iloc[0]
+        chips["triple_captain"] = int(big_gw["gw"])
+    if chips["bench_boost"] is None:
+        # Use a different big GW than TC
+        big = gw_df.sort_values("n_fixtures", ascending=False)
+        for _, row in big.iterrows():
+            if int(row["gw"]) != chips["triple_captain"]:
+                chips["bench_boost"] = int(row["gw"])
+                break
+
+    # Wildcard: roughly mid-season. Pick GW 8-10 for first-half reset.
+    wc_candidates = [g for g in range(max(start_gw, 7), min(end_gw, 11) + 1)]
+    if wc_candidates:
+        chips["wildcard"] = wc_candidates[0] + 1  # GW8 if start>=7
+
+    return chips
+
+
 # ---------- main loop ----------
 
 def run_backtest(
@@ -342,6 +429,8 @@ def run_backtest(
     initial_squad_csv: str | None,
     min_transfer_gain: float,
     use_engine: bool = False,
+    enable_chips: bool = False,
+    enable_can_bonus: bool = False,
 ) -> pd.DataFrame:
     teams = load_teams(season)
     fixtures_all = load_fixtures(season)
@@ -378,7 +467,22 @@ def run_backtest(
     total_hits = 0
     log = []
 
+    chip_plan = {}
+    if enable_chips:
+        chip_plan = plan_chips(season, start_gw, end_gw, teams, fixtures_all, use_engine, full_history)
+        print(f"Chip plan: {chip_plan}")
+
     for gw in range(start_gw, end_gw + 1):
+        # CAN bonus: 5 FT at GW16 (real FPL gave this in 2025/26 for AFCON)
+        if enable_can_bonus and gw == CAN_BONUS_GW:
+            free_transfers = CAN_BONUS_FT
+            print(f"  GW{gw}: CAN bonus applied → {free_transfers} free transfers")
+
+        chip_this_gw = None
+        for chip, planned_gw in chip_plan.items():
+            if planned_gw == gw:
+                chip_this_gw = chip
+                break
         if use_engine:
             market = project_gw_engine(gw, season=season, horizon=3)
         else:
@@ -395,31 +499,51 @@ def run_backtest(
         squad_proj["xpts"] = squad_proj["xpts"].fillna(0)
         squad_proj["fixture_count"] = squad_proj["fixture_count"].fillna(0).astype(int)
 
-        # Transfer decision (1 transfer per GW max in Phase 1)
-        transfer = suggest_transfer(squad_proj, market, bank_m, min_gain=min_transfer_gain)
         hit_cost = 0
-        if transfer:
-            sell = squad[squad["player_id"] == transfer["sell_id"]].iloc[0]
-            # Get buy metadata
-            buy_row = market[market["player_id"] == transfer["buy_id"]].iloc[0]
-            squad = squad[squad["player_id"] != transfer["sell_id"]].copy()
-            squad = pd.concat([squad, pd.DataFrame([{
-                "player_id": int(buy_row["player_id"]),
-                "name": buy_row["name"],
-                "pos": buy_row["pos"],
-                "team": buy_row["team"],
-                "price_m": float(buy_row["price_m"]),
-            }])], ignore_index=True)
-            bank_m += transfer["sell_price"] - transfer["buy_price"]
-            if free_transfers > 0:
-                free_transfers -= 1
-            else:
-                hit_cost = 4
-                total_hits += 4
+        transfer = None
+        free_hit_temp_squad = None
+
+        # --- Chip handling ---
+        if chip_this_gw == "wildcard":
+            # Rebuild squad from scratch using full current budget (squad value + bank)
+            squad_value = float(squad["price_m"].sum()) + bank_m
+            new_squad = auto_pick_initial_squad(market.rename(columns={"name": "name"}), squad_value)
+            new_squad = new_squad[["player_id", "name", "pos", "team", "price_m"]].reset_index(drop=True)
+            squad = new_squad
+            bank_m = squad_value - float(squad["price_m"].sum())
+            # No transfer cost, no FT consumed
+        elif chip_this_gw == "free_hit":
+            # Temporary squad for this GW only — pick best 15 within (current value + bank)
+            squad_value = float(squad["price_m"].sum()) + bank_m
+            fh_squad = auto_pick_initial_squad(market, squad_value)
+            free_hit_temp_squad = fh_squad[["player_id", "name", "pos", "team", "price_m"]].reset_index(drop=True)
+        elif chip_this_gw is None or chip_this_gw in ("triple_captain", "bench_boost"):
+            # Normal transfer flow (TC and BB don't affect transfers)
+            transfer = suggest_transfer(squad_proj, market, bank_m, min_gain=min_transfer_gain)
+            if transfer:
+                sell = squad[squad["player_id"] == transfer["sell_id"]].iloc[0]
+                buy_row = market[market["player_id"] == transfer["buy_id"]].iloc[0]
+                squad = squad[squad["player_id"] != transfer["sell_id"]].copy()
+                squad = pd.concat([squad, pd.DataFrame([{
+                    "player_id": int(buy_row["player_id"]),
+                    "name": buy_row["name"],
+                    "pos": buy_row["pos"],
+                    "team": buy_row["team"],
+                    "price_m": float(buy_row["price_m"]),
+                }])], ignore_index=True)
+                bank_m += transfer["sell_price"] - transfer["buy_price"]
+                if free_transfers > 0:
+                    free_transfers -= 1
+                else:
+                    hit_cost = 4
+                    total_hits += 4
+
+        # Use free-hit temp squad for this GW if active, otherwise actual squad
+        active_squad = free_hit_temp_squad if free_hit_temp_squad is not None else squad
 
         # Re-project for final pick (drop stale xpts first)
-        squad_clean = squad.drop(columns=[c for c in ("xpts",) if c in squad.columns])
-        squad_proj = squad_clean.merge(market[["player_id", "xpts"]], on="player_id", how="left")
+        active_clean = active_squad.drop(columns=[c for c in ("xpts",) if c in active_squad.columns])
+        squad_proj = active_clean.merge(market[["player_id", "xpts"]], on="player_id", how="left")
         squad_proj["xpts"] = squad_proj["xpts"].fillna(0)
 
         # Captain + starting XI
@@ -428,10 +552,15 @@ def run_backtest(
 
         # Actual points
         actuals = player_actuals_at(gw, season)[["player_id", "total_points", "minutes"]]
-        starting_actuals = starting.merge(actuals, on="player_id", how="left")
-        starting_actuals["total_points"] = starting_actuals["total_points"].fillna(0)
-        captain_pts = float(starting_actuals.loc[starting_actuals["player_id"] == captain_id, "total_points"].iloc[0])
-        gw_points = float(starting_actuals["total_points"].sum()) + captain_pts - hit_cost
+        # For BB: score all 15 instead of just XI
+        score_squad = squad_proj if chip_this_gw == "bench_boost" else starting
+        squad_actuals = score_squad.merge(actuals, on="player_id", how="left")
+        squad_actuals["total_points"] = squad_actuals["total_points"].fillna(0)
+
+        captain_pts = float(squad_actuals.loc[squad_actuals["player_id"] == captain_id, "total_points"].iloc[0]) if captain_id in squad_actuals["player_id"].values else 0.0
+        # Captain multiplier: TC = 3x (so add 2x on top), regular = 2x (so add 1x on top)
+        cap_multiplier_extra = 2 if chip_this_gw == "triple_captain" else 1
+        gw_points = float(squad_actuals["total_points"].sum()) + cap_multiplier_extra * captain_pts - hit_cost
 
         # Free transfer rollover
         free_transfers = min(2, free_transfers + 1) if not transfer else free_transfers + 1
@@ -441,11 +570,12 @@ def run_backtest(
         log.append({
             "gw": gw,
             "points": gw_points,
-            "captain": starting_actuals.loc[starting_actuals["player_id"] == captain_id, "name"].iloc[0],
+            "captain": squad_actuals.loc[squad_actuals["player_id"] == captain_id, "name"].iloc[0] if captain_id in squad_actuals["player_id"].values else "",
             "captain_pts": captain_pts,
             "transfer_in": transfer["buy_name"] if transfer else "",
             "transfer_out": transfer["sell_name"] if transfer else "",
             "hit": hit_cost,
+            "chip": chip_this_gw or "",
             "bank": round(bank_m, 1),
             "ft": free_transfers,
             "total": total_points,
@@ -464,9 +594,16 @@ def main():
     ap.add_argument("--out", default="data/backtest/results.csv")
     ap.add_argument("--use-engine", action="store_true",
                     help="Use the real src/projections.py engine (slower) instead of the simple proxy")
+    ap.add_argument("--chips", action="store_true",
+                    help="Enable chip strategy (WC, FH, BB, TC)")
+    ap.add_argument("--can-bonus", action="store_true",
+                    help="Apply CAN/AFCON 5-FT bonus at GW16 (2025/26 season)")
     args = ap.parse_args()
 
-    log = run_backtest(args.season, args.start, args.end, args.initial_squad, args.min_gain, args.use_engine)
+    log = run_backtest(
+        args.season, args.start, args.end, args.initial_squad, args.min_gain,
+        args.use_engine, args.chips, args.can_bonus,
+    )
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
