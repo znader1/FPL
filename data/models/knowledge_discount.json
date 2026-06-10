@@ -1,7 +1,10 @@
 {
-  "_comment": "Manual knowledge discount for src/fixture_difficulty.py. Multipliers nudge a team's xG-based attack/defense ratings to encode information the xG history can't see yet (new signings, key injuries, manager change). Keys may be the numeric team id (as a string) OR the team short_name (e.g. ARS). attack/defense default to 1.0; <1.0 weakens that side, >1.0 strengthens it. Values are clamped to config.FDR_RATING_MIN..FDR_RATING_MAX after multiplication.",
-  "as_of": "2026-05-31",
+  "_comment": "Manual knowledge discount for src/fixture_difficulty.py. Multipliers nudge a team's xG-based attack/defense ratings to encode what the data can't see yet: summer transfers, key injuries, manager changes, promoted-team quality. Keys are team short_name (preferred, survives FPL id reshuffles) or numeric id. attack/defense default 1.0; for ATTACK >1.0 = stronger; for DEFENSE >1.0 = concedes MORE (weaker), <1.0 = tighter. Values clamp to config.FDR_RATING_MIN..FDR_RATING_MAX after multiplication. Update 'as_of' every edit so the API meta shows freshness.",
+  "_workflow": "Summer 2026 checklist: (1) on promotion confirmation, add the 3 promoted teams below — calibrate vs the defaults (atk 0.82 / def 1.20): a dominant 95+ pt Championship winner deserves ~attack 1.10 / defense 0.95 ON TOP of defaults, a playoff survivor 1.0/1.0; (2) during the transfer window, adjust any team whose squad changed materially (e.g. sells its 25-goal striker: attack 0.90; signs an elite CB/GK: defense 0.92); (3) manager change with clear style shift: +/-0.05 on the relevant side; (4) keep nudges in 0.85-1.15 — the carryover prior does the heavy lifting; (5) delete entries once ~6 GWs of real xG exist (live signal overtakes the prior) unless something new happened.",
+  "as_of": "2026-06-10",
   "teams": {
-    "ARS": { "attack": 1.0, "defense": 1.0, "note": "example: no adjustment" }
+    "_PROMOTED_1_SHORTNAME": { "attack": 1.0, "defense": 1.0, "note": "TEMPLATE — rename key to the promoted team's short name; multipliers apply on top of promoted defaults (0.82 atk / 1.20 def)" },
+    "_PROMOTED_2_SHORTNAME": { "attack": 1.0, "defense": 1.0, "note": "TEMPLATE" },
+    "_PROMOTED_3_SHORTNAME": { "attack": 1.0, "defense": 1.0, "note": "TEMPLATE" }
   }
 }
