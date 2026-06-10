@@ -1,0 +1,7 @@
+{
+  "_comment": "Manual knowledge discount for src/fixture_difficulty.py. Multipliers nudge a team's xG-based attack/defense ratings to encode information the xG history can't see yet (new signings, key injuries, manager change). Keys may be the numeric team id (as a string) OR the team short_name (e.g. ARS). attack/defense default to 1.0; <1.0 weakens that side, >1.0 strengthens it. Values are clamped to config.FDR_RATING_MIN..FDR_RATING_MAX after multiplication.",
+  "as_of": "2026-05-31",
+  "teams": {
+    "ARS": { "attack": 1.0, "defense": 1.0, "note": "example: no adjustment" }
+  }
+}

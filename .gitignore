@@ -12,13 +12,22 @@ FPL_env/
 .streamlit/secrets.toml
 
 # Data / outputs
-data/
-Data/
+# data/* (not data/) so data/models can be re-included below; a fully
+# ignored parent dir can never have children un-ignored.
+data/*
+Data/*
 cache/
 logs/
 *.csv
 *.json
 *.parquet
+
+# ...but ship model artifacts the app needs at runtime (ratings seed, knowledge file)
+!data/models/
+data/models/*
+!data/models/team_ratings_seed.json
+!data/models/team_ratings_*.json
+!data/models/knowledge_discount.json
 
 # OS
 .DS_Store

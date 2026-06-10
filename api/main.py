@@ -15,7 +15,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src import config, explainer, fpl_client, fpl_refresh_next_gw, league as league_mod, league_strategy, optimizer, projections, recommender, transforms
+from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, league as league_mod, league_strategy, optimizer, projections, recommender, transforms
 from src.auth import check_api_key, check_admin_key
 from src.insights import (
     build_chip_profile,
@@ -112,6 +112,59 @@ def get_fixtures_cached():
         return hit
     fx = transforms.fixtures_df(fpl_client.get_fixtures())
     return _cache_set(_fixtures_cache, fx)
+
+
+_team_ratings_cache = {"ts": 0.0, "data": None}
+
+
+def get_team_ratings_cached(teams_short_map):
+    """
+    xG team ratings: current-season xG blended with the prior-season carryover
+    seed, plus the manual knowledge discount. Cached on the fixtures TTL.
+    """
+    ttl = int(getattr(config, "FIXTURES_TTL", 300) or 300)
+    hit = _cache_get(_team_ratings_cache, ttl)
+    if hit is not None:
+        return hit
+    match_df = fixture_difficulty.load_match_history()
+    team_match_xg = fixture_difficulty.build_team_match_xg(match_df)
+    ratings = fixture_difficulty.resolve_team_ratings(team_match_xg, teams_short_map=teams_short_map)
+    ratings = fixture_difficulty.apply_knowledge_discount(ratings, teams_short_map=teams_short_map)
+    return _cache_set(_team_ratings_cache, ratings)
+
+
+def build_fixture_difficulty_payload(gw_start=None, horizon_gws=6):
+    """Shared builder for /fixtures/difficulty and the league-strategy injection."""
+    bootstrap = get_bootstrap_cached()
+    fixtures = get_fixtures_cached()
+    _, teams_df, _ = transforms.tables_from_bootstrap(bootstrap)
+    teams_short = teams_df.set_index("id")["short_name"].to_dict()
+
+    gw_start = safe_int(gw_start) or _default_optimize_event_id(bootstrap)
+    horizon_gws = max(1, min(38, safe_int(horizon_gws) or 6))
+
+    ratings = get_team_ratings_cached(teams_short)
+    ticker = fixture_difficulty.build_fixture_ticker(
+        ratings, fixtures, teams_short, gw_start, horizon_gws=horizon_gws
+    )
+
+    sources = {}
+    for team_id, r in ratings.items():
+        if team_id == "_league" or not isinstance(r, dict):
+            continue
+        src = r.get("source", "live")
+        sources[src] = sources.get(src, 0) + 1
+
+    knowledge = fixture_difficulty.load_knowledge_discount()
+    ticker["meta"] = {
+        "model": "xg_carryover_v1",
+        "rating_sources": sources,
+        "league_avg_xg": round_float(ratings.get("_league"), 3),
+        "knowledge_as_of": (knowledge or {}).get("as_of"),
+        "generated_at_utc": datetime.utcnow().isoformat() + "Z",
+    }
+    ticker["team_ratings"] = df_records(fixture_difficulty.team_ratings_table(ratings))
+    return ticker
 
 
 def build_next_event_summary(bootstrap=None, fixtures=None):
@@ -900,6 +953,18 @@ def next_event():
     return JSONResponse(content=jsonable_encoder(summary))
 
 
+@app.get("/fixtures/difficulty")
+def fixtures_difficulty_get(
+    gw_start=None, horizon_gws=6,
+    api_key=None, x_api_key=Header(None), authorization=Header(None),
+):
+    err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
+    if err:
+        return err
+    out = build_fixture_difficulty_payload(gw_start=gw_start, horizon_gws=horizon_gws)
+    return JSONResponse(content=jsonable_encoder(out))
+
+
 @app.post("/admin/refresh")
 def admin_refresh(
     payload=Body(None),
@@ -919,6 +984,8 @@ def admin_refresh(
     _bootstrap_cache["data"] = None
     _fixtures_cache["ts"] = 0.0
     _fixtures_cache["data"] = None
+    _team_ratings_cache["ts"] = 0.0
+    _team_ratings_cache["data"] = None
 
     bootstrap = get_bootstrap_cached()
     fixtures = get_fixtures_cached()
@@ -1054,6 +1121,12 @@ def league_strategy_post(
     except Exception as e:
         proj_error = str(e)
 
+    fixture_ticker = None
+    try:
+        fixture_ticker = build_fixture_difficulty_payload(gw_start=event_id, horizon_gws=max(horizon_gws, 6))
+    except Exception as e:
+        logger.warning(f"fixture ticker unavailable for league strategy: {e}")
+
     out = league_strategy.build_strategy(
         entry_id=int(entry_id),
         league_id=int(league_id),
@@ -1062,6 +1135,7 @@ def league_strategy_post(
         bootstrap=bootstrap,
         projections_df=proj_df,
         model=payload.get("model"),
+        fixture_ticker=fixture_ticker,
     )
     if proj_error:
         out["projection_error"] = proj_error

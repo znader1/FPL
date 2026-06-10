@@ -162,6 +162,7 @@ USER_TEMPLATE = """Mode: {mode}
 User: {user_name} rank {user_rank} ({user_total} pts) in {league_name}
 Rivals above: {rivals_above_short}
 Rivals below: {rivals_below_short}
+Fixture outlook (xG model): {fixture_outlook_short}
 
 Top candidates (ranked by model xPts over {horizon_gws} GWs — includes fixture difficulty and recent form):
 {candidates_short}
@@ -183,7 +184,31 @@ Rules:
 """
 
 
-def _llm_narrative(analysis, mode, candidates, model=None):
+def _fixture_run_lookup(fixture_ticker):
+    """{team_short: {avg_difficulty, band}} from a build_fixture_ticker payload."""
+    out = {}
+    for t in (fixture_ticker or {}).get("teams", []):
+        short = t.get("team_short")
+        if short:
+            out[str(short)] = {
+                "avg_difficulty": t.get("avg_difficulty"),
+                "band": t.get("band"),
+            }
+    return out
+
+
+def _attach_fixture_runs(candidates, fixture_ticker):
+    """Annotate candidates in-place with their team's xG fixture-run difficulty."""
+    runs = _fixture_run_lookup(fixture_ticker)
+    for c in candidates:
+        run = runs.get(str(c.get("team_short") or ""))
+        if run:
+            c["fixture_run_difficulty"] = run["avg_difficulty"]
+            c["fixture_run_band"] = run["band"]
+    return candidates
+
+
+def _llm_narrative(analysis, mode, candidates, model=None, fixture_ticker=None):
     api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
     if not api_key:
         return {"error": "ANTHROPIC_API_KEY not set"}
@@ -201,14 +226,27 @@ def _llm_narrative(analysis, mode, candidates, model=None):
     def _short_candidate(c):
         fixes = " | ".join(f"{k}:{v}" for k, v in (c.get("fixtures") or {}).items()) or "—"
         per_gw = " ".join(f"{k}:{v}" for k, v in (c.get("model_xpts_per_gw") or {}).items())
+        run = ""
+        if c.get("fixture_run_difficulty") is not None:
+            run = f" fixture_run={c['fixture_run_difficulty']} ({c.get('fixture_run_band')})"
         return (
             f"id={c['id']} {c.get('web_name')} ({c.get('team_short')}) "
-            f"xPts={c.get('model_xpts_horizon', '?')} [{per_gw}] fixtures: {fixes} "
+            f"xPts={c.get('model_xpts_horizon', '?')} [{per_gw}] fixtures: {fixes}{run} "
             f"league_own={c.get('league_ownership', '?')}"
+        )
+
+    fixture_outlook_short = "n/a"
+    if fixture_ticker:
+        easiest = ", ".join(fixture_ticker.get("easiest_runs") or []) or "?"
+        hardest = ", ".join(fixture_ticker.get("hardest_runs") or []) or "?"
+        fixture_outlook_short = (
+            f"next {fixture_ticker.get('horizon_gws')} GWs — easiest runs: {easiest}; "
+            f"hardest runs: {hardest} (lower fixture_run = easier)"
         )
 
     user_msg = USER_TEMPLATE.format(
         mode=mode,
+        fixture_outlook_short=fixture_outlook_short,
         league_name=analysis["league"].get("name"),
         user_name=(analysis["user"] or {}).get("player_name"),
         user_rank=(analysis["user"] or {}).get("rank"),
@@ -249,7 +287,8 @@ def _llm_narrative(analysis, mode, candidates, model=None):
     return parsed
 
 
-def build_strategy(entry_id, league_id, event_id, mode, bootstrap, projections_df=None, model=None):
+def build_strategy(entry_id, league_id, event_id, mode, bootstrap, projections_df=None, model=None,
+                   fixture_ticker=None):
     if mode not in VALID_MODES:
         return {"error": f"mode must be one of {VALID_MODES}"}
 
@@ -259,9 +298,10 @@ def build_strategy(entry_id, league_id, event_id, mode, bootstrap, projections_d
 
     elements_meta = _player_meta(bootstrap, projections_df=projections_df)
     candidates = _candidate_targets(analysis, elements_meta, mode)
-    narrative = _llm_narrative(analysis, mode, candidates, model=model)
+    candidates = _attach_fixture_runs(candidates, fixture_ticker)
+    narrative = _llm_narrative(analysis, mode, candidates, model=model, fixture_ticker=fixture_ticker)
 
-    return {
+    out = {
         "mode": mode,
         "league": analysis["league"],
         "user": analysis["user"],
@@ -275,3 +315,12 @@ def build_strategy(entry_id, league_id, event_id, mode, bootstrap, projections_d
         "candidates": candidates,
         "narrative": narrative,
     }
+    if fixture_ticker:
+        out["fixture_outlook"] = {
+            "gw_start": fixture_ticker.get("gw_start"),
+            "horizon_gws": fixture_ticker.get("horizon_gws"),
+            "easiest_runs": fixture_ticker.get("easiest_runs"),
+            "hardest_runs": fixture_ticker.get("hardest_runs"),
+            "meta": fixture_ticker.get("meta"),
+        }
+    return out
