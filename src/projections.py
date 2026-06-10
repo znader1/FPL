@@ -514,6 +514,21 @@ def project_elements_next_gws(
 
     df["xpts_horizon"] = horizon_total
 
+    # Optional: blend in the xG-based structural model (fixture_difficulty +
+    # minutes_model + output_model). Default weight 0.0 leaves baseline untouched
+    # and preserves backtest parity; never let a model error break projections.
+    blend_weight = clamp(getattr(config, "PROJ_MODEL_BLEND_WEIGHT", 0.0), 0.0, 1.0)
+    if blend_weight > 0.0:
+        try:
+            from . import expected_points as _xg_model
+
+            model_df = _xg_model.build_expected_points(
+                df, fixtures, teams_short_map, gw_start, horizon_gws
+            )
+            df = _xg_model.blend_into_projections(df, model_df, blend_weight, gws)
+        except Exception:
+            pass
+
     keep_base = [
         "id",
         "web_name",
@@ -555,6 +570,8 @@ def project_elements_next_gws(
         keep.extend(
             [
                 f"xpts_gw{gw}",
+                f"xpts_baseline_gw{gw}",
+                f"xpts_model_gw{gw}",
                 f"fixtures_gw{gw}",
                 f"fixture_count_gw{gw}",
                 f"diff_avg_gw{gw}",
@@ -564,6 +581,8 @@ def project_elements_next_gws(
             ]
         )
     keep.append("xpts_horizon")
+    if "xpts_model_horizon" in df.columns:
+        keep.append("xpts_model_horizon")
 
     out = df[[c for c in keep if c in df.columns]].copy()
     out = out.sort_values("xpts_horizon", ascending=False)

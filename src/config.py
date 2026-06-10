@@ -180,3 +180,70 @@ CHIP_WILDCARD_OWNERSHIP_BONUS_SCALE = 40.0
 CHIP_WILDCARD_MIN_PREMIUM_CAPTAINS = 1
 CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR = 10.5
 CHIP_WILDCARD_PREMIUM_CAPTAIN_POSITIONS = ["MID", "FWD"]
+
+# ---------------------------------------------------------------------------
+# xG expected-points model (fixture_difficulty / minutes_model / output_model)
+# These feed src/expected_points.py, which produces a parallel `xpts_model_*`
+# column that project_elements_next_gws blends in via PROJ_MODEL_BLEND_WEIGHT.
+# ---------------------------------------------------------------------------
+
+# --- fixture_difficulty.py: xG-based team strength ---
+FDR_XG_HALFLIFE_DAYS = 60.0          # exponential time-decay half-life on team-match xG samples
+FDR_XG_SHRINKAGE_MATCHES = 6.0       # pseudo-matches of league-average prior (shrinks thin samples)
+FDR_HOME_XG_MULT = 1.10              # home attacking boost when projecting a fixture's xG
+FDR_AWAY_XG_MULT = 0.92              # away attacking penalty
+FDR_RATING_MIN = 0.50                # clamp on attack/defense rating multipliers
+FDR_RATING_MAX = 1.80
+FDR_LEAGUE_AVG_XG_FALLBACK = 1.40    # per-team per-match league-average xG when data is thin
+FDR_KNOWLEDGE_DISCOUNT_PATH = "data/models/knowledge_discount.json"
+
+# Cross-season carryover (season-start cold start). At a new season's launch there
+# is no current-season xG, so ratings start from the prior season's frozen seed
+# (regressed toward the mean) and the live signal takes over as matches accrue.
+FDR_RATINGS_SEED_PATH = "data/models/team_ratings_seed.json"
+FDR_CARRYOVER_PRIOR_MATCHES = 8.0    # pseudo-matches of weight given to the prior-season seed
+FDR_CARRYOVER_REGRESSION = 0.30      # regress the prior-season rating this far toward 1.0 (mean)
+# Promoted teams have no top-flight xG and no seed: assume a weak default until games arrive.
+FDR_PROMOTED_DEFAULT_ATTACK = 0.82
+FDR_PROMOTED_DEFAULT_DEFENSE = 1.20  # >1 => concedes more xG than average (weaker defense)
+# Difficulty bands for the fixture ticker: (max_score, label, color). Score is the
+# attacking-difficulty a team faces (higher = harder), centered near 3.0 like FPL's FDR.
+FDR_TICKER_BANDS = [
+    [2.2, "very_easy", "#1a9850"],
+    [2.7, "easy", "#66bd63"],
+    [3.3, "medium", "#fee08b"],
+    [3.8, "hard", "#f46d43"],
+    [9.9, "very_hard", "#d73027"],
+]
+
+# --- minutes_model.py: P(start) + expected minutes ---
+MINUTES_HALFLIFE_GWS = 5.0           # decay half-life (in GWs) on start/minutes history
+MINUTES_START_PRIOR = 0.55           # prior P(start) for players with no history
+MINUTES_PRIOR_WEIGHT = 2.0           # pseudo-GWs of prior weight (shrinks thin samples)
+MINUTES_E_MIN_GIVEN_START = 82.0     # assumed E[minutes | started] with no history
+MINUTES_CAMEO_MINUTES = 22.0         # assumed E[minutes | sub appearance]
+MINUTES_SUB_APP_PROB = 0.45          # P(appear | did not start) baseline
+MINUTES_P60_GIVEN_START = 0.86       # P(>=60 min | started) baseline
+MINUTES_STATUS_AVAILABILITY = {      # hard availability cap by FPL status code
+    "a": 1.0, "d": 0.5, "i": 0.0, "s": 0.0, "u": 0.0, "n": 0.0,
+}
+
+# --- output_model.py: xG-based structural points ---
+OUTPUT_XG_HALFLIFE_DAYS = 75.0       # decay half-life on player per-90 xG/xA samples
+OUTPUT_MIN_MINUTES_TRUST = 270.0     # minutes before a player's own rates are trusted over position prior
+OUTPUT_GOAL_POINTS = {"GKP": 6, "DEF": 6, "MID": 5, "FWD": 4}
+OUTPUT_ASSIST_POINTS = 3.0
+OUTPUT_CS_POINTS = {"GKP": 4, "DEF": 4, "MID": 1, "FWD": 0}
+OUTPUT_GOALS_CONCEDED_PENALTY_PER_2 = {"GKP": -1.0, "DEF": -1.0, "MID": 0.0, "FWD": 0.0}
+OUTPUT_SAVES_PER_XGA = 2.0           # rough expected saves per unit opponent xG (GKP)
+OUTPUT_SAVE_POINTS_PER_SAVE = 1.0 / 3.0
+OUTPUT_BONUS_PER_XGI = 0.9           # rough bonus points per expected goal involvement
+OUTPUT_POSITION_BASE_XG90 = {"GKP": 0.01, "DEF": 0.06, "MID": 0.12, "FWD": 0.30}
+OUTPUT_POSITION_BASE_XA90 = {"GKP": 0.01, "DEF": 0.06, "MID": 0.14, "FWD": 0.16}
+OUTPUT_MAX_GOALS_PER_GAME = 2.5      # sanity clamp on a single player's expected goals
+OUTPUT_MAX_ASSISTS_PER_GAME = 2.0
+
+# --- blend of the xG model into the baseline projection ---
+# 0.0 => baseline projections unchanged (preserves backtest parity). Raise to
+# weight the xG model's per-GW xpts against the existing engine output.
+PROJ_MODEL_BLEND_WEIGHT = 0.0
