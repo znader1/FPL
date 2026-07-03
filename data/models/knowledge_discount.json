@@ -1,10 +1,11 @@
 {
   "_comment": "Manual knowledge discount for src/fixture_difficulty.py. Multipliers nudge a team's xG-based attack/defense ratings to encode what the data can't see yet: summer transfers, key injuries, manager changes, promoted-team quality. Keys are team short_name (preferred, survives FPL id reshuffles) or numeric id. attack/defense default 1.0; for ATTACK >1.0 = stronger; for DEFENSE >1.0 = concedes MORE (weaker), <1.0 = tighter. Values clamp to config.FDR_RATING_MIN..FDR_RATING_MAX after multiplication. Update 'as_of' every edit so the API meta shows freshness.",
   "_workflow": "Summer 2026 checklist: (1) on promotion confirmation, add the 3 promoted teams below — calibrate vs the defaults (atk 0.82 / def 1.20): a dominant 95+ pt Championship winner deserves ~attack 1.10 / defense 0.95 ON TOP of defaults, a playoff survivor 1.0/1.0; (2) during the transfer window, adjust any team whose squad changed materially (e.g. sells its 25-goal striker: attack 0.90; signs an elite CB/GK: defense 0.92); (3) manager change with clear style shift: +/-0.05 on the relevant side; (4) keep nudges in 0.85-1.15 — the carryover prior does the heavy lifting; (5) delete entries once ~6 GWs of real xG exist (live signal overtakes the prior) unless something new happened.",
-  "as_of": "2026-06-10",
+  "as_of": "2026-07-03",
   "teams": {
-    "_PROMOTED_1_SHORTNAME": { "attack": 1.0, "defense": 1.0, "note": "TEMPLATE — rename key to the promoted team's short name; multipliers apply on top of promoted defaults (0.82 atk / 1.20 def)" },
-    "_PROMOTED_2_SHORTNAME": { "attack": 1.0, "defense": 1.0, "note": "TEMPLATE" },
-    "_PROMOTED_3_SHORTNAME": { "attack": 1.0, "defense": 1.0, "note": "TEMPLATE" }
+    "MCI": { "attack": 1.0, "defense": 1.05, "note": "Guardiola departed end-of-season; Enzo Maresca appointed June 29 2026 — attacking style retained but Guardiola's defensive structure is irreplaceable short-term" },
+    "COV": { "attack": 1.10, "defense": 0.95, "note": "Championship title winners 2025/26 (95+ pts, dominant campaign); multipliers on top of promoted defaults (0.82 atk / 1.20 def)" },
+    "IPS": { "attack": 1.0, "defense": 1.0, "note": "Championship runners-up 2025/26, returning to PL at first attempt with recent top-flight experience; promoted defaults (0.82 atk / 1.20 def) apply unchanged" },
+    "HUL": { "attack": 1.0, "defense": 1.0, "note": "Championship playoff winners 2025/26; promoted defaults (0.82 atk / 1.20 def) apply unchanged" }
   }
 }
