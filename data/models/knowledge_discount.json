@@ -1,0 +1,27 @@
+{
+  "_comment": "Manual knowledge-discount layer applied on top of xG-based team ratings. attack > 1.0 = stronger attack vs baseline; defense > 1.0 = concedes more (weaker), < 1.0 = tighter (stronger). Keep multipliers in [0.85, 1.15]. Remove entries once ~6 GWs of real-season xG exist. Do not stack multipliers across weeks — always write the combined current value.",
+  "_workflow": "Maintained weekly by the transfer-watch agent. Only confirmed, material events trigger updates: confirmed transfers of key players (starters, elite creators, first-choice GK/CB), permanent manager appointments with distinct tactical identity, long-term injuries (8+ weeks) to clearly key players. Backup signings are not material.",
+  "as_of": "2026-07-10",
+  "teams": {
+    "NFO": {
+      "attack": 0.90,
+      "defense": 0.92,
+      "note": "Anderson (£116m, key attacking MF) sold to Man City Jul 4; Glasner appointed Jul 6 brings defensive organization but attack weakened heading into 2026-27"
+    },
+    "MCI": {
+      "attack": 1.04,
+      "defense": 1.0,
+      "note": "British-record signing Elliot Anderson (£116m) from Forest Jul 4 adds elite midfield quality to attack output"
+    },
+    "NEW": {
+      "attack": 0.93,
+      "defense": 1.0,
+      "note": "Sandro Tonali (£100m, midfield engine) sold to Tottenham Jul 6; no confirmed replacement as of 2026-07-10"
+    },
+    "TOT": {
+      "attack": 1.05,
+      "defense": 1.0,
+      "note": "Club-record signing Sandro Tonali (£100m) from Newcastle Jul 6 adds elite Italian midfield quality and attacking output"
+    }
+  }
+}

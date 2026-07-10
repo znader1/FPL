@@ -20,6 +20,11 @@ logs/
 *.json
 *.parquet
 
+# Tracked model config exceptions
+!data/
+!data/models/
+!data/models/knowledge_discount.json
+
 # OS
 .DS_Store
 
