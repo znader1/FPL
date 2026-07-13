@@ -25,21 +25,26 @@ The 4 weeks map to those three blockers, in that order — **the model being rig
 
 ---
 
-## Week 1 (Jul 13–19): Season rollover + data foundation
+## Week 1 (Jul 13–19): Season rollover + data foundation + model upgrades
 
 The 2026/27 game typically goes live on the FPL site in early/mid July. Everything this week is about being correct on day one.
 
+- [ ] **Archive 2025/26 data FIRST** (raw + `player_gw_history` CSVs + final bootstrap snapshot) to a `2025-26/` folder on the Fly volume before any refresh overwrites it. This is now critical, not housekeeping: no 2025/26 backtest was ever run, and once the rollover refresh lands this data is unrecoverable. The final bootstrap also carries season xG/xA/xGI/xGC totals needed for the priors below.
+- [ ] **Run the first-ever backtest on 2025/26** (`scripts/backtest_baseline.py` + `/evaluation/xpts`) and record MAE/rank-correlation numbers in the repo. This is the regression bar: every model feature added this month must beat it or it doesn't ship. Doing this before feature work, not after, is the point.
 - [ ] **Verify the 2026/27 API is live** and diff the payloads: new `events`, new `teams` (3 promoted sides), new element fields or scoring-rule changes (check `bootstrap-static.game_settings` and any new stat columns — FPL has added rules in recent seasons, e.g. defensive contributions).
-- [ ] **Archive 2025/26 data** (raw + `player_gw_history` CSVs) to a `2025-26/` folder on the Fly volume before any refresh overwrites it.
-- [ ] **Cross-season player mapping.** FPL element `id` resets each season but `code` is stable across seasons. Build `src/season_mapping.py`: `code → (id_2025_26, id_2026_27)`, with name+team fuzzy fallback for edge cases. Everything in week 1 depends on this.
+- [ ] **Cross-season player mapping.** FPL element `id` resets each season but `code` is stable across seasons. Build `src/season_mapping.py`: `code → (id_2025_26, id_2026_27)`, with name+team fuzzy fallback for edge cases. Everything below depends on this.
 - [ ] **Cold-start projections.** Until ~GW5, `form=0` and `ppg=0` make the current baseline useless. Add a prior layer to `src/projections.py`:
-  - prior xPts from 2025/26 per-90s + minutes share (via the code mapping),
-  - a conservative prior for promoted-team players and new signings (position + price percentile),
+  - prior xPts from 2025/26 per-90 **underlying stats (xGI/xGC), not just PPG** — backtestable against the archived season, and a genuine model upgrade rather than only a rollover patch,
+  - a conservative prior for promoted-team players (position + price percentile),
+  - a **new-club uncertainty haircut**: players who changed clubs this summer get their prior shrunk toward the position/price mean (old per-90s came from a different system),
   - blend weight that decays from ~100% prior at GW1 to ~0% by GW6 as real form accumulates (new `config.py` params, documented in `docs/config_reference.md`).
+- [ ] **World Cup 2026 rest/fatigue feature.** The WC final was July 19 — under 4 weeks before GW1, and FPL's own signals are blind to it. Build:
+  - a curated CSV keyed by player `code`: WC minutes played + squad's exit date (~100–150 PL players; one-off scrape or manual, a few hours),
+  - a fatigue multiplier in `src/projections.py` from minutes-load and days-since-exit, decaying to 1.0 by ~GW5–6, config-tunable and behind a flag.
+  - **Caveat:** unvalidatable pre-season (no WC in 2025/26), so keep it conservative; validate in-season by comparing GW1–4 projection error for WC vs non-WC players.
 - [ ] **Sweep hardcoded season assumptions**: refresh scripts (`src/season_history.py`, `src/fpl_refresh_next_gw.py`, `scripts/refresh_backend.py`), any 2025/26 paths, GW-number logic, and the derived ITB/FT logic against a fresh entry with zero history.
-- [ ] **Lock a baseline metric.** Run the 2025/26 backtest one final time and record MAE/rank-correlation numbers in the repo. This is the regression bar for every model change during the season.
 
-**Exit criteria:** `/recommendations` returns a sane GW1 squad + transfer plan for a fresh 2026/27 entry, and the cold-start blend backtests no worse than naive prior-season PPG.
+**Exit criteria:** 2025/26 baseline numbers recorded; `/recommendations` returns a sane GW1 squad + transfer plan for a fresh 2026/27 entry; the xGI-based cold-start prior backtests better than naive prior-season PPG; WC fatigue flag-gated and reviewed by eye against known deep-run players.
 
 ## Week 2 (Jul 20–26): Multi-tenant accounts + billing plumbing
 
@@ -82,12 +87,13 @@ The 2026/27 game typically goes live on the FPL site in early/mid July. Everythi
 | Paying users | 10 (founder pricing) |
 | Onboarding: land → first recommendation | < 60s, > 50% completion |
 | GW1 xPts quality | ≥ 2025/26 baseline MAE recorded in week 1 |
+| WC fatigue sanity | GW1–4 projection error for WC players ≤ non-WC players |
 | Uptime through GW1 weekend | no deadline-window outage |
 
 ## Explicitly out of scope this month
 
 - Mobile app, Discord bot, or agentic auto-transfers (needs FPL login credentials — a trust/legal question for later).
-- ML upgrades beyond the cold-start prior (xG-based models, etc.) — the evaluation endpoint makes this safe to iterate on in-season.
+- ML upgrades beyond week 1's scope (xGI priors, new-club haircut, WC fatigue). A full xG match model, preseason-minutes tracking, or price-change prediction are in-season projects — the week-1 backtest bar makes them safe to iterate on later without regressing.
 - The full `src/` folder restructure and remaining `REFACTORING.md` items.
 - Affiliate/B2B angles, localization.
 
@@ -95,4 +101,5 @@ The 2026/27 game typically goes live on the FPL site in early/mid July. Everythi
 
 1. **FPL changes scoring rules or API shape for 2026/27** → week 1 diff catches it early; budget a day of slack.
 2. **Cold-start projections are visibly bad in GW1–3** → the founder pricing + "beta" framing buys goodwill; the deadline email keeps users through the rough patch.
+2b. **WC fatigue multiplier misfires** (it can't be backtested) → conservative bounds + config flag mean it can be turned off in one deploy without touching the model.
 3. **Solo-founder time** → weeks 2–3 are the heaviest; if slipping, cut the deadline email and league-strategy paywalling before cutting billing or onboarding.
