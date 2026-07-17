@@ -36,3 +36,24 @@ def test_minutes_projection_exposes_rotation_and_availability():
     # Fit nailed starter: rotation high, availability 1.0.
     assert out.loc[1, "rotation_prob_start"] > out.loc[2, "rotation_prob_start"]
     assert out.loc[1, "availability"] == 1.0
+
+
+def test_rotation_minutes_multiplier_values():
+    m = minutes_model.rotation_minutes_multiplier
+
+    # Nailed starter -> capped at 1.0.
+    assert abs(float(m(0.95, 0.99).iloc[0]) - 1.0) < 1e-9
+    # Rotation risk (0.55 start / 0.80 appear): 0.55/0.85 + 0.30*0.25 = 0.7221.
+    assert abs(float(m(0.55, 0.80).iloc[0]) - 0.72205882) < 1e-6
+    # Injured (0.10 start / 0.20 appear): 0.10/0.85 + 0.30*0.10 = 0.14765.
+    assert abs(float(m(0.10, 0.20).iloc[0]) - 0.14764706) < 1e-6
+    # Missing data -> no discount.
+    assert float(m(float("nan"), float("nan")).iloc[0]) == 1.0
+
+
+def test_rotation_minutes_multiplier_is_monotonic_and_clamped():
+    m = minutes_model.rotation_minutes_multiplier
+    vals = [float(m(x).iloc[0]) for x in [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]]
+    assert vals == sorted(vals)          # non-decreasing in prob_start
+    assert all(0.0 <= v <= 1.0 for v in vals)
+    assert vals[0] == 0.0 and vals[-1] == 1.0

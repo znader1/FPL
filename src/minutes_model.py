@@ -248,3 +248,34 @@ def minutes_projection(elements_df, history_df, gw):
     }, index=df["id"].values)
     out.index.name = "id"
     return out
+
+
+def rotation_minutes_multiplier(prob_start_eff, prob_appear=None,
+                                nailed_ref=None, cameo_value=None):
+    """
+    Relative rotation-risk multiplier in [0, 1].
+
+    Nailed starters (prob_start_eff >= nailed_ref) map to 1.0; below that they are
+    linearly discounted, plus a small cameo bonus for likely bench appearances.
+    NaN prob_start_eff -> 1.0 (no discount / missing data).
+
+    Accepts scalars, lists, or Series; returns a Series (index preserved when the
+    input is a Series).
+    """
+    nailed_ref = float(nailed_ref if nailed_ref is not None
+                       else getattr(config, "MINUTES_NAILED_START_REF", 0.85))
+    cameo_value = float(cameo_value if cameo_value is not None
+                        else getattr(config, "MINUTES_CAMEO_POINT_VALUE", 0.30))
+    nailed_ref = max(1e-6, nailed_ref)
+
+    ps = pd.to_numeric(pd.Series(prob_start_eff), errors="coerce")
+    if prob_appear is None:
+        pa = ps.copy()
+    else:
+        pa = pd.to_numeric(pd.Series(prob_appear), errors="coerce")
+        pa = pa.where(pa.notna(), ps)
+
+    rot = (ps / nailed_ref).clip(0.0, 1.0)
+    cameo = (pa - ps).clip(lower=0.0) * cameo_value
+    mult = (rot + cameo).clip(0.0, 1.0)
+    return mult.where(ps.notna(), 1.0)

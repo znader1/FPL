@@ -247,3 +247,11 @@ OUTPUT_MAX_ASSISTS_PER_GAME = 2.0
 # 0.0 => baseline projections unchanged (preserves backtest parity). Raise to
 # weight the xG model's per-GW xpts against the existing engine output.
 PROJ_MODEL_BLEND_WEIGHT = 0.0
+
+# --- minutes/rotation-risk multiplier (surgical, applied in projections.py) ---
+# Master flag: when True, project_elements_next_gws replaces the crude
+# chance_of_playing discount with a rotation-risk multiplier. Default off so
+# committed behavior is unchanged; flip True after scripts/spotcheck_minutes.py.
+PROJ_APPLY_MINUTES_MODEL = False
+MINUTES_NAILED_START_REF = 0.85   # prob_start at/above which a player is "nailed" (mult caps at 1.0)
+MINUTES_CAMEO_POINT_VALUE = 0.30  # value of a likely cameo relative to a start
