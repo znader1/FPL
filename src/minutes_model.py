@@ -289,3 +289,32 @@ def rotation_minutes_multiplier(prob_start_eff, prob_appear=None,
     if isinstance(prob_start_eff, pd.Series):
         mult.index = prob_start_eff.index
     return mult
+
+
+def compute_gw_minutes_multiplier(mins_df, ids, gw_offset, injury_future_fade=None):
+    """
+    Map a minutes_projection frame onto `ids` and return the rotation-risk
+    multiplier positionally aligned to `ids` (RangeIndex).
+
+    gw_offset 0 = immediate GW (full availability). gw_offset >= 1 fades only the
+    injury/availability component (injuries resolve) while the history-based
+    rotation discount stays at full strength.
+    """
+    fade = float(injury_future_fade if injury_future_fade is not None
+                 else getattr(config, "PROJ_INJURY_FUTURE_GW_FADE", 0.5))
+    ids = pd.Series(list(ids)).reset_index(drop=True)
+    if mins_df is None or mins_df.empty:
+        return pd.Series([1.0] * len(ids))
+
+    rot = ids.map(mins_df["rotation_prob_start"]).astype("float64")
+    avail = ids.map(mins_df["availability"]).astype("float64")
+    appear = ids.map(mins_df["prob_appear"]).astype("float64")
+
+    if int(gw_offset) <= 0:
+        avail_eff = avail
+    else:
+        avail_eff = 1.0 - (1.0 - avail) * fade
+
+    prob_start_eff = rot * avail_eff
+    mult = rotation_minutes_multiplier(prob_start_eff, appear)
+    return mult.where(mult.notna(), 1.0).reset_index(drop=True)

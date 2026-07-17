@@ -79,3 +79,29 @@ def test_rotation_minutes_multiplier_aligns_mismatched_index_by_position():
     # positional: ps[202]=0.55 pairs with pa[8]=0.80
     expected_202 = min(0.55 / 0.85, 1.0) + max(0.80 - 0.55, 0.0) * 0.30
     assert abs(float(out.loc[202]) - expected_202) < 1e-9
+
+
+def test_compute_gw_minutes_multiplier_fades_injury_not_rotation():
+    # id 10: fit rotation risk (avail 1.0). id 20: injured (avail 0.25, fit history).
+    mins_df = pd.DataFrame(
+        {
+            "prob_start": [0.55, 0.225],
+            "prob_appear": [0.80, 0.30],
+            "prob_60": [0.47, 0.19],
+            "exp_minutes": [55.0, 20.0],
+            "rotation_prob_start": [0.55, 0.90],
+            "availability": [1.0, 0.25],
+        },
+        index=[10, 20],
+    )
+
+    now = minutes_model.compute_gw_minutes_multiplier(mins_df, [10, 20], gw_offset=0)
+    later = minutes_model.compute_gw_minutes_multiplier(mins_df, [10, 20], gw_offset=1)
+
+    # Rotation risk: availability is 1.0, so future fade changes nothing.
+    assert abs(float(now.iloc[0]) - float(later.iloc[0])) < 1e-9
+    # Injured player: future GW is discounted LESS (injury assumed to resolve).
+    assert float(later.iloc[1]) > float(now.iloc[1])
+    # Missing id -> no discount.
+    missing = minutes_model.compute_gw_minutes_multiplier(mins_df, [999], gw_offset=0)
+    assert float(missing.iloc[0]) == 1.0
