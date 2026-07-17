@@ -192,7 +192,10 @@ def minutes_projection(elements_df, history_df, gw):
 
     df = elements_df.copy()
     if "id" not in df.columns:
-        return pd.DataFrame(columns=["prob_start", "prob_appear", "prob_60", "exp_minutes"])
+        return pd.DataFrame(columns=[
+            "prob_start", "prob_appear", "prob_60", "exp_minutes",
+            "rotation_prob_start", "availability",
+        ])
     df["id"] = pd.to_numeric(df["id"], errors="coerce")
     df = df[df["id"].notna()].copy()
     df["id"] = df["id"].astype(int)
@@ -240,6 +243,8 @@ def minutes_projection(elements_df, history_df, gw):
         "prob_appear": prob_appear.values,
         "prob_60": prob_60.values,
         "exp_minutes": exp_minutes.values,
+        "rotation_prob_start": blended_start.clip(0.0, 1.0).values,
+        "availability": avail.values,
     }, index=df["id"].values)
     out.index.name = "id"
     return out
