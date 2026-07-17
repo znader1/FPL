@@ -2,8 +2,18 @@
 Ship-fast spot-check for the minutes/rotation multiplier.
 
 Runs the current-GW projection with PROJ_APPLY_MINUTES_MODEL off vs on, prints
-the biggest movers, and sanity-checks direction. Eyeball the movers, then flip
-config.PROJ_APPLY_MINUTES_MODEL = True.
+the biggest movers plus a multiplier distribution, and checks the real
+invariants. Whether to enable PROJ_APPLY_MINUTES_MODEL is a MANUAL decision —
+review the distribution first (see the pre-season warning below).
+
+Invariants checked here (the only ones that always hold):
+  * every minutes_mult is in [0, 1];
+  * at least one player is discounted (some mult < 1).
+NOT an invariant: "no player's projection increases". `off` already carries the
+legacy chance-of-playing discount (a different scheme than the minutes model),
+and applying an in-[0,1] multiplier to a NEGATIVE baseline projection (fringe
+players with negative ep_next) moves it toward zero, i.e. up. Both are expected,
+so per-player off-vs-on increases are reported, not asserted against.
 
 Usage:
     .venv/bin/python -m scripts.spotcheck_minutes
@@ -12,8 +22,8 @@ import pandas as pd
 
 from src import config, fpl_client, transforms, projections
 
-pd.set_option("display.width", 160)
-pd.set_option("display.max_columns", 20)
+pd.set_option("display.width", 200)
+pd.set_option("display.max_columns", 30)
 
 
 def _inputs():
@@ -37,31 +47,57 @@ def _project(elements_df, fixtures, teams_short, gw, apply_minutes):
 
 def main():
     elements_df, fixtures, teams_short, gw = _inputs()
+    gws = [gw, gw + 1, gw + 2]
     print(f"Projecting GW{gw} (horizon 3)...\n")
 
-    off = _project(elements_df, fixtures, teams_short, gw, False)[
-        ["id", "web_name", "team_short", "xpts_horizon"]
-    ].rename(columns={"xpts_horizon": "xpts_off"})
-    on = _project(elements_df, fixtures, teams_short, gw, True)[
-        ["id", "web_name", "xpts_horizon", "prob_start", "minutes_mult_gw" + str(gw)]
-    ].rename(columns={"xpts_horizon": "xpts_on",
-                      "minutes_mult_gw" + str(gw): "mult_gw1"})
+    off = _project(elements_df, fixtures, teams_short, gw, False)
+    on = _project(elements_df, fixtures, teams_short, gw, True)
 
-    merged = off.merge(on, on="id", how="inner")
-    merged["delta"] = merged["xpts_on"] - merged["xpts_off"]
-    merged["pct"] = (merged["delta"] / merged["xpts_off"].mask(merged["xpts_off"] == 0)) * 100.0
+    keep_off = ["id", "web_name", "team_short", "xpts_horizon"] + [f"xpts_gw{g}" for g in gws]
+    keep_on = ["id", "xpts_horizon", "prob_start"] + \
+        [f"xpts_gw{g}" for g in gws] + [f"minutes_mult_gw{g}" for g in gws]
+    o = off[[c for c in keep_off if c in off.columns]]
+    n = on[[c for c in keep_on if c in on.columns]]
+    m = o.merge(n, on="id", suffixes=("_off", "_on"))
+    m["delta"] = m["xpts_horizon_on"] - m["xpts_horizon_off"]
+
+    mult_cols = [f"minutes_mult_gw{g}" for g in gws if f"minutes_mult_gw{g}" in m.columns]
+    mc1 = f"minutes_mult_gw{gw}"
 
     print("=== 20 biggest DOWN movers (rotation/injury risk caught) ===")
-    print(merged.sort_values("delta").head(20).to_string(index=False))
+    down_cols = ["web_name", "team_short", "prob_start",
+                 "xpts_horizon_off", "xpts_horizon_on", "delta"] + mult_cols
+    print(m.sort_values("delta")[[c for c in down_cols if c in m.columns]].head(20).to_string(index=False))
 
-    # Sanity: relative multiplier never raises a projection.
-    max_up = merged["delta"].max()
-    print(f"\nMax upward move (should be ~0): {max_up:.4f}")
-    assert max_up <= 1e-6, "Relative multiplier must not raise projections."
-    # Sanity: someone is discounted.
-    assert merged["delta"].min() < -1e-6, "Expected at least one discounted player."
-    print("Spot-check assertions passed. Eyeball the movers above, then set "
-          "config.PROJ_APPLY_MINUTES_MODEL = True in src/config.py.")
+    print("\n=== 5 biggest UP movers (expected: negative-ep_next fringe scaled toward zero) ===")
+    up_cols = ["web_name", "team_short", "xpts_horizon_off", "xpts_horizon_on", "delta"]
+    print(m.sort_values("delta", ascending=False)[[c for c in up_cols if c in m.columns]].head(5).to_string(index=False))
+
+    # --- distribution / pre-season thin-history detector ---
+    mult1 = m[mc1]
+    n_total = len(m)
+    n_disc = int((mult1 < 0.95).sum())
+    agg_off = float(m["xpts_horizon_off"].sum())
+    agg_on = float(m["xpts_horizon_on"].sum())
+    print(f"\nPlayers: {n_total} | discounted (mult_gw1<0.95): {n_disc} ({100*n_disc/max(1,n_total):.0f}%) "
+          f"| median mult_gw1: {mult1.median():.3f} | min {mult1.min():.3f} / max {mult1.max():.3f}")
+    print(f"Aggregate xpts_horizon: off {agg_off:.1f} -> on {agg_on:.1f} (delta {agg_on-agg_off:+.1f})")
+
+    mode_share = float((abs(mult1 - mult1.median()) < 1e-6).mean())
+    if mode_share > 0.6:
+        print(
+            f"\n*** PRE-SEASON WARNING: {mode_share*100:.0f}% of players share one multiplier "
+            f"({mult1.median():.3f}) — this is the no-current-season-history case (everyone falls back "
+            "to the start prior). The model is a near-uniform deflation, not a rotation signal yet. "
+            "Do NOT enable PROJ_APPLY_MINUTES_MODEL until a few GWs of real minutes have accrued. ***"
+        )
+
+    # --- real invariants (always true) ---
+    for c in mult_cols:
+        assert m[c].between(0.0, 1.0).all(), f"{c} outside [0,1]"
+    assert (m[mult_cols].min().min()) < 1.0, "expected at least one discounted player"
+    print("\nInvariants passed: all minutes_mult in [0,1]; at least one discount applied.")
+    print("Enabling PROJ_APPLY_MINUTES_MODEL is a MANUAL decision — review the distribution above.")
 
 
 if __name__ == "__main__":
