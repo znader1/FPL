@@ -257,10 +257,13 @@ def rotation_minutes_multiplier(prob_start_eff, prob_appear=None,
 
     Nailed starters (prob_start_eff >= nailed_ref) map to 1.0; below that they are
     linearly discounted, plus a small cameo bonus for likely bench appearances.
-    NaN prob_start_eff -> 1.0 (no discount / missing data).
+    NaN prob_start_eff -> 1.0 (no discount / missing data). When prob_appear is
+    provided but NaN for an entry, that entry falls back to prob_start_eff (zero
+    cameo).
 
-    Accepts scalars, lists, or Series; returns a Series (index preserved when the
-    input is a Series).
+    Accepts scalars, lists, or Series. Arithmetic is positional (a caller's Series
+    index never causes silent label-alignment); the primary input's index is
+    restored on the returned Series.
     """
     nailed_ref = float(nailed_ref if nailed_ref is not None
                        else getattr(config, "MINUTES_NAILED_START_REF", 0.85))
@@ -268,14 +271,21 @@ def rotation_minutes_multiplier(prob_start_eff, prob_appear=None,
                         else getattr(config, "MINUTES_CAMEO_POINT_VALUE", 0.30))
     nailed_ref = max(1e-6, nailed_ref)
 
-    ps = pd.to_numeric(pd.Series(prob_start_eff), errors="coerce")
+    ps = pd.to_numeric(pd.Series(prob_start_eff).reset_index(drop=True), errors="coerce")
     if prob_appear is None:
         pa = ps.copy()
     else:
-        pa = pd.to_numeric(pd.Series(prob_appear), errors="coerce")
+        pa = pd.Series(prob_appear).reset_index(drop=True)
+        if len(pa) == 1 and len(ps) != 1:
+            pa = pd.Series([pa.iloc[0]] * len(ps))
+        pa = pd.to_numeric(pa, errors="coerce")
         pa = pa.where(pa.notna(), ps)
 
     rot = (ps / nailed_ref).clip(0.0, 1.0)
     cameo = (pa - ps).clip(lower=0.0) * cameo_value
     mult = (rot + cameo).clip(0.0, 1.0)
-    return mult.where(ps.notna(), 1.0)
+    mult = mult.where(ps.notna(), 1.0)
+
+    if isinstance(prob_start_eff, pd.Series):
+        mult.index = prob_start_eff.index
+    return mult

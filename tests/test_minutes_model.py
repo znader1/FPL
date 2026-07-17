@@ -57,3 +57,25 @@ def test_rotation_minutes_multiplier_is_monotonic_and_clamped():
     assert vals == sorted(vals)          # non-decreasing in prob_start
     assert all(0.0 <= v <= 1.0 for v in vals)
     assert vals[0] == 0.0 and vals[-1] == 1.0
+
+
+def test_rotation_minutes_multiplier_preserves_series_index_positionally():
+    import pandas as pd
+    ps = pd.Series([0.95, 0.55, 0.10], index=[201, 202, 203])
+    out = minutes_model.rotation_minutes_multiplier(ps, 0.9)
+    assert list(out.index) == [201, 202, 203]
+    assert not out.isna().any()
+    expected_202 = min(0.55 / 0.85, 1.0) + max(0.9 - 0.55, 0.0) * 0.30
+    assert abs(float(out.loc[202]) - expected_202) < 1e-9
+
+
+def test_rotation_minutes_multiplier_aligns_mismatched_index_by_position():
+    import pandas as pd
+    ps = pd.Series([0.95, 0.55, 0.10], index=[201, 202, 203])
+    pa = pd.Series([0.99, 0.80, 0.20], index=[7, 8, 9])  # different index on purpose
+    out = minutes_model.rotation_minutes_multiplier(ps, pa)
+    assert list(out.index) == [201, 202, 203]
+    assert not out.isna().any()
+    # positional: ps[202]=0.55 pairs with pa[8]=0.80
+    expected_202 = min(0.55 / 0.85, 1.0) + max(0.80 - 0.55, 0.0) * 0.30
+    assert abs(float(out.loc[202]) - expected_202) < 1e-9
