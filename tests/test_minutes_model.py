@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 
 from src import minutes_model
 
@@ -81,6 +82,25 @@ def test_rotation_minutes_multiplier_aligns_mismatched_index_by_position():
     assert abs(float(out.loc[202]) - expected_202) < 1e-9
 
 
+def test_rotation_minutes_multiplier_ragged_prob_appear_raises():
+    # len(prob_appear) is neither 1 nor len(prob_start_eff) -> positional arithmetic
+    # would silently reintroduce NaN via misaligned .where(); must raise instead.
+    with pytest.raises(ValueError):
+        minutes_model.rotation_minutes_multiplier([0.95, 0.55, 0.10], [0.99, 0.80])
+
+
+def test_rotation_minutes_multiplier_equal_length_and_scalar_broadcast_still_work():
+    m = minutes_model.rotation_minutes_multiplier
+    # Equal-length prob_appear (len(pa) == len(ps)): unaffected by the new guard.
+    out_equal = m([0.95, 0.55], [0.99, 0.80])
+    assert len(out_equal) == 2
+    assert not out_equal.isna().any()
+    # Length-1 prob_appear broadcast against a longer prob_start_eff: unaffected.
+    out_broadcast = m([0.95, 0.55, 0.10], 0.9)
+    assert len(out_broadcast) == 3
+    assert not out_broadcast.isna().any()
+
+
 def test_compute_gw_minutes_multiplier_fades_injury_not_rotation():
     # id 10: fit rotation risk (avail 1.0). id 20: injured (avail 0.25, fit history).
     mins_df = pd.DataFrame(
@@ -105,3 +125,12 @@ def test_compute_gw_minutes_multiplier_fades_injury_not_rotation():
     # Missing id -> no discount.
     missing = minutes_model.compute_gw_minutes_multiplier(mins_df, [999], gw_offset=0)
     assert float(missing.iloc[0]) == 1.0
+
+
+def test_compute_gw_minutes_multiplier_empty_or_none_mins_df_is_all_ones():
+    empty_result = minutes_model.compute_gw_minutes_multiplier(pd.DataFrame(), [1, 2, 3], gw_offset=0)
+    none_result = minutes_model.compute_gw_minutes_multiplier(None, [1, 2, 3], gw_offset=0)
+
+    for result in (empty_result, none_result):
+        assert len(result) == 3
+        assert (result == 1.0).all()

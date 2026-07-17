@@ -263,7 +263,10 @@ def rotation_minutes_multiplier(prob_start_eff, prob_appear=None,
 
     Accepts scalars, lists, or Series. Arithmetic is positional (a caller's Series
     index never causes silent label-alignment); the primary input's index is
-    restored on the returned Series.
+    restored on the returned Series. If ``prob_appear`` is provided, its length
+    must be 1 (broadcast) or equal to ``prob_start_eff``'s length — any other
+    length raises ``ValueError`` rather than silently reintroducing NaN via
+    misaligned positional arithmetic.
     """
     nailed_ref = float(nailed_ref if nailed_ref is not None
                        else getattr(config, "MINUTES_NAILED_START_REF", 0.85))
@@ -278,6 +281,13 @@ def rotation_minutes_multiplier(prob_start_eff, prob_appear=None,
         pa = pd.Series(prob_appear).reset_index(drop=True)
         if len(pa) == 1 and len(ps) != 1:
             pa = pd.Series([pa.iloc[0]] * len(ps))
+        elif len(pa) != len(ps):
+            raise ValueError(
+                f"rotation_minutes_multiplier: prob_appear has length {len(pa)}, "
+                f"which is neither 1 nor len(prob_start_eff) ({len(ps)}). "
+                "Ragged-length inputs are rejected because subsequent positional "
+                "arithmetic would silently misalign and reintroduce NaN."
+            )
         pa = pd.to_numeric(pa, errors="coerce")
         pa = pa.where(pa.notna(), ps)
 
