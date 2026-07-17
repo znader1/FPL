@@ -450,6 +450,15 @@ def project_elements_next_gws(
     else:
         play_prob = pd.Series(1.0, index=df.index)
 
+    apply_minutes = bool(getattr(config, "PROJ_APPLY_MINUTES_MODEL", False))
+    minutes_hist = None
+    if apply_minutes:
+        try:
+            from . import minutes_model as _minutes
+            minutes_hist = _minutes.load_minutes_history()
+        except Exception:
+            apply_minutes = False
+
     team_recent_ppg = team_recent_ppg_map(fixtures, gw_start=gw_start, latest_n_matches=latest_n_matches)
 
     horizon_total = pd.Series(0.0, index=df.index, dtype="float64")
@@ -477,6 +486,20 @@ def project_elements_next_gws(
             else 1.0
         )
 
+        minutes_mult = None
+        if apply_minutes:
+            try:
+                mins_gw = _minutes.minutes_projection(df, minutes_hist, int(gw))
+                mult_vals = _minutes.compute_gw_minutes_multiplier(
+                    mins_gw, df["id"], i
+                ).values
+                minutes_mult = pd.Series(mult_vals, index=df.index)
+                df[f"minutes_mult_gw{gw}"] = minutes_mult.values
+                if i == 0:
+                    df["prob_start"] = df["id"].map(mins_gw["prob_start"]).astype("float64").values
+            except Exception:
+                minutes_mult = None
+
         dgw_discount = float(getattr(config, "PROJ_DGW_EXTRA_FIXTURE_DISCOUNT", 0.65))
         extra_fixtures = (fixture_count - 1.0).clip(lower=0.0)
         effective_fixtures = fixture_count.clip(upper=1.0) + extra_fixtures * dgw_discount
@@ -492,11 +515,16 @@ def project_elements_next_gws(
             xpts = xpts_with_ep.where(has_ep, xpts_no_ep)
             # Zero out blanks for non-ep players
             xpts = xpts.where(has_ep | (fixture_count > 0), 0.0)
-            xpts = xpts * play_prob
+            if minutes_mult is not None:
+                xpts = xpts * minutes_mult
+            else:
+                xpts = xpts * play_prob
         else:
             base = blended_base
             xpts = base * effective_fixtures * diff_mult * home_away_mult * opp_form_mult * team_form_mult
-            if i <= 2:
+            if minutes_mult is not None:
+                xpts = xpts * minutes_mult
+            elif i <= 2:
                 # Partial injury discount for next 2 GWs (availability often resolves).
                 injury_fade = float(getattr(config, "PROJ_INJURY_FUTURE_GW_FADE", 0.5))
                 future_play_prob = 1.0 - (1.0 - play_prob) * injury_fade
@@ -540,6 +568,7 @@ def project_elements_next_gws(
         "now_cost",
         "status",
         "chance_of_playing_next_round",
+        "prob_start",
         "form",
         "points_per_game",
         "total_points",
@@ -571,6 +600,7 @@ def project_elements_next_gws(
             [
                 f"xpts_gw{gw}",
                 f"xpts_baseline_gw{gw}",
+                f"minutes_mult_gw{gw}",
                 f"xpts_model_gw{gw}",
                 f"fixtures_gw{gw}",
                 f"fixture_count_gw{gw}",
