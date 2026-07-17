@@ -1,5 +1,3 @@
-import importlib
-
 import pytest
 
 from src import config, projections

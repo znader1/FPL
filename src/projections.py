@@ -493,10 +493,15 @@ def project_elements_next_gws(
                 mult_vals = _minutes.compute_gw_minutes_multiplier(
                     mins_gw, df["id"], i
                 ).values
+                prob_start_vals = None
+                if i == 0:
+                    prob_start_vals = df["id"].map(mins_gw["prob_start"]).astype("float64").values
+                # Only mutate df after every computation above has succeeded, so a
+                # failure never leaves a half-written column inconsistent with xpts.
                 minutes_mult = pd.Series(mult_vals, index=df.index)
                 df[f"minutes_mult_gw{gw}"] = minutes_mult.values
-                if i == 0:
-                    df["prob_start"] = df["id"].map(mins_gw["prob_start"]).astype("float64").values
+                if prob_start_vals is not None:
+                    df["prob_start"] = prob_start_vals
             except Exception:
                 minutes_mult = None
 
