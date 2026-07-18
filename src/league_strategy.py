@@ -121,6 +121,72 @@ def _rank_and_slice(candidates, templates, top_n=10):
     return ranked[:top_n]
 
 
+def detect_captain_differential(analysis, elements_meta, templates, fixture_ticker):
+    """
+    Flag when the league's consensus captain (highest league-owned premium MID/FWD)
+    faces a hard fixture run AND a low-owned high-EV alternative exists. Returns the
+    flag dict, or None when any condition is unmet.
+    """
+    ownership = analysis.get("league_ownership") or {}
+    premium_floor = float(getattr(config, "LEAGUE_EV_CAPTAIN_PREMIUM_FLOOR", 85))
+    max_own = float(getattr(config, "LEAGUE_EV_CAPTAIN_DIFF_MAX_OWNERSHIP", 0.10))
+    runs = _fixture_run_lookup(fixture_ticker)
+
+    consensus, best_own = None, -1.0
+    for pid, meta in elements_meta.items():
+        if meta.get("position_id") not in (3, 4):
+            continue
+        try:
+            if float(meta.get("now_cost") or 0) < premium_floor:
+                continue
+        except (TypeError, ValueError):
+            continue
+        own = float(ownership.get(int(pid), 0.0) or 0.0)
+        if own > best_own:
+            consensus, best_own = meta, own
+    if consensus is None or best_own <= 0:
+        return None
+
+    band = (runs.get(str(consensus.get("team_short") or "")) or {}).get("band")
+    if band not in ("hard", "very_hard"):
+        return None
+
+    alt, best_ev = None, 0.0
+    for pid, meta in elements_meta.items():
+        if meta.get("position_id") not in (3, 4):
+            continue
+        own = float(ownership.get(int(pid), 0.0) or 0.0)
+        if own >= max_own:
+            continue
+        ev = ownership_ev.differential_ev(
+            ownership_ev.xpts_of(meta), (templates or {}).get(meta.get("position_id"), 0.0), own
+        )
+        if ev > best_ev:
+            alt, best_ev = (meta, own, ev), ev
+    if alt is None:
+        return None
+    alt_meta, alt_own, alt_ev = alt
+
+    return {
+        "consensus_captain": {
+            "id": consensus.get("id"), "web_name": consensus.get("web_name"),
+            "team_short": consensus.get("team_short"), "league_ownership": round(best_own, 3),
+            "fixture_run_band": band, "model_xpts_horizon": consensus.get("model_xpts_horizon"),
+        },
+        "alternative": {
+            "id": alt_meta.get("id"), "web_name": alt_meta.get("web_name"),
+            "team_short": alt_meta.get("team_short"), "league_ownership": round(alt_own, 3),
+            "differential_ev": round(alt_ev, 2), "model_xpts_horizon": alt_meta.get("model_xpts_horizon"),
+            "fixture_run_band": (runs.get(str(alt_meta.get("team_short") or "")) or {}).get("band"),
+        },
+        "reason": (
+            f"{consensus.get('web_name')} (consensus captain, {round(best_own * 100)}% league-owned) "
+            f"faces a {band} run; {alt_meta.get('web_name')} is a "
+            f"{round(alt_own * 100)}%-owned differential (+{round(alt_ev, 1)} diff-EV)."
+        ),
+    }
+
+
 def _candidate_targets(analysis, elements_meta, mode, templates=None):
     ownership = analysis["league_ownership"]
 
@@ -308,7 +374,9 @@ def build_strategy(entry_id, league_id, event_id, mode, bootstrap, projections_d
     templates = ownership_ev.compute_position_templates(elements_meta)
     candidates = _candidate_targets(analysis, elements_meta, mode, templates)
     candidates = _attach_fixture_runs(candidates, fixture_ticker)
-    narrative = _llm_narrative(analysis, mode, candidates, model=model, fixture_ticker=fixture_ticker)
+    captain_differential = detect_captain_differential(analysis, elements_meta, templates, fixture_ticker)
+    narrative = _llm_narrative(analysis, mode, candidates, model=model,
+                               fixture_ticker=fixture_ticker, captain_differential=captain_differential)
 
     out = {
         "mode": mode,
@@ -322,6 +390,7 @@ def build_strategy(entry_id, league_id, event_id, mode, bootstrap, projections_d
             "shared": len(analysis["differentials"]["shared"]),
         },
         "candidates": candidates,
+        "captain_differential": captain_differential,
         "narrative": narrative,
     }
     if fixture_ticker:
