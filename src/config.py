@@ -255,3 +255,8 @@ PROJ_MODEL_BLEND_WEIGHT = 0.0
 PROJ_APPLY_MINUTES_MODEL = False
 MINUTES_NAILED_START_REF = 0.85   # prob_start at/above which a player is "nailed" (mult caps at 1.0)
 MINUTES_CAMEO_POINT_VALUE = 0.30  # value of a likely cameo relative to a start
+
+# --- mini-league ownership-adjusted EV (src/ownership_ev.py + league_strategy.py) ---
+LEAGUE_EV_RANKING = True                      # rank candidates by differential EV (False = legacy raw-xPts sort)
+LEAGUE_EV_CAPTAIN_PREMIUM_FLOOR = 85          # now_cost (tenths) floor for a "premium" captain (£8.5m)
+LEAGUE_EV_CAPTAIN_DIFF_MAX_OWNERSHIP = 0.10   # alternative must be under this league ownership to flag
