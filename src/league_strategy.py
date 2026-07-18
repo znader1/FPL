@@ -232,7 +232,7 @@ def _candidate_targets(analysis, elements_meta, mode, templates=None):
 
 SYSTEM_PROMPT = (
     "You are an FPL mini-league strategist. "
-    "Use ONLY numbers from the input — model_xpts_horizon, model_xpts_per_gw, fixtures, point gaps, ranks. "
+    "Use ONLY numbers from the input — model_xpts_horizon, differential_ev, league_ownership, fixtures, point gaps, ranks. "
     "Never invent or estimate numbers. Be direct and short. Respond ONLY with valid JSON."
 )
 
@@ -242,6 +242,7 @@ User: {user_name} rank {user_rank} ({user_total} pts) in {league_name}
 Rivals above: {rivals_above_short}
 Rivals below: {rivals_below_short}
 Fixture outlook (xG model): {fixture_outlook_short}
+Captain differential: {captain_differential_short}
 
 Top candidates (ranked by model xPts over {horizon_gws} GWs — includes fixture difficulty and recent form):
 {candidates_short}
@@ -257,7 +258,8 @@ Return JSON exactly:
 
 Rules:
 - Max 3 recommended_targets, picked from the candidates above only.
-- Every rationale MUST quote model_xpts_horizon (e.g. '13.7 xPts') and at least one fixture (e.g. 'BOU/h').
+- Every rationale MUST quote diff_ev and league_own for the player (e.g. '+5.4 diff-EV at 6% league own') plus at least one fixture.
+- If Captain differential is not 'none', mention it in the headline or watchouts.
 - No markdown, no filler phrases like 'it is worth noting'. Plain short sentences.
 - If candidates is empty: recommended_targets: [], headline explains why.
 """
@@ -287,7 +289,52 @@ def _attach_fixture_runs(candidates, fixture_ticker):
     return candidates
 
 
-def _llm_narrative(analysis, mode, candidates, model=None, fixture_ticker=None):
+def _short_candidate(c):
+    fixes = " | ".join(f"{k}:{v}" for k, v in (c.get("fixtures") or {}).items()) or "—"
+    per_gw = " ".join(f"{k}:{v}" for k, v in (c.get("model_xpts_per_gw") or {}).items())
+    run = ""
+    if c.get("fixture_run_difficulty") is not None:
+        run = f" fixture_run={c['fixture_run_difficulty']} ({c.get('fixture_run_band')})"
+    return (
+        f"id={c['id']} {c.get('web_name')} ({c.get('team_short')}) "
+        f"xPts={c.get('model_xpts_horizon', '?')} [{per_gw}] fixtures: {fixes}{run} "
+        f"league_own={c.get('league_ownership', '?')} diff_ev={c.get('differential_ev', '?')}"
+    )
+
+
+def build_user_message(analysis, mode, candidates, fixture_ticker=None, captain_differential=None):
+    def _short_rival(r):
+        return f"{r.get('player_name')} #{r.get('rank')} ({r.get('total')} pts, GW {r.get('event_total')})"
+
+    fixture_outlook_short = "n/a"
+    if fixture_ticker:
+        easiest = ", ".join(fixture_ticker.get("easiest_runs") or []) or "?"
+        hardest = ", ".join(fixture_ticker.get("hardest_runs") or []) or "?"
+        fixture_outlook_short = (
+            f"next {fixture_ticker.get('horizon_gws')} GWs — easiest runs: {easiest}; "
+            f"hardest runs: {hardest} (lower fixture_run = easier)"
+        )
+
+    captain_line = "none"
+    if captain_differential:
+        captain_line = captain_differential.get("reason") or "present"
+
+    return USER_TEMPLATE.format(
+        mode=mode,
+        fixture_outlook_short=fixture_outlook_short,
+        captain_differential_short=captain_line,
+        league_name=analysis["league"].get("name"),
+        user_name=(analysis["user"] or {}).get("player_name"),
+        user_rank=(analysis["user"] or {}).get("rank"),
+        user_total=(analysis["user"] or {}).get("total"),
+        rivals_above_short=" / ".join(_short_rival(r) for r in analysis["rivals_above"]) or "none",
+        rivals_below_short=" / ".join(_short_rival(r) for r in analysis["rivals_below"]) or "none",
+        horizon_gws=len(next(iter(candidates), {}).get("model_xpts_per_gw") or {}) or 3,
+        candidates_short="\n".join(_short_candidate(c) for c in candidates) or "(none)",
+    )
+
+
+def _llm_narrative(analysis, mode, candidates, model=None, fixture_ticker=None, captain_differential=None):
     api_key = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
     if not api_key:
         return {"error": "ANTHROPIC_API_KEY not set"}
@@ -299,42 +346,9 @@ def _llm_narrative(analysis, mode, candidates, model=None, fixture_ticker=None):
 
     import json
 
-    def _short_rival(r):
-        return f"{r.get('player_name')} #{r.get('rank')} ({r.get('total')} pts, GW {r.get('event_total')})"
-
-    def _short_candidate(c):
-        fixes = " | ".join(f"{k}:{v}" for k, v in (c.get("fixtures") or {}).items()) or "—"
-        per_gw = " ".join(f"{k}:{v}" for k, v in (c.get("model_xpts_per_gw") or {}).items())
-        run = ""
-        if c.get("fixture_run_difficulty") is not None:
-            run = f" fixture_run={c['fixture_run_difficulty']} ({c.get('fixture_run_band')})"
-        return (
-            f"id={c['id']} {c.get('web_name')} ({c.get('team_short')}) "
-            f"xPts={c.get('model_xpts_horizon', '?')} [{per_gw}] fixtures: {fixes}{run} "
-            f"league_own={c.get('league_ownership', '?')}"
-        )
-
-    fixture_outlook_short = "n/a"
-    if fixture_ticker:
-        easiest = ", ".join(fixture_ticker.get("easiest_runs") or []) or "?"
-        hardest = ", ".join(fixture_ticker.get("hardest_runs") or []) or "?"
-        fixture_outlook_short = (
-            f"next {fixture_ticker.get('horizon_gws')} GWs — easiest runs: {easiest}; "
-            f"hardest runs: {hardest} (lower fixture_run = easier)"
-        )
-
-    user_msg = USER_TEMPLATE.format(
-        mode=mode,
-        fixture_outlook_short=fixture_outlook_short,
-        league_name=analysis["league"].get("name"),
-        user_name=(analysis["user"] or {}).get("player_name"),
-        user_rank=(analysis["user"] or {}).get("rank"),
-        user_total=(analysis["user"] or {}).get("total"),
-        rivals_above_short=" / ".join(_short_rival(r) for r in analysis["rivals_above"]) or "none",
-        rivals_below_short=" / ".join(_short_rival(r) for r in analysis["rivals_below"]) or "none",
-        horizon_gws=len(next(iter(candidates), {}).get("model_xpts_per_gw") or {}) or 3,
-        candidates_short="\n".join(_short_candidate(c) for c in candidates) or "(none)",
-    )
+    user_msg = build_user_message(analysis, mode, candidates,
+                                  fixture_ticker=fixture_ticker,
+                                  captain_differential=captain_differential)
 
     client = Anthropic(api_key=api_key)
     chosen_model = model or os.environ.get("FPL_LEAGUE_MODEL") or "claude-haiku-4-5-20251001"
