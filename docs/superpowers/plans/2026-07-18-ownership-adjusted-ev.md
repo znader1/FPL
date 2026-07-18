@@ -245,28 +245,37 @@ def _meta(pid, name, xpts, own_pct, pos=3):
 
 def test_differential_mode_ev_ranking_beats_raw_xpts(monkeypatch):
     monkeypatch.setattr(config, "LEAGUE_EV_RANKING", True, raising=False)
-    # A: 12 xPts but 0% league-owned (great differential). B: 13 xPts but 0% league-owned too.
-    # Template is global-owned-weighted; make B highly global-owned so template ~ B, shrinking B's EV.
+    # A: 12 xPts, 0% league-owned. B: 13 xPts but 15% league-owned (rivals already have B).
+    # C: cheap filler MID, 90% GLOBALLY owned -> drags the position template DOWN so both A and
+    #    B sit above it; C is filtered out of differential mode (league_own 0.40 >= 0.20).
+    # template(MID) = (3*12 + 3*13 + 90*3)/96 = 345/96 = 3.59375
+    #   A EV = (12 - 3.59375) * (1 - 0.00) = 8.406
+    #   B EV = (13 - 3.59375) * (1 - 0.15) = 7.995   -> A ranks first despite lower raw xPts.
     elements = {
         1: _meta(1, "A", 12.0, "3.0"),
-        2: _meta(2, "B", 13.0, "60.0"),
+        2: _meta(2, "B", 13.0, "3.0"),
+        3: _meta(3, "C", 3.0, "90.0"),
     }
     templates = league_strategy.ownership_ev.compute_position_templates(elements)
-    analysis = _analysis({1: 0.0, 2: 0.0})
+    analysis = _analysis({1: 0.0, 2: 0.15, 3: 0.40})
     out = league_strategy._candidate_targets(analysis, elements, "differential", templates)
-    # B's xpts (13) is near the (global-owned) template it dominates, so its EV is small;
-    # A sits well above the template -> A ranks first despite lower raw xPts.
     assert out[0]["web_name"] == "A"
     assert "differential_ev" in out[0]
 
 
 def test_flag_off_uses_legacy_raw_xpts_order(monkeypatch):
     monkeypatch.setattr(config, "LEAGUE_EV_RANKING", False, raising=False)
-    elements = {1: _meta(1, "A", 12.0, "3.0"), 2: _meta(2, "B", 13.0, "60.0")}
+    # MUST use a fixture where EV order and raw order DIVERGE, else the test can't prove
+    # the flag is honored. Same A/B/C setup as the EV test: EV ranks A first, raw ranks B first.
+    elements = {
+        1: _meta(1, "A", 12.0, "3.0"),
+        2: _meta(2, "B", 13.0, "3.0"),
+        3: _meta(3, "C", 3.0, "90.0"),
+    }
     templates = league_strategy.ownership_ev.compute_position_templates(elements)
-    analysis = _analysis({1: 0.0, 2: 0.0})
+    analysis = _analysis({1: 0.0, 2: 0.15, 3: 0.40})
     out = league_strategy._candidate_targets(analysis, elements, "differential", templates)
-    # Legacy sort is by raw xPts -> B (13) first.
+    # Flag OFF -> legacy raw-xPts sort -> B (13) first, which DIFFERS from the EV order (A first).
     assert out[0]["web_name"] == "B"
 ```
 
@@ -489,11 +498,16 @@ def detect_captain_differential(analysis, elements_meta, templates, fixture_tick
     for pid, meta in elements_meta.items():
         if meta.get("position_id") not in (3, 4):
             continue
+        if int(pid) == int(consensus.get("id") or -1):
+            continue  # the alternative must differ from the consensus captain
         own = float(ownership.get(int(pid), 0.0) or 0.0)
         if own >= max_own:
             continue
+        pos = meta.get("position_id")
         ev = ownership_ev.differential_ev(
-            ownership_ev.xpts_of(meta), (templates or {}).get(meta.get("position_id"), 0.0), own
+            ownership_ev.xpts_of(meta),
+            (templates or {}).get(int(pos) if pos is not None else -1, 0.0),
+            own,
         )
         if ev > best_ev:
             alt, best_ev = (meta, own, ev), ev
