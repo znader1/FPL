@@ -46,3 +46,13 @@ def test_mae_by_position():
     out = m.mae_by_position([f], top_n=40)
     assert abs(out["MID"] - 2.5) < 1e-9  # (|5-4|+|2-6|)/2
     assert abs(out["DEF"] - 0.0) < 1e-9
+
+
+def test_metrics_robust_to_non_unique_index():
+    # A frame carrying a duplicated index label (e.g. from a careless concat) must not
+    # crash the captain metrics or corrupt MAE. Without reset_index this crashes/mis-counts.
+    f = _frame([(1, 5.0, 4.0, "MID", 90), (2, 2.0, 6.0, "FWD", 90)])
+    f.index = [5, 5]  # non-unique on purpose
+    assert m.captain_hit_rate([f], top_k=1) == 0.0    # top-proj p1(xpts5); actual top-1 p2(6) -> miss
+    assert abs(m.captain_regret([f]) - 2.0) < 1e-9    # best 6 - picked p1 actual 4 = 2
+    assert abs(m.projection_mae([f], top_n=40) - 2.5) < 1e-9  # |5-4|,|2-6| -> 2.5

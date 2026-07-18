@@ -10,7 +10,7 @@ import pandas as pd
 
 def _frame_universe(df, top_n):
     """Rows in the top-``top_n`` by projected xpts OR that actually played."""
-    d = df.copy()
+    d = df.reset_index(drop=True)
     d["xpts"] = pd.to_numeric(d["xpts"], errors="coerce").fillna(0.0)
     d["actual"] = pd.to_numeric(d["actual"], errors="coerce").fillna(0.0)
     mins = pd.to_numeric(d.get("minutes", 0), errors="coerce").fillna(0.0)
@@ -47,7 +47,7 @@ def captain_hit_rate(frames, top_k=5):
         return 0.0
     hits = 0
     for f in frames:
-        d = f.copy()
+        d = f.reset_index(drop=True)
         d["xpts"] = pd.to_numeric(d["xpts"], errors="coerce").fillna(0.0)
         d["actual"] = pd.to_numeric(d["actual"], errors="coerce").fillna(0.0)
         top_proj_pid = d.loc[d["xpts"].idxmax(), "player_id"]
@@ -63,7 +63,7 @@ def captain_regret(frames):
         return 0.0
     regrets = []
     for f in frames:
-        d = f.copy()
+        d = f.reset_index(drop=True)
         d["xpts"] = pd.to_numeric(d["xpts"], errors="coerce").fillna(0.0)
         d["actual"] = pd.to_numeric(d["actual"], errors="coerce").fillna(0.0)
         best = float(d["actual"].max())
@@ -78,7 +78,7 @@ def top_n_precision(frames, n=10):
         return 0.0
     vals = []
     for f in frames:
-        d = f.copy()
+        d = f.reset_index(drop=True)
         d["xpts"] = pd.to_numeric(d["xpts"], errors="coerce").fillna(0.0)
         d["actual"] = pd.to_numeric(d["actual"], errors="coerce").fillna(0.0)
         tp = set(d.nlargest(n, "xpts")["player_id"])
