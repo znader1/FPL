@@ -187,7 +187,7 @@ def detect_captain_differential(analysis, elements_meta, templates, fixture_tick
         "reason": (
             f"{consensus.get('web_name')} (consensus captain, {round(best_own * 100)}% league-owned) "
             f"faces a {band} run; {alt_meta.get('web_name')} is a "
-            f"{round(alt_own * 100)}%-owned differential (+{round(alt_ev, 1)} diff-EV)."
+            f"{round(alt_own * 100)}%-owned differential (+{round(alt_ev, 1)} 3-GW diff-EV)."
         ),
     }
 

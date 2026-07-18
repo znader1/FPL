@@ -67,3 +67,19 @@ def test_consensus_captain_not_returned_as_its_own_alternative():
         assert flag["alternative"]["id"] != flag["consensus_captain"]["id"]
     else:
         assert flag is None  # acceptable: no distinct differential alternative exists
+
+
+def test_no_flag_when_no_premium_owner():
+    # All MID/FWD below the premium floor (85) -> no consensus captain -> None.
+    elements = {1: _meta(1, "Cheap", 9.0, "55.0", 70, "AAA"), 2: _meta(2, "Alt", 8.0, "6.0", 70, "BBB")}
+    templates = league_strategy.ownership_ev.compute_position_templates(elements)
+    analysis = _analysis({1: 0.80, 2: 0.05})
+    ticker = _ticker({"AAA": "hard", "BBB": "easy"})
+    assert league_strategy.detect_captain_differential(analysis, elements, templates, ticker) is None
+
+
+def test_no_flag_when_ticker_missing():
+    elements = {1: _meta(1, "Cap", 9.0, "55.0", 130, "AAA"), 2: _meta(2, "Alt", 8.0, "6.0", 95, "BBB")}
+    templates = league_strategy.ownership_ev.compute_position_templates(elements)
+    analysis = _analysis({1: 0.80, 2: 0.05})
+    assert league_strategy.detect_captain_differential(analysis, elements, templates, None) is None

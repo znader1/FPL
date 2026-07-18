@@ -46,6 +46,11 @@ def test_differential_ev_formula():
     assert abs(ownership_ev.differential_ev(10.0, 6.0, 1.5) - 0.0) < 1e-9
 
 
+def test_differential_ev_lower_bound_ownership_clip():
+    # negative ownership clips to 0 -> identical to own=0.0
+    assert abs(ownership_ev.differential_ev(10.0, 6.0, -0.5) - 4.0) < 1e-9
+
+
 def test_annotate_candidates_adds_ev_and_template():
     templates = {3: 6.0}
     cands = [{"id": 1, "position_id": 3, "model_xpts_horizon": 10.0, "league_ownership": 0.25}]

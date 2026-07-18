@@ -38,9 +38,59 @@ def test_differential_mode_ev_ranking_beats_raw_xpts(monkeypatch):
 
 def test_flag_off_uses_legacy_raw_xpts_order(monkeypatch):
     monkeypatch.setattr(config, "LEAGUE_EV_RANKING", False, raising=False)
-    elements = {1: _meta(1, "A", 12.0, "3.0"), 2: _meta(2, "B", 13.0, "60.0")}
+    # MUST use a fixture where EV order and raw order DIVERGE, else the test can't prove
+    # the flag is honored. Same A/B/C setup as the EV test: EV ranks A first, raw ranks B first.
+    elements = {
+        1: _meta(1, "A", 12.0, "3.0"),
+        2: _meta(2, "B", 13.0, "3.0"),
+        3: _meta(3, "C", 3.0, "90.0"),
+    }
     templates = league_strategy.ownership_ev.compute_position_templates(elements)
-    analysis = _analysis({1: 0.0, 2: 0.0})
+    analysis = _analysis({1: 0.0, 2: 0.15, 3: 0.40})
     out = league_strategy._candidate_targets(analysis, elements, "differential", templates)
-    # Legacy sort is by raw xPts -> B (13) first.
+    # Flag OFF -> legacy raw-xPts sort -> B (13) first, which DIFFERS from the EV order (A first).
+    assert out[0]["web_name"] == "B"
+
+
+def _analysis_with_rivals(ownership, above_ids=(), below_ids=()):
+    return {
+        "differentials": {"owned_by_me_not_rivals": [], "owned_by_rivals_not_me": [], "shared": []},
+        "league_ownership": ownership,
+        "rivals_above": [{"entry_id": 100}] if above_ids else [],
+        "rivals_below": [{"entry_id": 200}] if below_ids else [],
+        "rival_squads": {
+            **({100: {"picks": [{"element": i} for i in above_ids]}} if above_ids else {}),
+            **({200: {"picks": [{"element": i} for i in below_ids]}} if below_ids else {}),
+        },
+        "my_squad": {"picks": []},
+    }
+
+
+def test_chase_mode_ev_vs_raw(monkeypatch):
+    elements = {1: _meta(1, "A", 12.0, "3.0"), 2: _meta(2, "B", 13.0, "3.0"), 3: _meta(3, "C", 3.0, "90.0")}
+    templates = league_strategy.ownership_ev.compute_position_templates(elements)
+    analysis = _analysis_with_rivals({1: 0.0, 2: 0.15, 3: 0.40}, above_ids=(1, 2))
+    monkeypatch.setattr(config, "LEAGUE_EV_RANKING", True, raising=False)
+    assert league_strategy._candidate_targets(analysis, elements, "chase", templates)[0]["web_name"] == "A"
+    monkeypatch.setattr(config, "LEAGUE_EV_RANKING", False, raising=False)
+    assert league_strategy._candidate_targets(analysis, elements, "chase", templates)[0]["web_name"] == "B"
+
+
+def test_defend_mode_ev_vs_raw(monkeypatch):
+    elements = {1: _meta(1, "A", 12.0, "3.0"), 2: _meta(2, "B", 13.0, "3.0"), 3: _meta(3, "C", 3.0, "90.0")}
+    templates = league_strategy.ownership_ev.compute_position_templates(elements)
+    analysis = _analysis_with_rivals({1: 0.0, 2: 0.15, 3: 0.40}, below_ids=(1, 2))
+    monkeypatch.setattr(config, "LEAGUE_EV_RANKING", True, raising=False)
+    assert league_strategy._candidate_targets(analysis, elements, "defend", templates)[0]["web_name"] == "A"
+    monkeypatch.setattr(config, "LEAGUE_EV_RANKING", False, raising=False)
+    assert league_strategy._candidate_targets(analysis, elements, "defend", templates)[0]["web_name"] == "B"
+
+
+def test_rank_and_slice_empty_templates_falls_back_to_raw(monkeypatch):
+    monkeypatch.setattr(config, "LEAGUE_EV_RANKING", True, raising=False)
+    cands = [
+        {"web_name": "A", "model_xpts_horizon": 12.0, "position_id": 3, "league_ownership": 0.0},
+        {"web_name": "B", "model_xpts_horizon": 13.0, "position_id": 3, "league_ownership": 0.0},
+    ]
+    out = league_strategy._rank_and_slice(cands, {})  # empty templates -> raw-xPts fallback even with flag on
     assert out[0]["web_name"] == "B"
