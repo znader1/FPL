@@ -155,11 +155,16 @@ def detect_captain_differential(analysis, elements_meta, templates, fixture_tick
     for pid, meta in elements_meta.items():
         if meta.get("position_id") not in (3, 4):
             continue
+        if int(pid) == int(consensus.get("id") or -1):
+            continue  # the alternative must differ from the consensus captain
         own = float(ownership.get(int(pid), 0.0) or 0.0)
         if own >= max_own:
             continue
+        pos = meta.get("position_id")
         ev = ownership_ev.differential_ev(
-            ownership_ev.xpts_of(meta), (templates or {}).get(meta.get("position_id"), 0.0), own
+            ownership_ev.xpts_of(meta),
+            (templates or {}).get(int(pos) if pos is not None else -1, 0.0),
+            own,
         )
         if ev > best_ev:
             alt, best_ev = (meta, own, ev), ev

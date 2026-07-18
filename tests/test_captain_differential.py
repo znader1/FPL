@@ -47,3 +47,23 @@ def test_no_flag_when_no_low_owned_alt():
     analysis = _analysis({1: 0.80, 2: 0.50})
     ticker = _ticker({"AAA": "hard", "BBB": "easy"})
     assert league_strategy.detect_captain_differential(analysis, elements, templates, ticker) is None
+
+
+def test_consensus_captain_not_returned_as_its_own_alternative():
+    # Small league: the only premium FWD (Cap) is itself just 8% league-owned (< 10%).
+    # Without the guard, Cap wins BOTH the consensus loop and the alt loop -> "captain Cap instead of Cap".
+    # Filler is a cheap, 50%-owned FWD that drags the pos-4 template down (so Cap's EV is positive)
+    # but is excluded from the alt loop by the <10% ownership filter.
+    elements = {
+        1: _meta(1, "Cap", 9.0, "20.0", 130, "AAA"),
+        2: _meta(2, "Filler", 3.0, "80.0", 45, "CCC"),
+    }
+    templates = league_strategy.ownership_ev.compute_position_templates(elements)
+    analysis = _analysis({1: 0.08, 2: 0.50})
+    ticker = _ticker({"AAA": "hard", "CCC": "easy"})
+    flag = league_strategy.detect_captain_differential(analysis, elements, templates, ticker)
+    # Cap must never be recommended as an alternative to itself.
+    if flag is not None:
+        assert flag["alternative"]["id"] != flag["consensus_captain"]["id"]
+    else:
+        assert flag is None  # acceptable: no distinct differential alternative exists
