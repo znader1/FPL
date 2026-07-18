@@ -1,6 +1,7 @@
 import os
 
-from src import league
+from src import league, ownership_ev
+from src import config
 
 
 VALID_MODES = ("chase", "defend", "differential")
@@ -100,18 +101,28 @@ def _enrich_ids(ids, elements_meta, ownership=None):
     return out
 
 
-def _candidate_targets(analysis, elements_meta, mode):
-    diffs = analysis["differentials"]
-    ownership = analysis["league_ownership"]
+def _ep(p):
+    v = p.get("model_xpts_horizon")
+    if v is None:
+        v = p.get("ep_next")
+    try:
+        return float(v or 0.0)
+    except Exception:
+        return 0.0
 
-    def ep(p):
-        v = p.get("model_xpts_horizon")
-        if v is None:
-            v = p.get("ep_next")
-        try:
-            return float(v or 0.0)
-        except Exception:
-            return 0.0
+
+def _rank_and_slice(candidates, templates, top_n=10):
+    """Rank by differential EV (flag on) or legacy raw xPts (flag off), then slice."""
+    if bool(getattr(config, "LEAGUE_EV_RANKING", True)) and templates:
+        ranked = ownership_ev.annotate_candidates(candidates, templates)
+        ranked.sort(key=lambda c: c.get("differential_ev", 0.0), reverse=True)
+    else:
+        ranked = sorted(candidates, key=_ep, reverse=True)
+    return ranked[:top_n]
+
+
+def _candidate_targets(analysis, elements_meta, mode, templates=None):
+    ownership = analysis["league_ownership"]
 
     if mode == "chase":
         rivals_above_ids = set()
@@ -122,8 +133,7 @@ def _candidate_targets(analysis, elements_meta, mode):
         my_ids = {p.get("element") for p in analysis["my_squad"].get("picks") or []}
         targets = sorted(rivals_above_ids - my_ids)
         enriched = _enrich_ids(targets, elements_meta, ownership)
-        enriched.sort(key=lambda p: ep(p), reverse=True)
-        return enriched[:10]
+        return _rank_and_slice(enriched, templates)
 
     if mode == "defend":
         rivals_below_ids = set()
@@ -134,21 +144,19 @@ def _candidate_targets(analysis, elements_meta, mode):
         my_ids = {p.get("element") for p in analysis["my_squad"].get("picks") or []}
         targets = sorted(rivals_below_ids - my_ids)
         enriched = _enrich_ids(targets, elements_meta, ownership)
-        enriched.sort(key=lambda p: ep(p), reverse=True)
-        return enriched[:10]
+        return _rank_and_slice(enriched, templates)
 
     enriched = []
     for pid, meta in elements_meta.items():
         own = ownership.get(int(pid), 0.0)
         if own >= 0.20:
             continue
-        if ep(meta) <= 0:
+        if _ep(meta) <= 0:
             continue
         row = dict(meta)
         row["league_ownership"] = round(own, 3)
         enriched.append(row)
-    enriched.sort(key=lambda p: ep(p), reverse=True)
-    return enriched[:10]
+    return _rank_and_slice(enriched, templates)
 
 
 SYSTEM_PROMPT = (
@@ -297,7 +305,8 @@ def build_strategy(entry_id, league_id, event_id, mode, bootstrap, projections_d
         return analysis
 
     elements_meta = _player_meta(bootstrap, projections_df=projections_df)
-    candidates = _candidate_targets(analysis, elements_meta, mode)
+    templates = ownership_ev.compute_position_templates(elements_meta)
+    candidates = _candidate_targets(analysis, elements_meta, mode, templates)
     candidates = _attach_fixture_runs(candidates, fixture_ticker)
     narrative = _llm_narrative(analysis, mode, candidates, model=model, fixture_ticker=fixture_ticker)
 
