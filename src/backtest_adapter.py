@@ -60,7 +60,10 @@ def build_history_df(target_gw: int, season: str = "2025-26") -> pd.DataFrame:
     df["gw"] = pd.to_numeric(df["gw"], errors="coerce").astype(int)
     df["gw_total_points"] = pd.to_numeric(df["total_points"], errors="coerce").fillna(0)
     df["gw_minutes"] = pd.to_numeric(df["minutes"], errors="coerce").fillna(0)
-    df["gw_starts"] = (df["gw_minutes"] >= 60).astype(int)  # rough proxy
+    if "starts" in history_long.columns:
+        df["gw_starts"] = pd.to_numeric(history_long["starts"], errors="coerce").fillna(0).astype(int).values
+    else:
+        df["gw_starts"] = (df["gw_minutes"] >= 60).astype(int)  # fallback proxy
 
     df["gw_team_id_end"] = df["team"].map(team_name_to_id).astype("Int64")
 
