@@ -28,3 +28,22 @@ def test_build_gw_record_gw1_is_setup():
     snap = {"season": "2025-26", "gws": {1: {"picks": [351]}}}
     rec = replay_builder.build_gw_record(1, "2025-26", snap)
     assert rec["setup_gw"] is True and rec["players"] == []
+
+
+def test_gw_global_ownership_normalized():
+    own = replay_builder._gw_global_ownership(7, "2025-26")
+    assert own                              # non-empty
+    assert max(own.values()) == 1.0         # normalized to the most-selected
+    assert all(0.0 <= v <= 1.0 for v in own.values())
+
+
+def test_sp2_candidates_present_and_labeled():
+    snap = {"season": "2025-26", "gws": {7: {"picks": [351, 233, 99], "captain": 351}}}
+    rec = replay_builder.build_gw_record(7, "2025-26", snap, horizon=3)
+    assert isinstance(rec["sp2_candidates"], list) and len(rec["sp2_candidates"]) > 0
+    c = rec["sp2_candidates"][0]
+    assert set(c) == {"element", "differential_ev", "template_xpts", "global_ownership", "ownership_basis"}
+    assert c["ownership_basis"] == "global"
+    # sorted descending by differential_ev
+    evs = [x["differential_ev"] for x in rec["sp2_candidates"]]
+    assert evs == sorted(evs, reverse=True)
