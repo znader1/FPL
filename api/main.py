@@ -44,6 +44,11 @@ from src.utils import (
 app = FastAPI(title="FPL Assistant API", version="0.3.0")
 logger = logging.getLogger(__name__)
 
+# --- personal GW replay (local-only; never enabled in production) ---
+if os.environ.get("REPLAY_MODE") == "1":
+    from api.replay_router import router as replay_router
+    app.include_router(replay_router)
+
 # Mount /chat endpoint (orchestrator agent over HTTP)
 try:
     from api.chat import router as chat_router
