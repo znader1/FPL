@@ -37,6 +37,15 @@ def test_gw_global_ownership_normalized():
     assert all(0.0 <= v <= 1.0 for v in own.values())
 
 
+def test_build_gw_record_dedupes_duplicated_vaastav_player():
+    # element 100 has duplicated rows in real GW7 Vaastav data
+    snap = {"season": "2025-26", "gws": {7: {"picks": [351, 233, 100]}}}
+    rec = replay_builder.build_gw_record(7, "2025-26", snap, horizon=3)
+    assert len(rec["players"]) == 3
+    ids = [p["element"] for p in rec["players"]]
+    assert len(ids) == len(set(ids))   # no duplicate players
+
+
 def test_sp2_candidates_present_and_labeled():
     snap = {"season": "2025-26", "gws": {7: {"picks": [351, 233, 99], "captain": 351}}}
     rec = replay_builder.build_gw_record(7, "2025-26", snap, horizon=3)

@@ -60,6 +60,9 @@ def build_gw_record(gw, season, entry_snapshot, horizon=3):
     actuals = backtest_data.player_actuals_at(gw, season)[
         ["player_id", "total_points", "minutes"]].copy()
     actuals["player_id"] = actuals["player_id"].astype(int)
+    # Vaastav GW files occasionally duplicate a player's row (e.g. identical
+    # fixture rows); dedupe so the position merge below stays one-to-one.
+    actuals = actuals.drop_duplicates(subset=["player_id"])
     # position_id from the Vaastav GW file for SP2 templates
     import pandas as _pd
     from pathlib import Path as _Path
@@ -68,6 +71,7 @@ def build_gw_record(gw, season, entry_snapshot, horizon=3):
         _pos = _pd.read_csv(_gwf)[["element", "position"]].copy()
         _pos["player_id"] = _pos["element"].astype(int)
         _pos["position_id"] = _pos["position"].map({"GKP": 1, "GK": 1, "DEF": 2, "MID": 3, "FWD": 4})
+        _pos = _pos.drop_duplicates(subset=["player_id"])
         actuals = actuals.merge(_pos[["player_id", "position_id"]], on="player_id", how="left")
     proj = model_projection(gw, season, horizon)
 
