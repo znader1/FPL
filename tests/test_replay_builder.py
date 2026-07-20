@@ -20,6 +20,8 @@ def test_build_gw_record_gw7_real_data():
     assert len(rec["players"]) == 3
     assert all(set(p) == {"element", "model_xpts", "actual_points"} for p in rec["players"])
     assert rec["optimal_captain"] in (351, 233, 99)
+    assert rec["model_captain"] in (351, 233, 99)
+    assert any(p["model_xpts"] > 0 for p in rec["players"])
 
 
 def test_build_gw_record_gw1_is_setup():
