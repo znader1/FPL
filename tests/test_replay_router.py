@@ -43,3 +43,9 @@ def test_missing_gw_is_404(tmp_path, monkeypatch):
 def test_seasons_lists_available(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch)
     assert client.get("/replay/seasons").json()["seasons"] == ["2025-26"]
+
+
+def test_bad_season_is_404(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch)
+    assert client.get("/replay/..%2F..%2Fetc/gw/7", params={"entry_id": 588004}).status_code == 404
+    assert client.get("/replay/2025_26/gw/7", params={"entry_id": 588004}).status_code == 404

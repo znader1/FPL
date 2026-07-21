@@ -2,6 +2,7 @@
 Mounted ONLY when REPLAY_MODE=1 (see api/main.py). Never falls back to the live
 FPL API — a missing file is a 404, by design."""
 import json
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -9,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query
 router = APIRouter(prefix="/replay", tags=["replay"])
 
 _BASE = Path("data/replay")
+_SEASON_RE = re.compile(r"^\d{4}-\d{2}$")
 
 
 def _season_dir(season):
@@ -34,6 +36,8 @@ def _load_entry(season, entry_id):
 
 @router.get("/{season}/gw/{gw}")
 def gw(season: str, gw: int, entry_id: int = Query(None)):
+    if not _SEASON_RE.match(season):
+        raise HTTPException(status_code=404, detail=f"Unknown season {season}")
     p = _season_dir(season) / f"gw{gw:02d}.json"
     if not p.exists():
         raise HTTPException(status_code=404, detail=f"No replay record for season {season} GW {gw}")
@@ -45,6 +49,8 @@ def gw(season: str, gw: int, entry_id: int = Query(None)):
 
 @router.get("/{season}/summary")
 def summary(season: str, entry_id: int = Query(None)):
+    if not _SEASON_RE.match(season):
+        raise HTTPException(status_code=404, detail=f"Unknown season {season}")
     entry = _load_entry(season, entry_id)
     gws = (entry.get("gws", {}) if entry else {}) or {}
     rows = [{"gw": int(k), "your_points": v.get("points")} for k, v in sorted(gws.items(), key=lambda x: int(x[0]))]
