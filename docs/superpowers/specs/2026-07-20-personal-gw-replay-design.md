@@ -114,7 +114,7 @@ Merged `/replay/{season}/gw/{gw}` response = `gwNN.json` + the entry's matching 
       app.include_router(replay_router)
   ```
   Env unset in production → router absent.
-- **Frontend:** `/replay` route registered only when `import.meta.env.VITE_REPLAY_MODE === "1"` (in `.env`, absent from `.env.production`); Vite dead-code-drops it from prod builds.
+- **Frontend:** `/replay` route registered only when `import.meta.env.DEV && import.meta.env.VITE_REPLAY_MODE === "1"`. `import.meta.env.DEV` is statically `false` in every production build (`vite build`, any mode), so Vite dead-code-drops the route and the lazy `Replay` page chunk from ALL production builds regardless of whether `.env` is present — a local `npm run build` is just as safe as the Vercel-from-git build. The gitignored `.env` supplies `VITE_REPLAY_MODE=1` to opt in under `vite dev` only.
 - **Data:** add `data/replay/` to `.gitignore` — personal entry never committed or pushed.
 - **No modification** to shipped League/Squad/Index pages or their endpoints; Replay reuses components read-only.
 
