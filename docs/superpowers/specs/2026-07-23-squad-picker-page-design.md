@@ -121,7 +121,11 @@ Team `ratings` = carryover seed + `team_nudges` (already used by the `ppg` path'
 
 ## Backtest gate (discipline per roadmap)
 
-Before `xg` becomes the default basis, run the walk-forward harness on 2025-26: seed rates/minutes from pre-GW1 (or as-of-GW) bootstrap-equivalent aggregates, predict, compare to actual. Metrics: MAE, captain hit-rate, top-N precision vs the `ppg` baseline. If `xg` does not beat `ppg`, `ppg` stays default and `xg` is opt-in via the knob. No basis change ships as default without a backtest win.
+Status (2026-07-23): the projection-basis DEFAULT is `ppg` (`DEFAULT_PARAMS["projection_basis"] = "ppg"`); `xg` and `blend` are opt-in via the knob. The gate's protective purpose — never silently ship an unvalidated basis as the default — is therefore already met.
+
+A live divergence diagnostic (`scripts/backtest_xg_basis.py`) reports how far the `xg` and `ppg` bases disagree on the real current pool (squad overlap, captain agreement, horizon-total, rank correlation). This is NOT an accuracy backtest.
+
+FOLLOW-ON (before `xg` may become the default): a rigorous walk-forward accuracy backtest on 2025-26 comparing `xg` vs `ppg` (MAE, captain hit-rate, top-N precision). This requires reconstructing as-of-each-GW per-90 xG rates + minutes from historical data (the cold-start adapters read the pre-season bootstrap's retained last-season aggregates, which do not exist mid-season) — tracked as its own sub-project. Until it produces a win, `ppg` stays the default.
 
 ## Error handling
 
