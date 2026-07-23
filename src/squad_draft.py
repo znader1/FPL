@@ -7,7 +7,7 @@ UNAVAILABLE_STATUSES = {"i", "s", "u", "n"}
 
 DEFAULT_PARAMS = {
     "gw_start": 1,
-    "horizon_gws": 5,
+    "horizon_gws": None,
     "budget_m": 100.0,
     "objective": "wildcard",          # wildcard | free_hit | plain
     "projection_basis": "ppg",        # ppg | xg | blend
@@ -17,7 +17,7 @@ DEFAULT_PARAMS = {
     "include_flagged": False,
     "min_chance_of_playing": 0,
     "team_nudges": None,
-    "max_per_team": 3,
+    "max_per_team": None,
     "min_fwd_minutes": 0.0,
     "min_premium_attackers": None,
     "premium_floor": None,
@@ -78,7 +78,9 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
     p = {**DEFAULT_PARAMS, **(params or {})}
     notes = []
     gw_start = int(p["gw_start"])
-    horizon = max(1, min(8, int(p["horizon_gws"])))
+    horizon = int(p["horizon_gws"]) if p["horizon_gws"] is not None \
+        else int(getattr(config, "CHIP_WILDCARD_DEFAULT_HORIZON_GWS", 5) or 5)
+    horizon = max(1, min(8, horizon))
     gws = list(range(gw_start, gw_start + horizon))
 
     avail = _filter_availability(elements, p["include_flagged"], p["min_chance_of_playing"])
@@ -99,7 +101,8 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
 
     objective = str(p["objective"])
     budget_m = float(p["budget_m"])
-    max_per_team = int(p["max_per_team"])
+    max_per_team = int(p["max_per_team"]) if p["max_per_team"] is not None \
+        else int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3)
     premium_floor, premium_positions, min_premium = _premium_params(p)
 
     if objective == "free_hit":
@@ -114,8 +117,25 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
             premium_floor=premium_floor, premium_positions=premium_positions)
 
     if not build.get("ok"):
-        return {"ok": False, "reason": build.get("reason"), "notes": notes,
-                "squad": [], "starting_xi": [], "bench": []}
+        return {
+            "ok": False,
+            "reason": build.get("reason"),
+            "notes": notes,
+            "squad": [],
+            "starting_xi": [],
+            "bench": [],
+            "captain_player_id": None,
+            "vice_player_id": None,
+            "formation": None,
+            "budget_m": round(float(p["budget_m"]), 2),
+            "squad_cost_m": None,
+            "remaining_budget_m": None,
+            "value_menu": {},
+            "gw_start": gw_start,
+            "horizon_gws": horizon,
+            "objective": str(p["objective"]),
+            "projection_basis": str(p["projection_basis"]),
+        }
 
     squad_df = build["squad_df"]
     lineup = optimizer.optimize_lineup(squad_df, proj, score_col=f"xpts_gw{gw_start}")
