@@ -49,6 +49,11 @@ if os.environ.get("REPLAY_MODE") == "1":
     from api.replay_router import router as replay_router
     app.include_router(replay_router)
 
+# --- dev-only squad picker (never enabled in production) ---
+if os.environ.get("SQUAD_PICKER_MODE") == "1":
+    from api.squad_router import router as squad_picker_router
+    app.include_router(squad_picker_router)
+
 # Mount /chat endpoint (orchestrator agent over HTTP)
 try:
     from api.chat import router as chat_router
