@@ -74,6 +74,30 @@ def _value_menu(proj, top_n=8):
     return menu
 
 
+def _projected_points(lineup, proj, gws, gw_start):
+    if not lineup:
+        return {"per_gw": [], "horizon_total": 0.0}
+    xi_ids = [int(x) for x in lineup["starting_xi"]["player_id"].tolist()]
+    cap_id = lineup.get("captain_player_id")
+    pm = proj.drop_duplicates("id").set_index("id")
+    per_gw = []
+    for g in gws:
+        col = f"xpts_gw{g}"
+        if col not in proj.columns:
+            continue
+        xi_pts = 0.0
+        for pid in xi_ids:
+            if pid in pm.index:
+                xi_pts += float(pd.to_numeric(pm.loc[pid, col], errors="coerce") or 0.0)
+        cap_bonus = 0.0
+        if cap_id is not None and int(cap_id) in pm.index:
+            cap_bonus = float(pd.to_numeric(pm.loc[int(cap_id), col], errors="coerce") or 0.0)
+        per_gw.append({"gw": g, "xi_points": round(xi_pts, 2),
+                       "captain_bonus": round(cap_bonus, 2),
+                       "total": round(xi_pts + cap_bonus, 2)})
+    return {"per_gw": per_gw, "horizon_total": round(sum(r["total"] for r in per_gw), 2)}
+
+
 def build_squad_from_frames(elements, fixtures, teams_short, params):
     p = {**DEFAULT_PARAMS, **(params or {})}
     notes = []
@@ -135,6 +159,7 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
             "horizon_gws": horizon,
             "objective": str(p["objective"]),
             "projection_basis": str(p["projection_basis"]),
+            "projected_points": {"per_gw": [], "horizon_total": 0.0},
         }
 
     squad_df = build["squad_df"]
@@ -146,6 +171,7 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
     squad_records = view.to_dict("records")
 
     cost = float(pd.to_numeric(view.get("price_m"), errors="coerce").fillna(0.0).sum())
+    projected = _projected_points(lineup, proj, gws, gw_start)
     return {
         "ok": True,
         "reason": build.get("reason"),
@@ -164,4 +190,5 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
         "starting_xi": lineup["starting_xi"].to_dict("records") if lineup else [],
         "bench": lineup["bench"].to_dict("records") if lineup else [],
         "value_menu": _value_menu(proj),
+        "projected_points": projected,
     }

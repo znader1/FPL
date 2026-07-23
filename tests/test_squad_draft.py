@@ -22,7 +22,7 @@ def _synthetic_elements():
                 "now_cost": 40 + (i * 5), "price_m": (40 + i * 5) / 10.0,
                 "status": "a", "chance_of_playing_next_round": None,
                 "points_per_game": 8.0 if mirage else float(2 + i),
-                "form": "0.0", "ep_next": "0.0",
+                "form": "0.0", "ep_next": None,
                 "minutes": 90 if mirage else (1500 + i * 200),
                 "starts": 1 if mirage else (18 + i),
                 "selected_by_percent": "5.0", "penalties_order": None,
@@ -90,3 +90,15 @@ def test_determinism_same_inputs_same_squad():
     a = squad_draft.build_squad_from_frames(els, fx, ts, params)
     b = squad_draft.build_squad_from_frames(els, fx, ts, params)
     assert [r["player_id"] for r in a["squad"]] == [r["player_id"] for r in b["squad"]]
+
+
+def test_projected_points_present_and_summed():
+    els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
+    res = squad_draft.build_squad_from_frames(
+        els, fx, ts, {"gw_start": 1, "horizon_gws": 5})
+    pp = res["projected_points"]
+    assert len(pp["per_gw"]) == 5
+    for row in pp["per_gw"]:
+        assert abs(row["total"] - (row["xi_points"] + row["captain_bonus"])) < 1e-6
+        assert row["xi_points"] > 0
+    assert abs(pp["horizon_total"] - sum(r["total"] for r in pp["per_gw"])) < 1e-6
