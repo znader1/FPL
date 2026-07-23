@@ -84,6 +84,26 @@ def test_flagged_players_excluded_unless_included():
     assert mid7_id not in ids
 
 
+def test_notes_lists_flagged_out_notables():
+    els = _synthetic_elements()
+    # MID7 has points_per_game=9.0 (non-mirage, well above the 4.0 notable floor).
+    els.loc[els["web_name"] == "MID7", "status"] = "i"
+    els.loc[els["web_name"] == "MID7", "news"] = "Hamstring injury"
+    fx, ts = _synthetic_fixtures(), _teams_short()
+    res = squad_draft.build_squad_from_frames(
+        els, fx, ts, {"gw_start": 1, "include_flagged": False})
+    assert res["ok"] is True, res.get("reason")
+    assert any("MID7" in n for n in res["notes"]), res["notes"]
+
+
+def test_formation_fixed_is_respected():
+    els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
+    res = squad_draft.build_squad_from_frames(
+        els, fx, ts, {"gw_start": 1, "horizon_gws": 5, "formation": "3-4-3"})
+    assert res["ok"] is True, res.get("reason")
+    assert res["formation"] == (3, 4, 3), res["formation"]
+
+
 def test_determinism_same_inputs_same_squad():
     els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
     params = {"gw_start": 1, "horizon_gws": 5}

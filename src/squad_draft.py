@@ -5,6 +5,10 @@ from src import config, optimizer, projections, transforms
 
 UNAVAILABLE_STATUSES = {"i", "s", "u", "n"}
 
+# NOT wired in v1 (frontend must not surface until implemented): fdr_strength
+# (FDR-swing scalar), team_nudges (per-request; xg/blend nudges currently only
+# via the persisted knowledge_discount.json + /squad-picker/knowledge),
+# league_id (ownership_ev differential).
 DEFAULT_PARAMS = {
     "gw_start": 1,
     "horizon_gws": None,
@@ -13,16 +17,13 @@ DEFAULT_PARAMS = {
     "projection_basis": "ppg",        # ppg | xg | blend
     "blend_weight": 0.0,
     "minutes_prior_k": 500.0,
-    "fdr_strength": 1.0,
     "include_flagged": False,
     "min_chance_of_playing": 0,
-    "team_nudges": None,
     "max_per_team": None,
     "min_fwd_minutes": 0.0,
     "min_premium_attackers": None,
     "premium_floor": None,
     "formation": "auto",
-    "league_id": None,
 }
 
 
@@ -35,6 +36,55 @@ def _filter_availability(elements, include_flagged, min_chance):
         chance = pd.to_numeric(out.get("chance_of_playing_next_round"), errors="coerce").fillna(100.0)
         out = out[chance >= float(min_chance)].copy()
     return out
+
+
+def _notable_exclusion_notes(elements, top_n=10, ppg_floor=4.0):
+    """Surface notable flagged-out players (high points_per_game but unavailable)
+    as concise note strings, e.g. for display alongside the squad build result."""
+    if elements is None or len(elements) == 0:
+        return []
+    df = elements.copy()
+    status = df.get("status", pd.Series("a", index=df.index)).astype(str)
+    flagged = df[status.isin(UNAVAILABLE_STATUSES)].copy()
+    if flagged.empty:
+        return []
+    flagged["_ppg"] = pd.to_numeric(flagged.get("points_per_game"), errors="coerce").fillna(0.0)
+    notable = flagged[flagged["_ppg"] >= float(ppg_floor)].sort_values("_ppg", ascending=False).head(int(top_n))
+    notes = []
+    for _, row in notable.iterrows():
+        web_name = row.get("web_name", "?")
+        team_short = row.get("team_short", "?")
+        price_m = float(pd.to_numeric(row.get("price_m"), errors="coerce") or 0.0)
+        news = row.get("news")
+        if news is None or (isinstance(news, float) and pd.isna(news)) or str(news).strip() == "":
+            news = f"status={row.get('status')}"
+        notes.append(f"{web_name} ({team_short}, £{price_m:.1f}m) out — {news}")
+    return notes
+
+
+def _parse_formation(spec, notes=None):
+    """Parse a 'D-M-F' formation spec into an optimizer `formations` list.
+
+    Returns None (search all valid formations) for None/"auto" input. Returns
+    a single-entry list [(d, m, f)] for a valid explicit spec like "3-4-3".
+    For malformed input, returns None and (if `notes` is given) appends an
+    "Invalid formation" note to it.
+    """
+    if spec is None:
+        return None
+    spec_str = str(spec).strip().lower()
+    if spec_str in ("", "auto"):
+        return None
+    parts = spec_str.split("-")
+    if len(parts) == 3:
+        try:
+            d, m, f = (int(x) for x in parts)
+            return [(d, m, f)]
+        except (TypeError, ValueError):
+            pass
+    if notes is not None:
+        notes.append(f"Invalid formation '{spec}'; using auto.")
+    return None
 
 
 def _apply_minutes_shrink(elements, minutes_prior_k):
@@ -100,7 +150,7 @@ def _projected_points(lineup, proj, gws, gw_start):
 
 def build_squad_from_frames(elements, fixtures, teams_short, params):
     p = {**DEFAULT_PARAMS, **(params or {})}
-    notes = []
+    notes = _notable_exclusion_notes(elements)
     gw_start = int(p["gw_start"])
     horizon = int(p["horizon_gws"]) if p["horizon_gws"] is not None \
         else int(getattr(config, "CHIP_WILDCARD_DEFAULT_HORIZON_GWS", 5) or 5)
@@ -172,7 +222,12 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
         }
 
     squad_df = build["squad_df"]
-    lineup = optimizer.optimize_lineup(squad_df, proj, score_col=f"xpts_gw{gw_start}")
+    fixed_formations = _parse_formation(p["formation"], notes)
+    lineup = optimizer.optimize_lineup(
+        squad_df, proj, score_col=f"xpts_gw{gw_start}", formations=fixed_formations)
+    if lineup is None and fixed_formations is not None:
+        notes.append(f"Formation '{p['formation']}' not possible for this squad; using auto.")
+        lineup = optimizer.optimize_lineup(squad_df, proj, score_col=f"xpts_gw{gw_start}")
 
     disp = proj[[c for c in ["id", "web_name", "pos", "team_short", "price_m",
                              "points_per_game", "xpts_horizon", f"xpts_gw{gw_start}"] if c in proj.columns]]
