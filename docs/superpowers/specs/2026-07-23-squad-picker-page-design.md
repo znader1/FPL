@@ -152,3 +152,22 @@ Frontend: light (dev tool) — render smoke test + one param round-trip.
 2. **Defensive-contribution points** (roadmap B1) — feeds both bases.
 3. **Fatigue/congestion** discount (Europe + fixture density).
 4. **Graduate to production** — auth/entitlement/mobile/empty-states; the router + component are already structured for it.
+
+## v1 backend — shipped status (2026-07-23)
+
+Backend built + reviewed on `feature/xg-expected-points` (SP5, commits `be59007..ea2aca9`, 72 tests). **The frontend plan must build controls only for the WIRED params below.**
+
+**Wired end-to-end:** `horizon_gws`, `budget_m`, `objective`, `gw_start`, `projection_basis` (ppg/xg/blend), `blend_weight`, `minutes_prior_k`, `include_flagged`, `min_chance_of_playing`, `max_per_team`, `min_fwd_minutes`, `min_premium_attackers`, `premium_floor`, `formation`. `notes[]` now populated with flagged-out notable exclusions.
+
+**NOT wired in v1 (removed from `DEFAULT_PARAMS`; do NOT surface as controls until implemented):**
+- `fdr_strength` — FDR-swing scalar; no hook yet.
+- `team_nudges` (per-request) — the per-team attack/defense grid affects the **xg/blend** bases only, and only via the persisted `data/models/knowledge_discount.json` edited through `GET/POST /squad-picker/knowledge`. The **ppg** basis honours no nudges. So the frontend team-strength grid should edit the knowledge file (endpoints exist) and the user should pick an xg/blend basis for nudges to take effect.
+- `league_id` — no `ownership_ev` differential hookup yet.
+
+**Caveats the UI must show:**
+- **ppg basis, GW1:** at cold-start (no current-season history) `projections` uses FPL's own `ep_next` as the GW1 base (`PROJ_EP_NEXT_BLEND_WEIGHT=0.50`); the last-season ppg baseline drives GW2+. The **xg** basis bypasses `projections` entirely, so it is fully last-season-xG driven for all GWs.
+- **Projected-points absolute scale is NOT comparable across bases:** the `xg` horizon-total runs ~58% above `ppg` (rank-corr 0.929, so ordering agrees) — the gap is the ppg minutes-shrink + `output_model`'s appearance floor, not extra signal. Present per-basis, never as "xg projects more points."
+
+**Endpoint prefix is `/squad-picker`** (not `/squad`, which the app owns). Gated by `SQUAD_PICKER_MODE=1`.
+
+**Backend follow-ons before the tuning tool is fully trustworthy:** wire the 3 hidden knobs; move NaN-sanitization from the router into `build_squad` core; harden `POST /knowledge` (atomic write + shape check); rigorous historical xg-vs-ppg accuracy backtest (needs as-of-GW rate reconstruction) + xg absolute-scale calibration before `xg` can become the default.
