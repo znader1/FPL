@@ -1,10 +1,15 @@
 """Mounted ONLY when SQUAD_PICKER_MODE=1 (see api/main.py). Dev-only squad picker."""
+import json
+
 from fastapi import APIRouter, HTTPException
 
-from src import fpl_client, squad_draft
+from src import config, fpl_client, squad_draft
 from src.utils import clean_value
 
 router = APIRouter(prefix="/squad-picker", tags=["squad-picker"])
+
+KNOWLEDGE_PATH = getattr(config, "FDR_KNOWLEDGE_DISCOUNT_PATH",
+                         "data/models/knowledge_discount.json")
 
 
 def _sanitize(obj):
@@ -32,3 +37,20 @@ def build(params: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Squad build failed: {e}")
     return _sanitize(result)
+
+
+@router.get("/knowledge")
+def get_knowledge():
+    try:
+        with open(KNOWLEDGE_PATH) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {"as_of": None, "teams": {}}
+
+
+@router.post("/knowledge")
+def save_knowledge(payload: dict):
+    data = {"as_of": payload.get("as_of"), "teams": payload.get("teams", {})}
+    with open(KNOWLEDGE_PATH, "w") as f:
+        json.dump(data, f, indent=2)
+    return data

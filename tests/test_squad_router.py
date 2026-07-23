@@ -23,3 +23,20 @@ def test_build_endpoint_returns_legal_squad(monkeypatch):
     assert body["ok"] is True
     assert len(body["squad"]) == 15
     assert "projected_points" in body
+
+
+def test_knowledge_get_and_post_roundtrip(tmp_path, monkeypatch):
+    kb = tmp_path / "knowledge_discount.json"
+    kb.write_text('{"as_of":"2026-06-10","teams":{}}')
+    monkeypatch.setattr(sr, "KNOWLEDGE_PATH", str(kb))
+    app = FastAPI(); app.include_router(sr.router)
+    client = TestClient(app)
+
+    g = client.get("/squad-picker/knowledge")
+    assert g.status_code == 200 and g.json()["as_of"] == "2026-06-10"
+
+    p = client.post("/squad-picker/knowledge",
+                    json={"as_of": "2026-07-23",
+                          "teams": {"COV": {"attack": 0.9, "defense": 1.1}}})
+    assert p.status_code == 200
+    assert client.get("/squad-picker/knowledge").json()["teams"]["COV"]["attack"] == 0.9
