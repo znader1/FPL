@@ -130,3 +130,17 @@ def test_build_squad_wrapper_defaults_gw_from_bootstrap():
     assert res["ok"] is True, res.get("reason")
     assert res["gw_start"] == 1
     assert len(res["squad"]) == 15
+
+
+def test_build_squad_xg_basis_via_bootstrap():
+    # Exercises the full transforms.tables_from_bootstrap -> ELEMENTS_KEEP -> xg
+    # adapter path that the injected-frame tests bypass. Regression guard for the
+    # ELEMENTS_KEEP gap that dropped per-90 xG columns on live data.
+    res = squad_draft.build_squad(_minimal_bootstrap(), _minimal_fixtures_raw(),
+                                  {"horizon_gws": 5, "budget_m": 100.0,
+                                   "projection_basis": "xg"})
+    assert res["ok"] is True, res.get("reason")
+    squad = pd.DataFrame(res["squad"])
+    assert len(squad) == 15
+    counts = squad["pos"].value_counts().to_dict()
+    assert counts == {"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3}

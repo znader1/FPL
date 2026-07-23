@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd  # noqa: E402
 
-from src import config, fpl_client, projections, squad_draft, squad_draft_xg, transforms  # noqa: E402
+from src import fpl_client, projections, squad_draft, squad_draft_xg, transforms  # noqa: E402
 
 try:
     from scipy.stats import spearmanr as _scipy_spearmanr
@@ -63,43 +63,6 @@ def _spearman(a, b):
     ra = pd.Series(a).reset_index(drop=True).rank()
     rb = pd.Series(b).reset_index(drop=True).rank()
     return float(ra.corr(rb))
-
-
-_XG_BASIS_RAW_COLS = ["expected_goals_per_90", "expected_assists_per_90", "starts"]
-
-
-def _patch_elements_keep_for_xg_basis():
-    """KNOWN BUG, discovered by actually running this diagnostic against live
-    data (not fixed here -- out of this task's committed scope, which is
-    limited to this script + the spec doc): `config.ELEMENTS_KEEP`
-    (`src/config.py`) does not include `expected_goals_per_90` /
-    `expected_assists_per_90` / `starts`. Every live call in
-    `squad_draft.build_squad` runs `transforms.tables_from_bootstrap`, which
-    filters the raw bootstrap element columns down to `ELEMENTS_KEEP` --
-    silently dropping those three before `squad_draft_xg.rates_from_bootstrap`
-    / `minutes_from_bootstrap` (the "xg"/"blend" basis's cold-start adapters)
-    ever see them. Those adapters then do `pd.to_numeric(df.get(<missing
-    column>)).fillna(...)`; on a genuinely-absent column this yields a bare
-    scalar (not a Series), and `.fillna` on a scalar raises `AttributeError`.
-    Net effect: `projection_basis="xg"`/`"blend"` crashes on every real,
-    live `build_squad()` call today. None of the existing xg-basis tests
-    catch this because they call `build_squad_from_frames` directly with
-    synthetic elements that already carry these columns, bypassing
-    `transforms.tables_from_bootstrap` (and therefore `ELEMENTS_KEEP`)
-    entirely.
-
-    This diagnostic's whole point is to exercise the real live path, so it
-    patches `config.ELEMENTS_KEEP` IN THIS PROCESS ONLY -- `src/config.py` on
-    disk is untouched -- to unblock the run. The real fix belongs in
-    `config.ELEMENTS_KEEP` itself; flagged as a concern in this task's
-    report rather than silently patched into the shared config file, since
-    this diagnostic's commit is scoped to this script + the spec doc only.
-    """
-    missing = [c for c in _XG_BASIS_RAW_COLS if c not in config.ELEMENTS_KEEP]
-    if missing:
-        print(f"[patch] config.ELEMENTS_KEEP missing {missing} (required by the xg basis's "
-              f"cold-start adapters) -- patching in-process only, src/config.py is untouched.")
-        config.ELEMENTS_KEEP = list(config.ELEMENTS_KEEP) + missing
 
 
 def _prepare_pool(bootstrap, fixtures_raw, p):
@@ -152,8 +115,6 @@ def _names(res):
 
 
 def run(bootstrap, fixtures_raw, horizon, budget):
-    _patch_elements_keep_for_xg_basis()
-
     print("=" * 78)
     print("PROJECTION-BASIS DIVERGENCE DIAGNOSTIC (ppg vs xg)")
     print("*** NOT an accuracy backtest *** -- shows how far the two bases")

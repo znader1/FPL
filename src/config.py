@@ -25,6 +25,9 @@ ELEMENTS_KEEP = [
     "corners_and_indirect_freekicks_order","corners_and_indirect_freekicks_text",
     # UI icons
     "photo","code",
+    # xG / expected-points stack (retained last-season per-90 aggregates pre-season)
+    "expected_goals_per_90","expected_assists_per_90","expected_goals_conceded_per_90",
+    "saves_per_90","starts",
 ]
 
 # Position labels to show
