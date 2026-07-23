@@ -114,9 +114,18 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
         drop = (avail["pos"] == "FWD") & (mins < float(p["min_fwd_minutes"]))
         avail = avail[~drop].copy()
 
-    proj = projections.project_elements_next_gws(
+    basis = str(p["projection_basis"])
+    ppg_proj = projections.project_elements_next_gws(
         elements=avail, fixtures=fixtures, teams_short_map=teams_short,
         gw_start=gw_start, horizon_gws=horizon)
+    if basis in ("xg", "blend"):
+        from src import squad_draft_xg
+        proj = squad_draft_xg.xg_projection(
+            avail, fixtures, teams_short, gw_start, horizon,
+            blend_weight=(float(p["blend_weight"]) if basis == "blend" else 1.0),
+            ppg_proj=ppg_proj)
+    else:
+        proj = ppg_proj
     proj = projections.add_wildcard_scores(proj, gw_start=gw_start, horizon_gws=horizon)
 
     xpts_cols = [f"xpts_gw{g}" for g in gws if f"xpts_gw{g}" in proj.columns]
