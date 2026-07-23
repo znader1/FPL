@@ -102,3 +102,31 @@ def test_projected_points_present_and_summed():
         assert abs(row["total"] - (row["xi_points"] + row["captain_bonus"])) < 1e-6
         assert row["xi_points"] > 0
     assert abs(pp["horizon_total"] - sum(r["total"] for r in pp["per_gw"])) < 1e-6
+
+
+def _minimal_bootstrap():
+    els = _synthetic_elements()
+    elements = els.drop(columns=["pos", "team_short", "team_name", "price_m"]).to_dict("records")
+    teams = [{"id": t, "short_name": f"T{t}", "name": f"Team {t}", "code": t} for t in range(1, 7)]
+    element_types = [
+        {"id": 1, "singular_name_short": "GKP"}, {"id": 2, "singular_name_short": "DEF"},
+        {"id": 3, "singular_name_short": "MID"}, {"id": 4, "singular_name_short": "FWD"}]
+    events = [{"id": 1, "is_next": True, "is_current": False}]
+    return {"elements": elements, "teams": teams, "element_types": element_types, "events": events}
+
+
+def _minimal_fixtures_raw(n_gws=5, n_teams=6):
+    rows = []
+    for gw in range(1, n_gws + 1):
+        for h in range(1, n_teams, 2):
+            rows.append({"event": gw, "team_h": h, "team_a": h + 1, "finished": False,
+                         "team_h_difficulty": 3, "team_a_difficulty": 3})
+    return rows
+
+
+def test_build_squad_wrapper_defaults_gw_from_bootstrap():
+    res = squad_draft.build_squad(_minimal_bootstrap(), _minimal_fixtures_raw(),
+                                  {"horizon_gws": 5, "budget_m": 100.0})
+    assert res["ok"] is True, res.get("reason")
+    assert res["gw_start"] == 1
+    assert len(res["squad"]) == 15

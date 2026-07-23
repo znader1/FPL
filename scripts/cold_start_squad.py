@@ -9,15 +9,11 @@ while form/event_points reset to 0. So the projection baseline
 last-season signal straight from the live API — no CSV carryover needed.
 
 This reproduces the production wildcard-draft path against live data with the
-budget forced to £100.0m and no existing squad:
-
-  live bootstrap/fixtures
-    -> transforms.tables_from_bootstrap / fixtures_df
-    -> availability filter (drop status i/s/u; keep a/d)
-    -> projections.project_elements_next_gws (5-GW horizon)
-    -> projections.add_wildcard_scores            (wildcard_score)
-    -> optimizer.build_chip_squad("wildcard_score", budget=100)
-    -> optimizer.optimize_lineup                  (XI + captain/vice)
+budget forced to £100.0m and no existing squad. The pipeline itself
+(availability filter, cold-start ppg-shrink, projections, wildcard-score
+optimizer, lineup selection) lives in `src/squad_draft.py::build_squad` — this
+script is a thin CLI wrapper: it fetches live bootstrap/fixtures, calls the
+shared core, and prints a human-readable draft report.
 
 Local analysis tool only — not wired into the product.
 
@@ -35,19 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pandas as pd  # noqa: E402
 
-from src import config, fpl_client, optimizer, projections, transforms  # noqa: E402
-
-UNAVAILABLE_STATUSES = {"i", "s", "u", "n"}  # injured / suspended / unavailable / not-in-squad
-
-
-def _next_gw(bootstrap):
-    for e in bootstrap.get("events", []):
-        if e.get("is_next"):
-            return int(e["id"])
-    for e in bootstrap.get("events", []):
-        if e.get("is_current"):
-            return int(e["id"])
-    return 1
+from src import fpl_client, squad_draft, transforms  # noqa: E402
 
 
 def _num(df, col, default=0.0):
@@ -73,88 +57,35 @@ def main():
     boot = fpl_client.get_bootstrap()
     raw_fx = fpl_client.get_fixtures()
 
-    elements, teams, _etypes = transforms.tables_from_bootstrap(boot)
-    fixtures = transforms.fixtures_df(raw_fx)
-    teams_short = teams.set_index("id")["short_name"].to_dict()
+    res = squad_draft.build_squad(boot, raw_fx, {
+        "horizon_gws": args.horizon,
+        "budget_m": args.budget,
+        "minutes_prior_k": args.minutes_prior,
+        "min_fwd_minutes": args.min_fwd_minutes,
+    })
+    if not res["ok"]:
+        print(f"DRAFT FAILED: {res['reason']}")
+        return 1
 
-    gw_start = _next_gw(boot)
-    horizon = max(1, int(args.horizon))
+    gw_start = res["gw_start"]
+    horizon = res["horizon_gws"]
     gws = list(range(gw_start, gw_start + horizon))
 
-    # --- availability: drop flagged-out players from the draft pool ---
+    # Transformed elements, for display-only fields the core doesn't return:
+    # raw (unshrunk) last-season ppg/minutes, full pool size, flagged-out exclusions.
+    elements, _teams, _etypes = transforms.tables_from_bootstrap(boot)
     status = elements.get("status", pd.Series("a", index=elements.index)).astype(str)
-    flagged_out = status.isin(UNAVAILABLE_STATUSES)
-    avail = elements[~flagged_out].copy()
-
-    # --- cold-start reliability shrink: last-season ppg -> ppg * mins/(mins+K) ---
-    # Pre-season the projection baseline is driven almost entirely by ppg (form=0,
-    # no current-season history). Raw ppg over-rewards small samples (a keeper with
-    # one clean sheet reads 7.0 ppg). Shrink toward 0 by minutes reliability so
-    # one-gamers collapse while nailed starters (2500+ mins) barely move.
-    avail["raw_ppg"] = pd.to_numeric(avail.get("points_per_game"), errors="coerce").fillna(0.0)
-    mins = pd.to_numeric(avail.get("minutes"), errors="coerce").fillna(0.0)
+    flagged_out = status.isin(squad_draft.UNAVAILABLE_STATUSES)
     K = max(1.0, float(args.minutes_prior))
-    avail["points_per_game"] = avail["raw_ppg"] * (mins / (mins + K))
-
-    # optional: force real playing forwards (balanced build)
-    if args.min_fwd_minutes > 0:
-        drop_fwd = (avail["pos"] == "FWD") & (mins < float(args.min_fwd_minutes))
-        avail = avail[~drop_fwd].copy()
 
     print(f"=== Cold-start draft — GW{gw_start}-{gws[-1]} (horizon {horizon}) ===")
-    print(f"Pool: {len(avail)}/{len(elements)} players available "
-          f"(dropped {int(flagged_out.sum())} flagged status {sorted(UNAVAILABLE_STATUSES)}) "
+    print(f"Pool: {len(elements) - int(flagged_out.sum())}/{len(elements)} players available "
+          f"(dropped {int(flagged_out.sum())} flagged status {sorted(squad_draft.UNAVAILABLE_STATUSES)}) "
           f"| ppg minutes-prior K={int(K)}")
 
-    # --- projections (cold start: last-season ppg baseline + fixtures) ---
-    proj = projections.project_elements_next_gws(
-        elements=avail,
-        fixtures=fixtures,
-        teams_short_map=teams_short,
-        gw_start=gw_start,
-        horizon_gws=horizon,
-    )
-    proj = projections.add_wildcard_scores(proj, gw_start=gw_start, horizon_gws=horizon)
-
-    # horizon xpts (sum of per-GW columns actually produced)
-    xpts_cols = [f"xpts_gw{g}" for g in gws if f"xpts_gw{g}" in proj.columns]
-    proj["xpts_horizon"] = proj[xpts_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1)
-
-    # --- draft 15 on the wildcard objective ---
-    premium_floor = float(
-        getattr(config, "CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR",
-                getattr(config, "CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR", 9.0))
-        or 9.0
-    )
-    premium_positions = list(
-        getattr(config, "CHIP_WILDCARD_PREMIUM_CAPTAIN_POSITIONS", ["MID", "FWD"]) or ["MID", "FWD"]
-    )
-    min_premium = int(getattr(config, "CHIP_WILDCARD_MIN_PREMIUM_CAPTAINS", 1) or 0)
-
-    build = optimizer.build_chip_squad(
-        elements_all=proj,
-        score_col="wildcard_score",
-        budget_m=float(args.budget),
-        max_per_team=int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3),
-        min_premium_attackers=min_premium,
-        premium_floor=premium_floor,
-        premium_positions=premium_positions,
-    )
-    if not build.get("ok"):
-        print(f"DRAFT FAILED: {build.get('reason')}")
-        return 1
-    squad_df = build["squad_df"]
-
-    lineup = optimizer.optimize_lineup(squad_df, proj, score_col=f"xpts_gw{gw_start}")
-
-    # --- assemble display frame ---
-    disp_cols = ["id", "web_name", "pos", "team_short", "price_m",
-                 "points_per_game", "xpts_horizon", f"xpts_gw{gw_start}",
-                 "wildcard_score", "penalties_order", "selected_by_percent"]
-    disp_cols = [c for c in disp_cols if c in proj.columns]
-    view = squad_df.merge(proj[disp_cols], left_on="player_id", right_on="id",
-                          how="left", suffixes=("", "_p"))
-    # raw last-season ppg + minutes for display (proj carries the shrunk ppg)
+    # --- assemble display frame from the core's squad records ---
+    view = pd.DataFrame(res["squad"])
+    # raw last-season ppg + minutes for display (res["squad"].points_per_game carries the shrunk ppg)
     raw_stats = elements[["id", "minutes"]].copy()
     raw_stats["raw_ppg"] = pd.to_numeric(elements.get("points_per_game"), errors="coerce").fillna(0.0)
     raw_stats["minutes"] = pd.to_numeric(raw_stats["minutes"], errors="coerce").fillna(0.0)
@@ -163,18 +94,18 @@ def main():
         if c in view.columns:
             view[c] = pd.to_numeric(view[c], errors="coerce").fillna(0.0)
 
-    cap_id = lineup["captain_player_id"] if lineup else None
-    vice_id = lineup["vice_player_id"] if lineup else None
-    xi_ids = set(lineup["starting_xi"]["player_id"].astype(int)) if lineup else set()
+    cap_id = res["captain_player_id"]
+    vice_id = res["vice_player_id"]
+    xi_ids = {int(r["player_id"]) for r in res["starting_xi"]}
 
     pos_order = {"GKP": 0, "DEF": 1, "MID": 2, "FWD": 3}
     view["_po"] = view["pos"].map(pos_order).fillna(9)
     view = view.sort_values(["_po", "xpts_horizon"], ascending=[True, False])
 
-    total_cost = float(view["price_m"].sum())
+    total_cost = float(res["squad_cost_m"])
     print(f"\nSquad cost £{total_cost:.1f}m | bank £{args.budget - total_cost:.1f}m "
-          f"| formation {lineup['formation'] if lineup else '?'}")
-    if lineup:
+          f"| formation {res['formation'] if res['formation'] else '?'}")
+    if res["formation"]:
         cap = view[view["player_id"] == cap_id]["web_name"].iloc[0] if cap_id in view["player_id"].values else cap_id
         vice = view[view["player_id"] == vice_id]["web_name"].iloc[0] if vice_id in view["player_id"].values else vice_id
         print(f"Captain: {cap}  |  Vice: {vice}")
@@ -208,7 +139,7 @@ def main():
         out = {
             "gw_start": gw_start, "horizon": horizon,
             "budget_m": args.budget, "squad_cost_m": round(total_cost, 1),
-            "formation": lineup["formation"] if lineup else None,
+            "formation": res["formation"],
             "captain_id": cap_id, "vice_id": vice_id,
             "squad": view[["player_id", "web_name", "pos", "team_short", "price_m",
                            "points_per_game", "xpts_horizon"]].to_dict("records"),

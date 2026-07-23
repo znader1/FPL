@@ -1,7 +1,7 @@
 """Pure, dependency-injectable from-scratch squad draft (dev tool + API core)."""
 import pandas as pd
 
-from src import config, optimizer, projections
+from src import config, optimizer, projections, transforms
 
 UNAVAILABLE_STATUSES = {"i", "s", "u", "n"}
 
@@ -192,3 +192,25 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
         "value_menu": _value_menu(proj),
         "projected_points": projected,
     }
+
+
+def _next_gw(bootstrap):
+    for e in bootstrap.get("events", []):
+        if e.get("is_next"):
+            return int(e["id"])
+    for e in bootstrap.get("events", []):
+        if e.get("is_current"):
+            return int(e["id"])
+    return 1
+
+
+def build_squad(bootstrap, fixtures_raw, params=None):
+    """Live wrapper: runs transforms on raw bootstrap/fixtures, defaults gw_start
+    from the bootstrap's next event, then delegates to build_squad_from_frames."""
+    p = {**DEFAULT_PARAMS, **(params or {})}
+    if params is None or params.get("gw_start") is None:
+        p["gw_start"] = _next_gw(bootstrap)
+    elements, teams, _etypes = transforms.tables_from_bootstrap(bootstrap)
+    fixtures = transforms.fixtures_df(fixtures_raw)
+    teams_short = teams.set_index("id")["short_name"].to_dict()
+    return build_squad_from_frames(elements, fixtures, teams_short, p)
