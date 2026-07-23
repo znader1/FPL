@@ -76,7 +76,11 @@ def minutes_from_bootstrap(elements):
     ``minutes_model.minutes_projection`` before any current-season history
     exists). ``expected_points`` reads ``exp_minutes``, ``prob_appear`` and
     ``prob_60`` off this frame, so all three are populated (not just
-    ``p_start``/``exp_minutes``).
+    ``p_start``/``exp_minutes``). Players with zero last-season minutes AND
+    zero starts (no top-flight history to carry over -- new signings,
+    promoted-team players) get ``prob_appear``/``prob_60``/``exp_minutes``
+    forced to 0.0 rather than the sub-appearance floor, since cold start has
+    no signal that they'll feature at all.
 
     Returns a DataFrame indexed by player id (name ``"id"``), columns:
     p_start, exp_minutes, prob_appear, prob_60.
@@ -94,6 +98,16 @@ def minutes_from_bootstrap(elements):
     p60_given_start = float(getattr(config, "MINUTES_P60_GIVEN_START", 0.86))
     prob_appear = (p_start + (1.0 - p_start) * sub_app_prob).clip(0.0, 1.0)
     prob_60 = (p_start * p60_given_start).clip(0.0, 1.0)
+
+    # Cold-start unknowns: a player with zero last-season minutes AND zero
+    # starts (new signing / promoted-team player with no top-flight history)
+    # has no basis for the sub-appearance probability floor -- without this
+    # guard they'd get prob_appear~=sub_app_prob (phantom appearance points)
+    # despite exp_minutes==0. Players with any minutes are untouched.
+    no_history = (mins == 0.0) & (starts == 0.0)
+    exp_minutes = exp_minutes.mask(no_history, 0.0)
+    prob_appear = prob_appear.mask(no_history, 0.0)
+    prob_60 = prob_60.mask(no_history, 0.0)
 
     out = pd.DataFrame({
         "p_start": p_start,
@@ -128,11 +142,13 @@ def xg_projection(elements, fixtures, teams_short, gw_start, horizon, blend_weig
     ``team``, ``price_m``, ``pos``, ``web_name``, ``penalties_order``,
     ``selected_by_percent``, etc. -- keeps working regardless of basis).
 
-    When ``blend_weight`` is truthy and ``ppg_proj`` is given, each
-    ``xpts_gw{N}`` becomes
+    Whenever ``ppg_proj`` is given (and non-empty), each ``xpts_gw{N}``
+    becomes
         blend_weight * xg_value + (1 - blend_weight) * ppg_value
-    ``blend_weight=1.0`` is a pure-xg passthrough -- this is how the "xg"
-    basis (as opposed to "blend") reuses this same code path.
+    ``blend_weight=0.0`` is a pure-ppg passthrough; ``blend_weight=1.0`` is a
+    pure-xg passthrough -- this is how the "xg" basis (as opposed to "blend")
+    reuses this same code path (it always passes ``blend_weight=1.0``, so the
+    ``ppg_value`` term is zeroed out regardless of what ``ppg_proj`` holds).
     """
     gw_start = int(gw_start)
     horizon = max(1, int(horizon))
@@ -167,7 +183,7 @@ def xg_projection(elements, fixtures, teams_short, gw_start, horizon, blend_weig
         else:
             out[col] = 0.0
 
-    if blend_weight and ppg_proj is not None and not ppg_proj.empty:
+    if ppg_proj is not None and not ppg_proj.empty:
         w = float(blend_weight)
         pm = ppg_proj.drop_duplicates("id").set_index("id")
         for idx in range(horizon):

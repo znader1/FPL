@@ -62,20 +62,37 @@ def test_xg_projection_values_are_finite_and_nonnegative():
         assert (col >= 0).all()
 
 
-def test_xg_projection_blend_weight_zero_and_one_are_pure_xg_and_identical():
-    # blend_weight falsy skips blending entirely; blend_weight=1.0 takes the
-    # blend branch but is a pure-xg passthrough (1.0*xg + 0.0*ppg) -- this is
-    # exactly how squad_draft.build_squad_from_frames invokes the "xg" basis.
+def test_blend_weight_interpolates_ppg_and_xg():
+    # blend_weight=0.0 must be a pure-ppg passthrough (not pure-xg -- that was
+    # the bug: a truthiness guard on blend_weight made 0.0 skip blending
+    # entirely). blend_weight=1.0 stays pure-xg, and the two must actually
+    # differ when ppg and xg disagree -- otherwise the blend isn't
+    # interpolating at all.
+    from src import projections
+
     els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
-    ppg_stub = pd.DataFrame({"id": els["id"], "xpts_gw1": 999.0})
-    no_blend = squad_draft_xg.xg_projection(els, fx, ts, gw_start=1, horizon=1,
-                                            blend_weight=0.0, ppg_proj=None)
-    full_xg_weight = squad_draft_xg.xg_projection(els, fx, ts, gw_start=1, horizon=1,
-                                                  blend_weight=1.0, ppg_proj=ppg_stub)
-    pd.testing.assert_series_equal(
-        no_blend["xpts_gw1"].reset_index(drop=True),
-        full_xg_weight["xpts_gw1"].reset_index(drop=True),
-    )
+    ppg = projections.project_elements_next_gws(
+        elements=els, fixtures=fx, teams_short_map=ts, gw_start=1, horizon_gws=5)
+
+    xg1 = squad_draft_xg.xg_projection(els, fx, ts, 1, 5, blend_weight=1.0, ppg_proj=ppg)
+    xg0 = squad_draft_xg.xg_projection(els, fx, ts, 1, 5, blend_weight=0.0, ppg_proj=ppg)
+
+    ppg_indexed = ppg.set_index("id")
+    g = lambda df: df.set_index("id")["xpts_gw1"]
+    xg0_vals = g(xg0)
+    xg1_vals = g(xg1)
+    ppg_vals = ppg_indexed["xpts_gw1"]
+
+    # Pick a player whose xg and ppg values actually differ, so the assertion
+    # is meaningful rather than a coincidental match.
+    diffs = (xg1_vals - ppg_vals).abs()
+    pid = int(diffs.sort_values(ascending=False).index[0])
+    assert diffs.loc[pid] > 1e-6, "need a player where xg and ppg differ to test interpolation"
+
+    # w=0 => pure ppg for this player
+    assert abs(xg0_vals.loc[pid] - ppg_vals.loc[pid]) < 1e-6
+    # w=1 (pure xg) differs from w=0 (pure ppg) -- blend actually interpolates
+    assert abs(xg1_vals.loc[pid] - xg0_vals.loc[pid]) > 1e-6
 
 
 def test_xg_projection_blend_matches_weighted_formula():
