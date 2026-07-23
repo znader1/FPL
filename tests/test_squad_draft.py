@@ -61,3 +61,32 @@ def test_build_squad_returns_legal_15_within_budget():
     assert counts == {"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3}
     assert res["squad_cost_m"] <= 100.0 + 1e-6
     assert (squad["team_short"].value_counts() <= 3).all()
+
+
+def test_minutes_shrink_kills_small_sample_mirage():
+    els = _synthetic_elements()
+    # GKP0 is the mirage: 8.0 ppg over 90 mins. After shrink it must fall far.
+    shrunk = squad_draft._apply_minutes_shrink(els, 500.0)
+    mirage = shrunk[shrunk["web_name"] == "GKP0"].iloc[0]
+    assert mirage["points_per_game"] < 2.0            # 8.0 * 90/(90+500) ~= 1.22
+    nailed = shrunk[shrunk["web_name"] == "GKP3"].iloc[0]
+    assert nailed["points_per_game"] > 0.7 * nailed["raw_ppg"]  # 2100 mins barely moves
+
+
+def test_flagged_players_excluded_unless_included():
+    els = _synthetic_elements()
+    els.loc[els["web_name"] == "MID7", "status"] = "i"
+    fx, ts = _synthetic_fixtures(), _teams_short()
+    res = squad_draft.build_squad_from_frames(
+        els, fx, ts, {"gw_start": 1, "include_flagged": False})
+    ids = {int(r["player_id"]) for r in res["squad"]}
+    mid7_id = int(els[els["web_name"] == "MID7"].iloc[0]["id"])
+    assert mid7_id not in ids
+
+
+def test_determinism_same_inputs_same_squad():
+    els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
+    params = {"gw_start": 1, "horizon_gws": 5}
+    a = squad_draft.build_squad_from_frames(els, fx, ts, params)
+    b = squad_draft.build_squad_from_frames(els, fx, ts, params)
+    assert [r["player_id"] for r in a["squad"]] == [r["player_id"] for r in b["squad"]]
