@@ -6,9 +6,7 @@ from src import config, optimizer, projections, transforms
 UNAVAILABLE_STATUSES = {"i", "s", "u", "n"}
 
 # NOT wired in v1 (frontend must not surface until implemented): fdr_strength
-# (FDR-swing scalar), team_nudges (per-request; xg/blend nudges currently only
-# via the persisted knowledge_discount.json + /squad-picker/knowledge),
-# league_id (ownership_ev differential).
+# (FDR-swing scalar), league_id (ownership_ev differential).
 DEFAULT_PARAMS = {
     "gw_start": 1,
     "horizon_gws": None,
@@ -24,6 +22,7 @@ DEFAULT_PARAMS = {
     "min_premium_attackers": None,
     "premium_floor": None,
     "formation": "auto",
+    "team_nudges": None,              # per-request xg/blend attack/defense nudges
 }
 
 
@@ -173,7 +172,7 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
         proj = squad_draft_xg.xg_projection(
             avail, fixtures, teams_short, gw_start, horizon,
             blend_weight=(float(p["blend_weight"]) if basis == "blend" else 1.0),
-            ppg_proj=ppg_proj)
+            ppg_proj=ppg_proj, team_nudges=p["team_nudges"])
     else:
         proj = ppg_proj
     proj = projections.add_wildcard_scores(proj, gw_start=gw_start, horizon_gws=horizon)

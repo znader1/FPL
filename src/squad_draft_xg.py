@@ -122,17 +122,42 @@ def minutes_from_bootstrap(elements):
     return out[~out.index.duplicated(keep="last")]
 
 
-def _ratings(teams_short):
+def _nudges_to_discount(team_nudges):
+    """Convert [{team_short, attack, defense}] to the knowledge_discount 'teams' dict."""
+    if not team_nudges:
+        return None
+    teams = {}
+    for n in team_nudges:
+        if not isinstance(n, dict):
+            continue
+        key = n.get("team_short")
+        if not key:
+            continue
+        entry = {}
+        if n.get("attack") is not None:
+            entry["attack"] = float(n["attack"])
+        if n.get("defense") is not None:
+            entry["defense"] = float(n["defense"])
+        if entry:
+            teams[str(key)] = entry
+    return {"teams": teams} if teams else None
+
+
+def _ratings(elements, teams_short, team_nudges=None):
     """Cold-start team attack/defense ratings: prior-season carryover seed (or
-    promoted defaults where a team has no seed entry) blended with the
-    manual knowledge-discount file. Both calls degrade gracefully with an
-    empty current-season xG frame."""
+    promoted defaults where a team has no seed entry) blended with either the
+    per-request ``team_nudges`` (when given) or the manual knowledge-discount
+    file (default). Both calls degrade gracefully with an empty current-season
+    xG frame."""
     ratings = fixture_difficulty.resolve_team_ratings(pd.DataFrame(), teams_short_map=teams_short)
-    ratings = fixture_difficulty.apply_knowledge_discount(ratings, teams_short_map=teams_short)
+    discount = _nudges_to_discount(team_nudges)
+    ratings = fixture_difficulty.apply_knowledge_discount(
+        ratings, discount=discount, teams_short_map=teams_short)
     return ratings
 
 
-def xg_projection(elements, fixtures, teams_short, gw_start, horizon, blend_weight=0.0, ppg_proj=None):
+def xg_projection(elements, fixtures, teams_short, gw_start, horizon, blend_weight=0.0, ppg_proj=None,
+                   team_nudges=None):
     """
     Per-GW expected points via ``output_model.expected_points``, fed by the
     two cold-start adapters above. Returns one row per input row with an
@@ -163,7 +188,7 @@ def xg_projection(elements, fixtures, teams_short, gw_start, horizon, blend_weig
     rates = rates.drop_duplicates(subset=["player_id"], keep="last")
 
     minutes_df = minutes_from_bootstrap(elements)
-    ratings = _ratings(teams_short)
+    ratings = _ratings(elements, teams_short, team_nudges)
 
     base = elements.copy()
     base["id"] = pd.to_numeric(base["id"], errors="coerce")

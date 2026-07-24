@@ -147,3 +147,17 @@ def test_build_squad_from_frames_basis_blend():
     assert res["ok"] is True, res.get("reason")
     assert len(res["squad"]) == 15
     assert res["projection_basis"] == "blend"
+
+
+def test_team_nudges_shift_ratings():
+    els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
+    base = squad_draft_xg.xg_projection(els, fx, ts, 1, 5, blend_weight=1.0, ppg_proj=None)
+    # Nudge team T1's defense weaker (concedes more) — opponents' attackers should rise.
+    nudged = squad_draft_xg.xg_projection(
+        els, fx, ts, 1, 5, blend_weight=1.0, ppg_proj=None,
+        team_nudges=[{"team_short": "T1", "attack": 1.0, "defense": 1.15}])
+    # The projections must not be byte-identical (a nudge changed something).
+    import pandas as pd
+    b = base.set_index("id")["xpts_gw1"]
+    n = nudged.set_index("id")["xpts_gw1"]
+    assert not b.equals(n)
