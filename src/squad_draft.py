@@ -5,8 +5,8 @@ from src import config, optimizer, projections, transforms
 
 UNAVAILABLE_STATUSES = {"i", "s", "u", "n"}
 
-# NOT wired in v1 (frontend must not surface until implemented): fdr_strength
-# (FDR-swing scalar), league_id (ownership_ev differential).
+# NOT wired in v1 (frontend must not surface until implemented): league_id
+# (ownership_ev differential).
 DEFAULT_PARAMS = {
     "gw_start": 1,
     "horizon_gws": None,
@@ -14,6 +14,7 @@ DEFAULT_PARAMS = {
     "objective": "wildcard",          # wildcard | free_hit | plain
     "projection_basis": "ppg",        # ppg | xg | blend
     "blend_weight": 0.0,
+    "fdr_strength": 1.0,              # scales fixture-difficulty multiplier swing (0=off,1=default,>1=amplified)
     "minutes_prior_k": 500.0,
     "include_flagged": False,
     "min_chance_of_playing": 0,
@@ -166,7 +167,7 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
     basis = str(p["projection_basis"])
     ppg_proj = projections.project_elements_next_gws(
         elements=avail, fixtures=fixtures, teams_short_map=teams_short,
-        gw_start=gw_start, horizon_gws=horizon)
+        gw_start=gw_start, horizon_gws=horizon, fdr_strength=p["fdr_strength"])
     if basis in ("xg", "blend"):
         from src import squad_draft_xg
         proj = squad_draft_xg.xg_projection(

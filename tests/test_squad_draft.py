@@ -35,11 +35,17 @@ def _synthetic_elements():
 
 
 def _synthetic_fixtures(n_gws=5, n_teams=6):
+    # Difficulty cycles per GW (not a fixed 3-3) so the fixture-difficulty
+    # multiplier is non-trivial and asymmetric across the horizon -- needed to
+    # exercise fdr_strength scaling (see test_fdr_strength_amplifies_fixture_swing).
+    # Values chosen so the multiplier swing doesn't cancel out over the horizon.
+    diff_pattern = [(5, 1), (1, 4), (1, 5), (4, 3), (2, 3)]
     rows = []
     for gw in range(1, n_gws + 1):
+        dh, da = diff_pattern[(gw - 1) % len(diff_pattern)]
         for h in range(1, n_teams, 2):
             rows.append({"event": gw, "team_h": h, "team_a": h + 1,
-                         "finished": False, "team_h_difficulty": 3, "team_a_difficulty": 3})
+                         "finished": False, "team_h_difficulty": dh, "team_a_difficulty": da})
     return pd.DataFrame(rows)
 
 
@@ -150,6 +156,16 @@ def test_build_squad_wrapper_defaults_gw_from_bootstrap():
     assert res["ok"] is True, res.get("reason")
     assert res["gw_start"] == 1
     assert len(res["squad"]) == 15
+
+
+def test_fdr_strength_amplifies_fixture_swing():
+    els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
+    weak = squad_draft.build_squad_from_frames(els, fx, ts,
+        {"gw_start": 1, "horizon_gws": 5, "fdr_strength": 0.0})
+    strong = squad_draft.build_squad_from_frames(els, fx, ts,
+        {"gw_start": 1, "horizon_gws": 5, "fdr_strength": 2.0})
+    # Same pool, different FDR weighting -> projected totals should differ.
+    assert weak["projected_points"]["horizon_total"] != strong["projected_points"]["horizon_total"]
 
 
 def test_build_squad_xg_basis_via_bootstrap():

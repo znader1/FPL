@@ -366,6 +366,7 @@ def project_elements_next_gws(
     ppg_weight=config.PROJ_DEFAULT_PPG_WEIGHT,
     form_weight=config.PROJ_DEFAULT_FORM_WEIGHT,
     latest_n_matches=config.PROJ_DEFAULT_LATEST_N_MATCHES,
+    fdr_strength=1.0,
 ):
     """
     Lightweight next-N gameweeks projection table (FPL-only baseline).
@@ -374,10 +375,14 @@ def project_elements_next_gws(
     - Falls back to a simple `ppg+form` baseline when no recent history is available.
     - Adjusts for fixture difficulty and doubles/blanks.
     - Applies playing probability (chance_of_playing_next_round) for the immediate GW only.
+    - `fdr_strength` scales how hard the fixture-difficulty multiplier swings away from
+      1.0 (1.0 = unchanged, 0.0 = fixtures ignored, >1 = amplified). It does NOT touch
+      the home/away or team-form multipliers.
     """
     gw_start = int(gw_start)
     horizon_gws = int(horizon_gws)
     gws = [gw_start + i for i in range(horizon_gws)]
+    fdr_strength = float(fdr_strength if fdr_strength is not None else 1.0)
 
     df = elements.copy()
     df = df.loc[:, ~df.columns.duplicated()]
@@ -468,6 +473,10 @@ def project_elements_next_gws(
         fixture_count = pd.to_numeric(ann["gw_fixture_count"], errors="coerce").fillna(0.0)
         diff_avg = pd.to_numeric(ann["gw_diff_avg"], errors="coerce").fillna(0.0)
         diff_mult = diff_avg.apply(difficulty_multiplier)
+        if fdr_strength != 1.0:
+            # Scale only the fixture-difficulty multiplier's deviation from 1.0 —
+            # home/away and team-form multipliers below are untouched.
+            diff_mult = 1.0 + (diff_mult - 1.0) * fdr_strength
 
         team_ctx = team_gw_context_multipliers(fixtures, int(gw), team_recent_ppg)
         home_away_mult = ann["team"].apply(
