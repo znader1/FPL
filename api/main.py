@@ -314,6 +314,23 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
             continue
 
     if not myteam or not used_event_id:
+        # Pre-season / pre-first-deadline: FPL publishes no public entry picks until
+        # a gameweek locks, so /event/{gw}/picks/ 404s for every GW (and prior-season
+        # history is wiped at rollover). Surface a clear message instead of a raw
+        # upstream 404 wrapped in a 502.
+        current_ev = _event_id(bootstrap, "is_current")
+        next_ev = next((e for e in bootstrap.get("events", []) if e.get("is_next")), None)
+        if not current_ev and next_ev is not None:
+            gw = safe_int(next_ev.get("id")) or 1
+            deadline = str(next_ev.get("deadline_time") or "")[:10]
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Your team isn't available yet — FPL publishes squads only after a "
+                    f"gameweek locks. It loads automatically after the GW{gw} deadline"
+                    f"{f' ({deadline})' if deadline else ''}. Until then, use ZN Pick to predict."
+                ),
+            )
         raise HTTPException(status_code=502, detail=f"Failed to fetch entry picks. Last error: {last_err}")
 
     # Free hit picks are temporary — the real permanent squad is from the GW before.
