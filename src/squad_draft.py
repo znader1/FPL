@@ -195,6 +195,13 @@ def project_pool(elements, fixtures, teams_short, params):
     xpts_cols = [f"xpts_gw{g}" for g in gws if f"xpts_gw{g}" in proj.columns]
     proj["xpts_horizon"] = proj[xpts_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1) \
         if xpts_cols else 0.0
+    # The ppg projection (project_elements_next_gws) drops some passthrough
+    # columns; re-attach raw minutes/starts by id so the pool + filters work on
+    # every basis (blend/xg already keep them).
+    for col in ("minutes", "starts"):
+        if col not in proj.columns and "id" in proj.columns and col in avail.columns:
+            src = pd.to_numeric(avail.set_index("id")[col], errors="coerce")
+            proj[col] = proj["id"].map(src).fillna(0)
     return proj, gw_start, horizon, gws, notes
 
 
@@ -301,8 +308,10 @@ def gk_rotation_pairs(bootstrap, fixtures_raw, params=None, top_n=8):
     fixtures naturally score highest. Returns top pairs for the manual picker."""
     p = {**DEFAULT_PARAMS, **(params or {})}
     pool = player_pool(bootstrap, fixtures_raw, p)["players"]
-    min_min = float(p.get("gk_pair_min_minutes", 1500) or 1500)
-    max_pair_cost = float(p.get("gk_pair_budget", 11.0) or 11.0)
+    _mm = p.get("gk_pair_min_minutes")
+    min_min = 1500.0 if _mm is None else float(_mm)  # 0 means no minimum
+    _mpc = p.get("gk_pair_budget")
+    max_pair_cost = 11.0 if _mpc is None else float(_mpc)
     gks = [g for g in pool if g["pos"] == "GKP" and g["minutes"] >= min_min]
     gks.sort(key=lambda g: -g["xpts_horizon"])
 
