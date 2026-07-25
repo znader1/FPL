@@ -241,6 +241,10 @@ OUTPUT_GOALS_CONCEDED_PENALTY_PER_2 = {"GKP": -1.0, "DEF": -1.0, "MID": 0.0, "FW
 OUTPUT_SAVES_PER_XGA = 2.0           # rough expected saves per unit opponent xG (GKP)
 OUTPUT_SAVE_POINTS_PER_SAVE = 1.0 / 3.0
 OUTPUT_BONUS_PER_XGI = 0.9           # rough bonus points per expected goal involvement
+# Defensive bonus: BPS from clean sheets, clearances, blocks, recoveries earns
+# defenders/keepers bonus that attacking xGI misses. Bonus points per expected
+# clean sheet, by position (0 for FWD).
+OUTPUT_CS_BONUS_PER_CS = {"GKP": 1.0, "DEF": 1.2, "MID": 0.3, "FWD": 0.0}
 OUTPUT_POSITION_BASE_XG90 = {"GKP": 0.01, "DEF": 0.06, "MID": 0.12, "FWD": 0.30}
 OUTPUT_POSITION_BASE_XA90 = {"GKP": 0.01, "DEF": 0.06, "MID": 0.14, "FWD": 0.16}
 OUTPUT_MAX_GOALS_PER_GAME = 2.5      # sanity clamp on a single player's expected goals
