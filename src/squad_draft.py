@@ -287,3 +287,45 @@ def build_squad(bootstrap, fixtures_raw, params=None):
     fixtures = transforms.fixtures_df(fixtures_raw)
     teams_short = teams.set_index("id")["short_name"].to_dict()
     return build_squad_from_frames(elements, fixtures, teams_short, p)
+
+
+def _pool_num(v, d=0.0):
+    n = pd.to_numeric(v, errors="coerce")
+    return d if pd.isna(n) else float(n)
+
+
+def _pool_records(proj, gws):
+    """One JSON-safe record per projected player, for the /players list."""
+    out = []
+    for _, r in proj.iterrows():
+        out.append({
+            "player_id": int(r["id"]),
+            "web_name": r.get("web_name"),
+            "pos": r.get("pos"),
+            "team_short": r.get("team_short"),
+            "team_id": int(_pool_num(r.get("team"), 0)),
+            "price_m": _pool_num(r.get("price_m")),
+            "points_per_game": _pool_num(r.get("points_per_game")),
+            "total_points": _pool_num(r.get("total_points")),
+            "selected_by_percent": _pool_num(r.get("selected_by_percent")),
+            "xpts_horizon": _pool_num(r.get("xpts_horizon")),
+            "xpts_per_gw": [_pool_num(r.get(f"xpts_gw{g}")) for g in gws],
+        })
+    return out
+
+
+def player_pool(bootstrap, fixtures_raw, params=None):
+    """Live wrapper: full projected player pool (no optimizer)."""
+    p = {**DEFAULT_PARAMS, **(params or {})}
+    if params is None or params.get("gw_start") is None:
+        p["gw_start"] = _next_gw(bootstrap)
+    elements, teams, _etypes = transforms.tables_from_bootstrap(bootstrap)
+    fixtures = transforms.fixtures_df(fixtures_raw)
+    teams_short = teams.set_index("id")["short_name"].to_dict()
+    proj, gw_start, horizon, gws, _notes = project_pool(elements, fixtures, teams_short, p)
+    return {
+        "gw_start": gw_start,
+        "horizon_gws": horizon,
+        "projection_basis": str(p["projection_basis"]),
+        "players": _pool_records(proj, gws),
+    }

@@ -39,6 +39,20 @@ def build(params: dict):
     return _sanitize(result)
 
 
+@router.post("/players")
+def players(params: dict):
+    try:
+        bootstrap = fpl_client.get_bootstrap()
+        fixtures_raw = fpl_client.get_fixtures()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Live FPL fetch failed: {e}")
+    try:
+        result = squad_draft.player_pool(bootstrap, fixtures_raw, params or {})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Player pool failed: {e}")
+    return _sanitize(result)
+
+
 @router.get("/knowledge")
 def get_knowledge():
     try:

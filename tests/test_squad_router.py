@@ -40,3 +40,17 @@ def test_knowledge_get_and_post_roundtrip(tmp_path, monkeypatch):
                           "teams": {"COV": {"attack": 0.9, "defense": 1.1}}})
     assert p.status_code == 200
     assert client.get("/squad-picker/knowledge").json()["teams"]["COV"]["attack"] == 0.9
+
+
+def test_players_endpoint_returns_full_pool(monkeypatch):
+    client = _client(monkeypatch)
+    r = client.post("/squad-picker/players", json={"horizon_gws": 5, "projection_basis": "ppg"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["gw_start"] == 1 and body["horizon_gws"] == 5
+    assert len(body["players"]) > 0
+    row = body["players"][0]
+    for k in ["player_id", "pos", "team_id", "price_m", "total_points",
+              "xpts_horizon", "xpts_per_gw"]:
+        assert k in row
+    assert len(row["xpts_per_gw"]) == 5
