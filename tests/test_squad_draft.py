@@ -197,3 +197,25 @@ def test_project_pool_returns_projected_columns():
     for col in ["id", "pos", "price_m", "total_points", "xpts_horizon", "xpts_gw1"]:
         assert col in proj.columns
     assert (proj["xpts_horizon"] >= 0).all()
+
+
+def test_project_pool_preseason_uses_full_ppg():
+    from src import squad_draft, projections, transforms
+    b, f = _minimal_bootstrap(), _minimal_fixtures_raw()
+    elements, teams, _ = transforms.tables_from_bootstrap(b)
+    fixtures = transforms.fixtures_df(f)
+    ts = teams.set_index("id")["short_name"].to_dict()
+    params = {**squad_draft.DEFAULT_PARAMS, "gw_start": 1, "horizon_gws": 5,
+              "projection_basis": "ppg"}
+    proj, _gw, *_ = squad_draft.project_pool(elements, fixtures, ts, params)
+    # Same availability-filtered pool projected with the DEFAULT 0.55/0.45 blend.
+    avail = squad_draft._apply_minutes_shrink(
+        squad_draft._filter_availability(elements, False, 0), 500.0)
+    default_proj = projections.project_elements_next_gws(
+        elements=avail, fixtures=fixtures, teams_short_map=ts,
+        gw_start=1, horizon_gws=5, fdr_strength=1.0)
+    a = proj.set_index("id")["xpts_gw1"]
+    d = default_proj.set_index("id")["xpts_gw1"]
+    # Pre-season (form==0) => full ppg weight => >= default everywhere, > for some.
+    assert (a.loc[d.index] >= d - 1e-9).all()
+    assert (a.loc[d.index] > d + 1e-9).any()

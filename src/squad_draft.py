@@ -168,9 +168,18 @@ def project_pool(elements, fixtures, teams_short, params):
         avail = avail[~drop].copy()
 
     basis = str(p["projection_basis"])
+    # Pre-season the FPL `form` field is ~0 for everyone, so the default
+    # 0.55*ppg + 0.45*form blend would halve every projection with no upside.
+    # With no form signal, weight ppg fully (cold-start). Scoped to the squad
+    # picker only; in-season (form>0) this is a no-op.
+    form_series = pd.to_numeric(avail.get("form"), errors="coerce").fillna(0.0)
+    preseason = bool(len(form_series) and form_series.abs().max() < 1e-9)
+    ppg_w = 1.0 if preseason else config.PROJ_DEFAULT_PPG_WEIGHT
+    form_w = 0.0 if preseason else config.PROJ_DEFAULT_FORM_WEIGHT
     ppg_proj = projections.project_elements_next_gws(
         elements=avail, fixtures=fixtures, teams_short_map=teams_short,
-        gw_start=gw_start, horizon_gws=horizon, fdr_strength=p["fdr_strength"])
+        gw_start=gw_start, horizon_gws=horizon, fdr_strength=p["fdr_strength"],
+        ppg_weight=ppg_w, form_weight=form_w)
     if basis in ("xg", "blend"):
         from src import squad_draft_xg
         proj = squad_draft_xg.xg_projection(
