@@ -69,6 +69,20 @@ def lineup(payload: dict):
     return _sanitize(result)
 
 
+@router.post("/gk-pairs")
+def gk_pairs(params: dict):
+    try:
+        bootstrap = fpl_client.get_bootstrap()
+        fixtures_raw = fpl_client.get_fixtures()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Live FPL fetch failed: {e}")
+    try:
+        result = squad_draft.gk_rotation_pairs(bootstrap, fixtures_raw, params or {})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"GK pairs failed: {e}")
+    return _sanitize(result)
+
+
 @router.get("/knowledge")
 def get_knowledge():
     try:

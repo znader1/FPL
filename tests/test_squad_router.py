@@ -115,3 +115,16 @@ def test_players_endpoint_includes_fixtures(monkeypatch):
         assert k in row
     if row["fixtures"]:
         assert {"gw", "opp", "home", "diff"}.issubset(row["fixtures"][0].keys())
+
+
+def test_gk_rotation_pairs(monkeypatch):
+    client = _client(monkeypatch)
+    r = client.post("/squad-picker/gk-pairs",
+                    json={"gk_pair_min_minutes": 0, "gk_pair_budget": 20, "projection_basis": "ppg"})
+    assert r.status_code == 200
+    pairs = r.json()["pairs"]
+    assert len(pairs) > 0
+    p = pairs[0]
+    assert len(p["player_ids"]) == 2 and p["player_ids"][0] != p["player_ids"][1]
+    assert p["teams"][0] != p["teams"][1]  # different teams
+    assert p["rotation_xpts"] >= 0

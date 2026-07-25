@@ -294,6 +294,52 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
     }
 
 
+def gk_rotation_pairs(bootstrap, fixtures_raw, params=None, top_n=8):
+    """Rank pairs of NAILED starting goalkeepers from different teams by their
+    rotation value = sum over the horizon of the better of the two each GW
+    (start whichever is home / has the easier fixture). Complementary home/away
+    fixtures naturally score highest. Returns top pairs for the manual picker."""
+    p = {**DEFAULT_PARAMS, **(params or {})}
+    pool = player_pool(bootstrap, fixtures_raw, p)["players"]
+    min_min = float(p.get("gk_pair_min_minutes", 1500) or 1500)
+    max_pair_cost = float(p.get("gk_pair_budget", 11.0) or 11.0)
+    gks = [g for g in pool if g["pos"] == "GKP" and g["minutes"] >= min_min]
+    gks.sort(key=lambda g: -g["xpts_horizon"])
+
+    def _home_by_gw(g):
+        m = {}
+        for fx in g["fixtures"]:
+            m[fx["gw"]] = m.get(fx["gw"], False) or fx["home"]
+        return m
+
+    pairs = []
+    for i in range(len(gks)):
+        for j in range(i + 1, len(gks)):
+            a, b = gks[i], gks[j]
+            if a["team_id"] == b["team_id"]:
+                continue  # same team can't rotate
+            cost = a["price_m"] + b["price_m"]
+            if cost > max_pair_cost + 1e-6:
+                continue
+            n = min(len(a["xpts_per_gw"]), len(b["xpts_per_gw"]))
+            rot = sum(max(a["xpts_per_gw"][k], b["xpts_per_gw"][k]) for k in range(n))
+            ha, hb = _home_by_gw(a), _home_by_gw(b)
+            gw_keys = sorted(set(ha) | set(hb))
+            home_weeks = sum(1 for g in gw_keys if ha.get(g) or hb.get(g))
+            pairs.append({
+                "player_ids": [a["player_id"], b["player_id"]],
+                "names": [a["web_name"], b["web_name"]],
+                "teams": [a["team_short"], b["team_short"]],
+                "prices": [a["price_m"], b["price_m"]],
+                "combined_cost_m": round(cost, 1),
+                "rotation_xpts": round(rot, 2),
+                "home_weeks": home_weeks,
+                "gws": len(gw_keys),
+            })
+    pairs.sort(key=lambda x: (-x["rotation_xpts"], -x["home_weeks"], x["combined_cost_m"]))
+    return {"pairs": pairs[:int(top_n)]}
+
+
 def _next_gw(bootstrap):
     for e in bootstrap.get("events", []):
         if e.get("is_next"):
