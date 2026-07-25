@@ -304,10 +304,32 @@ def _pool_num(v, d=0.0):
     return d if pd.isna(n) else float(n)
 
 
-def _pool_records(proj, gws):
+def _team_fixture_map(fixtures, teams_short, gws):
+    """{team_id: [{gw, opp(short), home, diff}, ...]} over the horizon GWs."""
+    out = {}
+    for g in gws:
+        by_team = transforms.fixtures_by_team_for_gw(fixtures, int(g))
+        for tid, items in (by_team or {}).items():
+            for it in items:
+                out.setdefault(int(tid), []).append({
+                    "gw": int(g),
+                    "opp": teams_short.get(int(it["opp"]), "?"),
+                    "home": bool(it["is_home"]),
+                    "diff": int(it["diff"]),
+                })
+    return out
+
+
+def _pool_records(proj, gws, team_fixtures=None):
     """One JSON-safe record per projected player, for the /players list."""
+    team_fixtures = team_fixtures or {}
     out = []
     for _, r in proj.iterrows():
+        tid = int(_pool_num(r.get("team"), 0))
+        fx = sorted(team_fixtures.get(tid, []), key=lambda x: x["gw"])
+        diffs = [f["diff"] for f in fx if f["diff"] > 0]
+        avg_diff = round(sum(diffs) / len(diffs), 2) if diffs else None
+        home_games = sum(1 for f in fx if f["home"])
         out.append({
             "player_id": int(r["id"]),
             "web_name": r.get("web_name"),
@@ -322,6 +344,9 @@ def _pool_records(proj, gws):
             "selected_by_percent": _pool_num(r.get("selected_by_percent")),
             "xpts_horizon": _pool_num(r.get("xpts_horizon")),
             "xpts_per_gw": [_pool_num(r.get(f"xpts_gw{g}")) for g in gws],
+            "fixtures": fx,
+            "avg_diff": avg_diff,
+            "home_games": home_games,
         })
     return out
 
@@ -335,11 +360,12 @@ def player_pool(bootstrap, fixtures_raw, params=None):
     fixtures = transforms.fixtures_df(fixtures_raw)
     teams_short = teams.set_index("id")["short_name"].to_dict()
     proj, gw_start, horizon, gws, _notes = project_pool(elements, fixtures, teams_short, p)
+    team_fixtures = _team_fixture_map(fixtures, teams_short, gws)
     return {
         "gw_start": gw_start,
         "horizon_gws": horizon,
         "projection_basis": str(p["projection_basis"]),
-        "players": _pool_records(proj, gws),
+        "players": _pool_records(proj, gws, team_fixtures),
     }
 
 

@@ -105,3 +105,13 @@ def test_lineup_over_budget_reports_violation(monkeypatch):
     body = r.json()
     assert body["valid"] is False
     assert any("budget" in v.lower() for v in body["violations"])
+
+
+def test_players_endpoint_includes_fixtures(monkeypatch):
+    client = _client(monkeypatch)
+    r = client.post("/squad-picker/players", json={"horizon_gws": 5, "projection_basis": "ppg"})
+    row = r.json()["players"][0]
+    for k in ["fixtures", "avg_diff", "home_games"]:
+        assert k in row
+    if row["fixtures"]:
+        assert {"gw", "opp", "home", "diff"}.issubset(row["fixtures"][0].keys())
