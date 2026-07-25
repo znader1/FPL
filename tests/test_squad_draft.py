@@ -26,6 +26,7 @@ def _synthetic_elements():
                 "minutes": 90 if mirage else (1500 + i * 200),
                 "starts": 1 if mirage else (18 + i),
                 "selected_by_percent": "5.0", "penalties_order": None,
+                "total_points": 40 + i * 10,
                 "expected_goals_per_90": 0.2, "expected_assists_per_90": 0.1,
                 "expected_goal_involvements_per_90": 0.3,
                 "expected_goals_conceded_per_90": 1.0, "saves_per_90": 1.5,
@@ -180,3 +181,19 @@ def test_build_squad_xg_basis_via_bootstrap():
     assert len(squad) == 15
     counts = squad["pos"].value_counts().to_dict()
     assert counts == {"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3}
+
+
+def test_project_pool_returns_projected_columns():
+    from src import squad_draft, transforms
+    b, f = _minimal_bootstrap(), _minimal_fixtures_raw()
+    elements, teams, _ = transforms.tables_from_bootstrap(b)
+    fixtures = transforms.fixtures_df(f)
+    teams_short = teams.set_index("id")["short_name"].to_dict()
+    proj, gw_start, horizon, gws, notes = squad_draft.project_pool(
+        elements, fixtures, teams_short,
+        {**squad_draft.DEFAULT_PARAMS, "gw_start": 1, "horizon_gws": 5,
+         "projection_basis": "ppg"})
+    assert horizon == 5 and gws == [1, 2, 3, 4, 5]
+    for col in ["id", "pos", "price_m", "total_points", "xpts_horizon", "xpts_gw1"]:
+        assert col in proj.columns
+    assert (proj["xpts_horizon"] >= 0).all()

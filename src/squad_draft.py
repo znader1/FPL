@@ -148,7 +148,10 @@ def _projected_points(lineup, proj, gws, gw_start):
     return {"per_gw": per_gw, "horizon_total": round(sum(r["total"] for r in per_gw), 2)}
 
 
-def build_squad_from_frames(elements, fixtures, teams_short, params):
+def project_pool(elements, fixtures, teams_short, params):
+    """Shared projection pipeline for /build, /players, /lineup. Returns the
+    fully projected pool DataFrame plus the resolved gw window and notes.
+    No optimizer / squad-building -- pure per-player projection."""
     p = {**DEFAULT_PARAMS, **(params or {})}
     notes = _notable_exclusion_notes(elements)
     gw_start = int(p["gw_start"])
@@ -181,6 +184,12 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
     xpts_cols = [f"xpts_gw{g}" for g in gws if f"xpts_gw{g}" in proj.columns]
     proj["xpts_horizon"] = proj[xpts_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1) \
         if xpts_cols else 0.0
+    return proj, gw_start, horizon, gws, notes
+
+
+def build_squad_from_frames(elements, fixtures, teams_short, params):
+    p = {**DEFAULT_PARAMS, **(params or {})}
+    proj, gw_start, horizon, gws, notes = project_pool(elements, fixtures, teams_short, p)
 
     objective = str(p["objective"])
     budget_m = float(p["budget_m"])
