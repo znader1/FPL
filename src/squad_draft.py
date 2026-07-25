@@ -317,6 +317,8 @@ def _pool_records(proj, gws):
             "price_m": _pool_num(r.get("price_m")),
             "points_per_game": _pool_num(r.get("points_per_game")),
             "total_points": _pool_num(r.get("total_points")),
+            "minutes": int(_pool_num(r.get("minutes"), 0)),
+            "starts": int(_pool_num(r.get("starts"), 0)),
             "selected_by_percent": _pool_num(r.get("selected_by_percent")),
             "xpts_horizon": _pool_num(r.get("xpts_horizon")),
             "xpts_per_gw": [_pool_num(r.get(f"xpts_gw{g}")) for g in gws],
