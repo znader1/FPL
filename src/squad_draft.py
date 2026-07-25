@@ -329,3 +329,86 @@ def player_pool(bootstrap, fixtures_raw, params=None):
         "projection_basis": str(p["projection_basis"]),
         "players": _pool_records(proj, gws),
     }
+
+
+POSITION_QUOTA = {"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3}
+
+
+def _validate_squad(picked, params):
+    """picked: pool rows filtered to the chosen ids. Returns a list of
+    human-readable violation strings ([] when the 15 is legal)."""
+    p = {**DEFAULT_PARAMS, **(params or {})}
+    budget_m = float(p["budget_m"])
+    max_per_team = int(p["max_per_team"]) if p["max_per_team"] is not None \
+        else int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3)
+    v = []
+    if len(picked) != 15:
+        v.append(f"Squad must have 15 players (has {len(picked)}).")
+    counts = picked["pos"].value_counts().to_dict()
+    for pos, need in POSITION_QUOTA.items():
+        have = int(counts.get(pos, 0))
+        if have != need:
+            v.append(f"{pos}: need {need}, have {have}.")
+    team_counts = picked["team"].value_counts()
+    for team_id, n in team_counts[team_counts > max_per_team].items():
+        v.append(f"More than {max_per_team} from team {int(team_id)} (has {int(n)}).")
+    cost = float(pd.to_numeric(picked.get("price_m"), errors="coerce").fillna(0.0).sum())
+    if cost > budget_m + 1e-6:
+        v.append(f"Over budget: £{cost:.1f}m > £{budget_m:.1f}m.")
+    return v
+
+
+def build_lineup(bootstrap, fixtures_raw, player_ids, params=None):
+    """Live wrapper: validate a chosen 15 + auto-optimize the XI. Legal squads
+    return a /build-shaped result with valid=True; illegal squads return
+    valid=False plus violations (HTTP-200 user-editing state, not an error)."""
+    p = {**DEFAULT_PARAMS, **(params or {})}
+    if params is None or params.get("gw_start") is None:
+        p["gw_start"] = _next_gw(bootstrap)
+    elements, teams, _etypes = transforms.tables_from_bootstrap(bootstrap)
+    fixtures = transforms.fixtures_df(fixtures_raw)
+    teams_short = teams.set_index("id")["short_name"].to_dict()
+    proj, gw_start, horizon, gws, notes = project_pool(elements, fixtures, teams_short, p)
+
+    ids = [int(x) for x in (player_ids or [])]
+    picked = proj[proj["id"].isin(ids)].copy()
+    known = set(int(x) for x in picked["id"].tolist())
+    missing = [i for i in ids if i not in known]
+    violations = _validate_squad(picked, p)
+    if missing:
+        violations.append(f"Unknown player ids: {missing}.")
+    if violations:
+        return {"ok": False, "valid": False, "violations": violations, "notes": notes}
+
+    squad_df = picked[["id", "pos", "team"]].rename(columns={"id": "player_id"})
+    fixed_formations = _parse_formation(p["formation"], notes)
+    lineup = optimizer.optimize_lineup(
+        squad_df, proj, score_col=f"xpts_gw{gw_start}", formations=fixed_formations)
+    if lineup is None and fixed_formations is not None:
+        notes.append(f"Formation '{p['formation']}' not possible; using auto.")
+        lineup = optimizer.optimize_lineup(squad_df, proj, score_col=f"xpts_gw{gw_start}")
+
+    disp = proj[[c for c in ["id", "web_name", "pos", "team_short", "price_m",
+                             "points_per_game", "xpts_horizon", f"xpts_gw{gw_start}"] if c in proj.columns]]
+    view = squad_df.merge(disp, left_on="player_id", right_on="id", how="left", suffixes=("", "_p"))
+    cost = float(pd.to_numeric(view.get("price_m"), errors="coerce").fillna(0.0).sum())
+    budget_m = float(p["budget_m"])
+    return {
+        "ok": True,
+        "valid": True,
+        "violations": [],
+        "notes": notes,
+        "gw_start": gw_start,
+        "horizon_gws": horizon,
+        "projection_basis": str(p["projection_basis"]),
+        "formation": lineup["formation"] if lineup else None,
+        "captain_player_id": lineup["captain_player_id"] if lineup else None,
+        "vice_player_id": lineup["vice_player_id"] if lineup else None,
+        "budget_m": round(budget_m, 2),
+        "squad_cost_m": round(cost, 2),
+        "remaining_budget_m": round(max(0.0, budget_m - cost), 2),
+        "squad": view.to_dict("records"),
+        "starting_xi": lineup["starting_xi"].to_dict("records") if lineup else [],
+        "bench": lineup["bench"].to_dict("records") if lineup else [],
+        "projected_points": _projected_points(lineup, proj, gws, gw_start),
+    }

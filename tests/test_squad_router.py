@@ -54,3 +54,54 @@ def test_players_endpoint_returns_full_pool(monkeypatch):
               "xpts_horizon", "xpts_per_gw"]:
         assert k in row
     assert len(row["xpts_per_gw"]) == 5
+
+
+def _legal_15(client):
+    # Team-aware greedy: fill the position quota respecting the 3-per-team cap.
+    pool = client.post("/squad-picker/players", json={"projection_basis": "ppg"}).json()["players"]
+    need = {"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3}
+    chosen, team_ct = [], {}
+    for pl in sorted(pool, key=lambda x: -x["xpts_horizon"]):
+        pos = pl["pos"]
+        if need.get(pos, 0) <= 0:
+            continue
+        if team_ct.get(pl["team_id"], 0) >= 3:
+            continue
+        chosen.append(pl["player_id"])
+        need[pos] -= 1
+        team_ct[pl["team_id"]] = team_ct.get(pl["team_id"], 0) + 1
+    return chosen
+
+
+def test_lineup_legal_squad_optimizes(monkeypatch):
+    client = _client(monkeypatch)
+    ids = _legal_15(client)
+    assert len(ids) == 15
+    r = client.post("/squad-picker/lineup",
+                    json={"player_ids": ids, "params": {"budget_m": 1000.0, "projection_basis": "ppg"}})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["valid"] is True, body.get("violations")
+    assert len(body["starting_xi"]) == 11
+    assert body["captain_player_id"] is not None
+
+
+def test_lineup_bad_quota_reports_violation(monkeypatch):
+    client = _client(monkeypatch)
+    ids = _legal_15(client)[:-1]  # 14 players
+    r = client.post("/squad-picker/lineup",
+                    json={"player_ids": ids, "params": {"budget_m": 1000.0}})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["valid"] is False
+    assert any("15" in v or "FWD" in v for v in body["violations"])
+
+
+def test_lineup_over_budget_reports_violation(monkeypatch):
+    client = _client(monkeypatch)
+    ids = _legal_15(client)
+    r = client.post("/squad-picker/lineup",
+                    json={"player_ids": ids, "params": {"budget_m": 1.0}})
+    body = r.json()
+    assert body["valid"] is False
+    assert any("budget" in v.lower() for v in body["violations"])

@@ -53,6 +53,22 @@ def players(params: dict):
     return _sanitize(result)
 
 
+@router.post("/lineup")
+def lineup(payload: dict):
+    try:
+        bootstrap = fpl_client.get_bootstrap()
+        fixtures_raw = fpl_client.get_fixtures()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Live FPL fetch failed: {e}")
+    try:
+        result = squad_draft.build_lineup(
+            bootstrap, fixtures_raw,
+            payload.get("player_ids", []), payload.get("params", {}))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lineup failed: {e}")
+    return _sanitize(result)
+
+
 @router.get("/knowledge")
 def get_knowledge():
     try:
