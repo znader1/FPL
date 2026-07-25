@@ -219,3 +219,14 @@ def test_project_pool_preseason_uses_full_ppg():
     # Pre-season (form==0) => full ppg weight => >= default everywhere, > for some.
     assert (a.loc[d.index] >= d - 1e-9).all()
     assert (a.loc[d.index] > d + 1e-9).any()
+
+
+def test_home_away_strength_shifts_projection():
+    els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
+    off = squad_draft.build_squad_from_frames(els, fx, ts,
+        {"gw_start": 1, "horizon_gws": 5, "home_away_strength": 0.0})
+    amp = squad_draft.build_squad_from_frames(els, fx, ts,
+        {"gw_start": 1, "horizon_gws": 5, "home_away_strength": 3.0})
+    off_gw = [g["total"] for g in off["projected_points"]["per_gw"]]
+    amp_gw = [g["total"] for g in amp["projected_points"]["per_gw"]]
+    assert off_gw != amp_gw  # amplifying the home/away swing must move per-GW totals

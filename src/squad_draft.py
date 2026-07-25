@@ -15,6 +15,7 @@ DEFAULT_PARAMS = {
     "projection_basis": "ppg",        # ppg | xg | blend
     "blend_weight": 0.0,
     "fdr_strength": 1.0,              # scales fixture-difficulty multiplier swing (0=off,1=default,>1=amplified)
+    "home_away_strength": 1.0,        # scales home/away multiplier swing (home 1.06/away 0.94; 0=off,1=default,>1=amplified)
     "minutes_prior_k": 500.0,
     "include_flagged": False,
     "min_chance_of_playing": 0,
@@ -179,7 +180,7 @@ def project_pool(elements, fixtures, teams_short, params):
     ppg_proj = projections.project_elements_next_gws(
         elements=avail, fixtures=fixtures, teams_short_map=teams_short,
         gw_start=gw_start, horizon_gws=horizon, fdr_strength=p["fdr_strength"],
-        ppg_weight=ppg_w, form_weight=form_w)
+        home_away_strength=p["home_away_strength"], ppg_weight=ppg_w, form_weight=form_w)
     if basis in ("xg", "blend"):
         from src import squad_draft_xg
         proj = squad_draft_xg.xg_projection(
