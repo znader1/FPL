@@ -230,3 +230,12 @@ def test_home_away_strength_shifts_projection():
     off_gw = [g["total"] for g in off["projected_points"]["per_gw"]]
     amp_gw = [g["total"] for g in amp["projected_points"]["per_gw"]]
     assert off_gw != amp_gw  # amplifying the home/away swing must move per-GW totals
+
+
+def test_max_player_price_caps_auto_build():
+    els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
+    res = squad_draft.build_squad_from_frames(els, fx, ts,
+        {"gw_start": 1, "horizon_gws": 5, "budget_m": 100.0, "max_player_price": 6.0})
+    assert res["ok"] is True, res.get("reason")
+    prices = [float(p["price_m"]) for p in res["squad"]]
+    assert max(prices) <= 6.0 + 1e-6, max(prices)

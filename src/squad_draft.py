@@ -23,6 +23,7 @@ DEFAULT_PARAMS = {
     "min_fwd_minutes": 0.0,
     "min_premium_attackers": None,
     "premium_floor": None,
+    "max_player_price": None,          # auto-build only: cap price per player to avoid loading up on premiums
     "formation": "auto",
     "team_nudges": None,              # per-request xg/blend attack/defense nudges
 }
@@ -207,14 +208,30 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
         else int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3)
     premium_floor, premium_positions, min_premium = _premium_params(p)
 
+    # Auto-build only: optionally cap price per player so the optimizer doesn't
+    # load up on premiums. The full pool (proj) is still used for the XI
+    # optimization, value menu, and the /players list -- only the draft market
+    # is capped.
+    draft_pool = proj
+    mpp = p.get("max_player_price")
+    if mpp is not None and float(mpp) > 0:
+        keep = pd.to_numeric(proj["price_m"], errors="coerce").fillna(0.0) <= float(mpp)
+        draft_pool = proj[keep].copy()
+        notes.append(f"Auto-build capped to players ≤ £{float(mpp):.1f}m.")
+        # No premium exists under the cap, so don't require one (the premium
+        # captaincy constraint would otherwise be unsatisfiable and the build
+        # would collapse to all-fodder, leaving budget unspent).
+        if float(mpp) < premium_floor:
+            min_premium = 0
+
     if objective == "free_hit":
         build = optimizer.build_free_hit_squad(
-            elements_all=proj, score_col=f"xpts_gw{gw_start}",
+            elements_all=draft_pool, score_col=f"xpts_gw{gw_start}",
             budget_m=budget_m, max_per_team=max_per_team)
     else:
         score_col = "wildcard_score" if objective == "wildcard" else f"xpts_gw{gw_start}"
         build = optimizer.build_chip_squad(
-            elements_all=proj, score_col=score_col, budget_m=budget_m,
+            elements_all=draft_pool, score_col=score_col, budget_m=budget_m,
             max_per_team=max_per_team, min_premium_attackers=min_premium,
             premium_floor=premium_floor, premium_positions=premium_positions)
 
