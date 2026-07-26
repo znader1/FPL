@@ -148,3 +148,12 @@ def test_players_endpoint_carries_pk_fields(monkeypatch):
     r = client.post("/squad-picker/players", json={"horizon_gws": 5, "projection_basis": "ppg"})
     row = r.json()["players"][0]
     assert "pk_availability" in row and "pk_note" in row
+
+
+def test_digest_news_empty_kb(monkeypatch):
+    client = _client(monkeypatch)
+    r = client.post("/squad-picker/digest-news", json={"kb_dir": "does/not/exist"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["article_count"] == 0
+    assert body["proposals"]["players"] == {}

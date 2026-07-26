@@ -85,6 +85,28 @@ def gk_pairs(params: dict):
     return _sanitize(result)
 
 
+@router.post("/digest-news")
+def digest_news(params: dict):
+    try:
+        bootstrap = fpl_client.get_bootstrap()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Live FPL fetch failed: {e}")
+    from src import news_digest, transforms
+    try:
+        elements, _teams, _ = transforms.tables_from_bootstrap(bootstrap)
+        articles = news_digest.load_news_articles((params or {}).get("kb_dir"))
+        idx = news_digest.index_by_player(articles, elements)
+        current_gw = squad_draft._next_gw(bootstrap)
+        proposals = news_digest.propose_player_knowledge(idx, elements, current_gw=current_gw)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"News digest failed: {e}")
+    return _sanitize({
+        "proposals": proposals,
+        "article_count": len(articles),
+        "matched_players": len(idx),
+    })
+
+
 @router.get("/knowledge")
 def get_knowledge():
     try:
