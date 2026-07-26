@@ -25,6 +25,7 @@ DEFAULT_PARAMS = {
     "premium_floor": None,
     "max_player_price": None,          # auto-build only: cap price per player to avoid loading up on premiums
     "formation": "auto",
+    "xi_objective": "horizon",        # /lineup XI: next_gw | horizon (best 11 over the horizon) | per_gw (rotate)
     "team_nudges": None,              # per-request xg/blend attack/defense nudges
     "player_knowledge": None,         # per-request player availability/minutes overrides (merged over the file)
 }
@@ -161,6 +162,48 @@ def _value_menu(proj, top_n=8):
             for _, r in sub.iterrows()
         ]
     return menu
+
+
+def _optimize_xi(squad_df, proj, gws, gw_start, objective, formations):
+    """Pick the starting XI under `objective`, returning (display_lineup,
+    per_gw_lineups). next_gw = best XI for the opener; horizon = one XI that
+    maximises summed xpts over the whole horizon; per_gw = XI re-optimised each
+    GW (rotation ceiling), with display_lineup set to the opener's XI."""
+    def _opt(col):
+        lu = optimizer.optimize_lineup(squad_df, proj, score_col=col, formations=formations)
+        if lu is None and formations is not None:  # requested formation impossible
+            lu = optimizer.optimize_lineup(squad_df, proj, score_col=col)
+        return lu
+
+    if objective == "per_gw":
+        pm = proj.drop_duplicates("id").set_index("id")
+        per_gw_lineups, display = [], None
+        for g in gws:
+            col = f"xpts_gw{g}"
+            if col not in proj.columns:
+                continue
+            lu = _opt(col)
+            if lu is None:
+                continue
+            if display is None:
+                display = lu
+            xi_ids = [int(x) for x in lu["starting_xi"]["player_id"].tolist()]
+            cap = lu.get("captain_player_id")
+            xi_pts = sum(float(pd.to_numeric(pm.loc[pid, col], errors="coerce") or 0.0)
+                         for pid in xi_ids if pid in pm.index)
+            cap_bonus = (float(pd.to_numeric(pm.loc[int(cap), col], errors="coerce") or 0.0)
+                         if cap is not None and int(cap) in pm.index else 0.0)
+            per_gw_lineups.append({
+                "gw": g, "formation": lu["formation"], "starting_xi": xi_ids,
+                "captain_player_id": cap, "xi_points": round(xi_pts, 2),
+                "captain_bonus": round(cap_bonus, 2), "total": round(xi_pts + cap_bonus, 2)})
+        return display, per_gw_lineups
+
+    if objective == "horizon" and "xpts_horizon" in proj.columns:
+        col = "xpts_horizon"
+    else:
+        col = f"xpts_gw{gw_start}"
+    return _opt(col), None
 
 
 def _projected_points(lineup, proj, gws, gw_start):
@@ -553,18 +596,22 @@ def build_lineup(bootstrap, fixtures_raw, player_ids, params=None):
 
     squad_df = picked[["id", "pos", "team"]].rename(columns={"id": "player_id"})
     fixed_formations = _parse_formation(p["formation"], notes)
-    lineup = optimizer.optimize_lineup(
-        squad_df, proj, score_col=f"xpts_gw{gw_start}", formations=fixed_formations)
-    if lineup is None and fixed_formations is not None:
-        notes.append(f"Formation '{p['formation']}' not possible; using auto.")
-        lineup = optimizer.optimize_lineup(squad_df, proj, score_col=f"xpts_gw{gw_start}")
+    objective = str(p.get("xi_objective") or "horizon")
+    if objective not in ("next_gw", "horizon", "per_gw"):
+        objective = "horizon"
+    lineup, per_gw_lineups = _optimize_xi(
+        squad_df, proj, gws, gw_start, objective, fixed_formations)
+    if (lineup is not None and fixed_formations is not None
+            and tuple(lineup["formation"]) not in [tuple(f) for f in fixed_formations]):
+        notes.append(f"Formation '{p['formation']}' not possible for this squad; used auto.")
 
     disp = proj[[c for c in ["id", "web_name", "pos", "team_short", "price_m",
                              "points_per_game", "xpts_horizon", f"xpts_gw{gw_start}"] if c in proj.columns]]
     view = squad_df.merge(disp, left_on="player_id", right_on="id", how="left", suffixes=("", "_p"))
     cost = float(pd.to_numeric(view.get("price_m"), errors="coerce").fillna(0.0).sum())
     budget_m = float(p["budget_m"])
-    return {
+    projected = _projected_points(lineup, proj, gws, gw_start)
+    result = {
         "ok": True,
         "valid": True,
         "violations": [],
@@ -572,6 +619,7 @@ def build_lineup(bootstrap, fixtures_raw, player_ids, params=None):
         "gw_start": gw_start,
         "horizon_gws": horizon,
         "projection_basis": str(p["projection_basis"]),
+        "xi_objective": objective,
         "formation": lineup["formation"] if lineup else None,
         "captain_player_id": lineup["captain_player_id"] if lineup else None,
         "vice_player_id": lineup["vice_player_id"] if lineup else None,
@@ -581,5 +629,12 @@ def build_lineup(bootstrap, fixtures_raw, player_ids, params=None):
         "squad": view.to_dict("records"),
         "starting_xi": lineup["starting_xi"].to_dict("records") if lineup else [],
         "bench": lineup["bench"].to_dict("records") if lineup else [],
-        "projected_points": _projected_points(lineup, proj, gws, gw_start),
+        "projected_points": projected,
     }
+    if per_gw_lineups is not None:
+        rotate_total = round(sum(r["total"] for r in per_gw_lineups), 2)
+        result["per_gw_lineups"] = per_gw_lineups
+        result["rotation_total"] = rotate_total
+        # how much re-picking the XI each GW beats keeping the opener's XI
+        result["rotation_gain"] = round(rotate_total - projected["horizon_total"], 2)
+    return result

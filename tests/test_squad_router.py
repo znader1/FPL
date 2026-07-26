@@ -86,6 +86,39 @@ def test_lineup_legal_squad_optimizes(monkeypatch):
     assert body["captain_player_id"] is not None
 
 
+def test_lineup_xi_objectives(monkeypatch):
+    client = _client(monkeypatch)
+    ids = _legal_15(client)
+
+    def lineup(obj):
+        return client.post("/squad-picker/lineup", json={
+            "player_ids": ids,
+            "params": {"budget_m": 1000.0, "projection_basis": "ppg", "xi_objective": obj},
+        }).json()
+
+    horizon = lineup("horizon")
+    assert horizon["valid"] is True and horizon["xi_objective"] == "horizon"
+    assert len(horizon["starting_xi"]) == 11
+
+    nxt = lineup("next_gw")
+    assert nxt["xi_objective"] == "next_gw" and len(nxt["starting_xi"]) == 11
+
+    per = lineup("per_gw")
+    assert per["xi_objective"] == "per_gw"
+    assert len(per["per_gw_lineups"]) >= 1
+    assert all(len(g["starting_xi"]) == 11 for g in per["per_gw_lineups"])
+    # rotating the XI each GW can only match or beat keeping the opener's XI
+    assert per["rotation_gain"] >= -0.01
+
+
+def test_lineup_defaults_to_horizon(monkeypatch):
+    client = _client(monkeypatch)
+    ids = _legal_15(client)
+    body = client.post("/squad-picker/lineup",
+                       json={"player_ids": ids, "params": {"budget_m": 1000.0}}).json()
+    assert body["xi_objective"] == "horizon"
+
+
 def test_lineup_bad_quota_reports_violation(monkeypatch):
     client = _client(monkeypatch)
     ids = _legal_15(client)[:-1]  # 14 players
