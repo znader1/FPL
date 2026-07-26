@@ -15,7 +15,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, league as league_mod, league_strategy, optimizer, projections, recommender, transforms
+from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, league as league_mod, league_strategy, optimizer, projections, recommender, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key
 from src.insights import (
     build_chip_profile,
@@ -863,6 +863,19 @@ def build_recommendations(payload):
     timings["transfer_preview_ms"] = elapsed_ms(ts)
     if include_transfers:
         out["transfers"] = transfer_preview
+
+    # Additive: a multi-GW roll/bank plan across the horizon (the single-GW
+    # `transfers` above never sequences GWs or accounts for the -4 hit). Uses
+    # the real squad, bank and free-transfer count. Never breaks the response.
+    if include_transfers and not chip_info.get("is_active"):
+        try:
+            _squad_ids = [int(x) for x in squad_df["player_id"].tolist()]
+            out["transfer_plan_horizon"] = transfer_planner.plan_transfers(
+                proj_all, _squad_ids, gws,
+                itb_m=safe_float(itb_m, default=0.0) or 0.0,
+                start_ft=int(free_transfers_value), ft_cap=5, allow_hits=True)
+        except Exception as e:  # noqa: BLE001 - planning must never fail the recommendation
+            logger.warning("horizon transfer plan failed: %s", e)
 
     ts = time.perf_counter()
     moves = transfer_preview.get("moves") if isinstance(transfer_preview, dict) else []
