@@ -199,6 +199,9 @@ FDR_RATING_MIN = 0.50                # clamp on attack/defense rating multiplier
 FDR_RATING_MAX = 1.80
 FDR_LEAGUE_AVG_XG_FALLBACK = 1.40    # per-team per-match league-average xG when data is thin
 FDR_KNOWLEDGE_DISCOUNT_PATH = "data/models/knowledge_discount.json"
+# Player-level knowledge (news/injury) for the squad picker.
+PLAYER_KNOWLEDGE_PATH = "data/models/player_knowledge.json"
+PLAYER_KNOWLEDGE_STALE_DAYS = 10
 
 # Cross-season carryover (season-start cold start). At a new season's launch there
 # is no current-season xG, so ratings start from the prior season's frozen seed

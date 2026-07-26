@@ -128,3 +128,23 @@ def test_gk_rotation_pairs(monkeypatch):
     assert len(p["player_ids"]) == 2 and p["player_ids"][0] != p["player_ids"][1]
     assert p["teams"][0] != p["teams"][1]  # different teams
     assert p["rotation_xpts"] >= 0
+
+
+def test_player_knowledge_get_post_roundtrip(tmp_path, monkeypatch):
+    pk = tmp_path / "player_knowledge.json"
+    monkeypatch.setattr(sr, "PLAYER_KNOWLEDGE_PATH", str(pk))
+    app = FastAPI(); app.include_router(sr.router)
+    client = TestClient(app)
+    assert client.get("/squad-picker/player-knowledge").json() == {"as_of": None, "players": {}}
+    p = client.post("/squad-picker/player-knowledge",
+                    json={"as_of": "2026-07-26", "players": {"5": {"availability": 0.0, "note": "out"}}})
+    assert p.status_code == 200
+    got = client.get("/squad-picker/player-knowledge").json()
+    assert got["players"]["5"]["note"] == "out"
+
+
+def test_players_endpoint_carries_pk_fields(monkeypatch):
+    client = _client(monkeypatch)
+    r = client.post("/squad-picker/players", json={"horizon_gws": 5, "projection_basis": "ppg"})
+    row = r.json()["players"][0]
+    assert "pk_availability" in row and "pk_note" in row

@@ -239,3 +239,26 @@ def test_max_player_price_caps_auto_build():
     assert res["ok"] is True, res.get("reason")
     prices = [float(p["price_m"]) for p in res["squad"]]
     assert max(prices) <= 6.0 + 1e-6, max(prices)
+
+
+def test_player_knowledge_return_gw_and_minutes():
+    els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
+    pid = int(els[els["web_name"] == "MID7"].iloc[0]["id"])
+    params = {**squad_draft.DEFAULT_PARAMS, "gw_start": 1, "horizon_gws": 5,
+              "player_knowledge": {"players": {str(pid): {"available_from_gw": 3, "minutes_mult": 0.5}}}}
+    proj, _g, _h, gws, notes = squad_draft.project_pool(els, fx, ts, params)
+    row = proj[proj["id"] == pid].iloc[0]
+    assert row["xpts_gw1"] == 0.0 and row["xpts_gw2"] == 0.0  # out before GW3
+    assert row["xpts_gw3"] > 0.0
+    assert row["pk_availability"] == 0.0  # min over horizon (GW1 out)
+    # a different player is untouched
+    other = proj[proj["web_name"] == "MID6"].iloc[0]
+    assert other["xpts_gw1"] > 0.0
+
+
+def test_player_knowledge_unknown_key_notes():
+    els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
+    params = {**squad_draft.DEFAULT_PARAMS, "gw_start": 1, "horizon_gws": 5,
+              "player_knowledge": {"players": {"NoSuchPlayer": {"availability": 0.0}}}}
+    _proj, _g, _h, _gws, notes = squad_draft.project_pool(els, fx, ts, params)
+    assert any("NoSuchPlayer" in n for n in notes)

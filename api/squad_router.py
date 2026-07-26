@@ -10,6 +10,8 @@ router = APIRouter(prefix="/squad-picker", tags=["squad-picker"])
 
 KNOWLEDGE_PATH = getattr(config, "FDR_KNOWLEDGE_DISCOUNT_PATH",
                          "data/models/knowledge_discount.json")
+PLAYER_KNOWLEDGE_PATH = getattr(config, "PLAYER_KNOWLEDGE_PATH",
+                                "data/models/player_knowledge.json")
 
 
 def _sanitize(obj):
@@ -90,6 +92,25 @@ def get_knowledge():
             return json.load(f)
     except FileNotFoundError:
         return {"as_of": None, "teams": {}}
+
+
+@router.get("/player-knowledge")
+def get_player_knowledge():
+    try:
+        with open(PLAYER_KNOWLEDGE_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {"as_of": None, "players": {}}
+
+
+@router.post("/player-knowledge")
+def save_player_knowledge(payload: dict):
+    import os
+    data = {"as_of": payload.get("as_of"), "players": payload.get("players", {})}
+    os.makedirs(os.path.dirname(PLAYER_KNOWLEDGE_PATH) or ".", exist_ok=True)
+    with open(PLAYER_KNOWLEDGE_PATH, "w") as f:
+        json.dump(data, f, indent=2)
+    return data
 
 
 @router.post("/knowledge")
