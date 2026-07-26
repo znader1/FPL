@@ -16,7 +16,7 @@ import argparse
 import os
 import sys
 
-from src import config, news_fetch
+from src import config, fpl_client, news_fetch
 
 
 def _load_env():
@@ -47,14 +47,25 @@ def main(argv=None):
     ap.add_argument("--kb-dir", default=None, help="override kb/auto/news dir")
     ap.add_argument("--max-age-days", type=int, default=None, help="freshness window")
     ap.add_argument("--dry-run", action="store_true", help="fetch + report, write nothing")
+    ap.add_argument("--all", action="store_true",
+                    help="digest every item, not just Premier-League-relevant ones")
     args = ap.parse_args(argv)
+
+    pl_terms = None
+    if not args.all:
+        try:
+            pl_terms = news_fetch.pl_terms_from_teams(
+                fpl_client.get_bootstrap().get("teams", []))
+        except Exception as e:  # noqa: BLE001
+            print(f"WARN: could not fetch PL teams ({e}); digesting all items",
+                  file=sys.stderr)
 
     if args.dry_run:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
         feeds = getattr(config, "NEWS_FEEDS", [])
         max_age = args.max_age_days or getattr(config, "NEWS_MAX_AGE_DAYS", 14)
-        total = 0
+        total = pl = 0
         for feed in feeds:
             try:
                 entries = news_fetch.recent(
@@ -63,17 +74,23 @@ def main(argv=None):
             except Exception as e:  # noqa: BLE001
                 print(f"  {feed['source']}: ERROR {e}")
                 continue
+            n_pl = len([e for e in entries if pl_terms is None
+                        or news_fetch.is_pl_relevant(e, pl_terms)])
             total += len(entries)
-            print(f"  {feed['source']}: {len(entries)} recent items")
-        print(f"dry-run: {total} recent items across {len(feeds)} feeds (nothing written)")
+            pl += n_pl
+            print(f"  {feed['source']}: {len(entries)} recent, {n_pl} PL-relevant")
+        print(f"dry-run: {pl}/{total} PL-relevant items across {len(feeds)} feeds "
+              "(nothing written)")
         return 0
 
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print("WARN: ANTHROPIC_API_KEY not set -- digests will fail. Add it to "
               ".env or the environment.", file=sys.stderr)
 
-    res = news_fetch.refresh(kb_dir=args.kb_dir, max_age_days=args.max_age_days)
+    res = news_fetch.refresh(kb_dir=args.kb_dir, max_age_days=args.max_age_days,
+                             pl_terms=pl_terms)
     print(f"written: {len(res['written'])}  pruned: {len(res['pruned'])}  "
+          f"skipped_non_pl: {res.get('skipped_non_pl', 0)}  "
           f"errors: {len(res['errors'])}")
     if res.get("pruned_skipped"):
         print("NOTE: prune skipped (no writes + errors) -- corpus preserved.",

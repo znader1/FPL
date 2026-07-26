@@ -96,6 +96,48 @@ def test_refresh_writes_and_prunes_on_success(tmp_path):
     assert len(res["pruned"]) == 1    # stale md removed on a successful run
 
 
+RSS_MIX = """<?xml version="1.0"?>
+<rss version="2.0"><channel>
+<item>
+  <title>Arsenal injury news: Saka a doubt for the opener</title>
+  <link>https://sportsmole.co.uk/football/arsenal/saka.html</link>
+  <pubDate>Fri, 24 Jul 2026 08:00:00 +0000</pubDate>
+  <description>Bukayo Saka has a knock.</description>
+</item>
+<item>
+  <title>Cruzeiro vs Botafogo - prediction, team news, lineups</title>
+  <link>https://sportsmole.co.uk/football/br/cruzeiro.html</link>
+  <pubDate>Fri, 24 Jul 2026 09:00:00 +0000</pubDate>
+  <description>Brazilian Serie A preview.</description>
+</item>
+</channel></rss>"""
+
+
+def test_pl_terms_from_teams_adds_long_forms():
+    terms = nf.pl_terms_from_teams([{"name": "Arsenal"}, {"name": "Man Utd"}])
+    assert "arsenal" in terms
+    assert "man utd" in terms and "manchester united" in terms
+
+
+def test_is_pl_relevant():
+    terms = nf.pl_terms_from_teams([{"name": "Arsenal"}])
+    entries = nf.parse_feed(RSS_MIX, "sportsmole.co.uk")
+    rel = {e["title"].split()[0]: nf.is_pl_relevant(e, terms) for e in entries}
+    assert rel["Arsenal"] is True
+    assert rel["Cruzeiro"] is False
+
+
+def test_refresh_filters_non_pl(tmp_path):
+    terms = nf.pl_terms_from_teams([{"name": "Arsenal"}])
+    fake = lambda _p: '{"summary":["s"],"players":["Bukayo Saka"],"teams":["Arsenal"],"tags":["injury"]}'
+    res = nf.refresh(kb_dir=str(tmp_path),
+                     feeds=[{"source": "sportsmole.co.uk", "url": "http://x"}],
+                     max_age_days=30, now=NOW, fetch=lambda _u: RSS_MIX,
+                     generate=fake, pl_terms=terms)
+    assert len(res["written"]) == 1        # only the Arsenal item digested
+    assert res["skipped_non_pl"] == 1      # the Brazilian preview dropped pre-LLM
+
+
 def test_prune_stale_removes_old_keeps_fresh(tmp_path):
     d = tmp_path / "sportsmole.co.uk"
     d.mkdir(parents=True)

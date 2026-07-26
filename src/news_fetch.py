@@ -102,6 +102,38 @@ def recent(entries, max_age_days, now):
     return [e for e in entries if e["published"] and e["published"] >= cutoff]
 
 
+# Long-form aliases for FPL team `name`s that articles spell out differently.
+_PL_EXTRA = {
+    "man utd": ["manchester united", "man united"],
+    "man city": ["manchester city"],
+    "spurs": ["tottenham"],
+    "nott'm forest": ["nottingham forest", "forest"],
+    "newcastle": ["newcastle united"],
+    "wolves": ["wolverhampton"],
+    "brighton": ["brighton and hove albion"],
+    "west ham": ["west ham united"],
+    "leeds": ["leeds united"],
+}
+
+
+def pl_terms_from_teams(teams):
+    """Lowercased match terms for the current Premier League clubs, derived from
+    the bootstrap `teams` (so promotion/relegation is handled automatically),
+    plus the long-form aliases articles tend to use."""
+    terms = set()
+    for t in teams or []:
+        nm = str(t.get("name", "")).strip().lower()
+        if nm:
+            terms.add(nm)
+            terms.update(_PL_EXTRA.get(nm, []))
+    return terms
+
+
+def is_pl_relevant(entry, terms):
+    hay = f"{entry.get('title', '')} {entry.get('summary', '')}".lower()
+    return any(term in hay for term in terms)
+
+
 def _slug(entry):
     path = urlparse(entry["url"]).path.rstrip("/")
     base = os.path.basename(path) or re.sub(r"[^a-z0-9]+", "-", entry["title"].lower()).strip("-")
@@ -182,10 +214,12 @@ def _http_get(url):  # pragma: no cover - network
 
 
 def refresh(kb_dir=None, feeds=None, max_age_days=None, now=None,
-            fetch=_http_get, generate=None):
+            fetch=_http_get, generate=None, pl_terms=None):
     """Fetch all feeds, digest new (unseen) recent articles via Claude, write
     them to kb, and prune stale md. Returns a summary dict. Injectable for
-    tests; defaults hit the live network + Claude."""
+    tests; defaults hit the live network + Claude. When `pl_terms` is given,
+    items mentioning no Premier League club are dropped BEFORE the LLM (saves
+    spend on non-PL match previews / foreign leagues)."""
     kb_dir = kb_dir or getattr(config, "NEWS_KB_DIR", "kb/auto/news")
     feeds = feeds if feeds is not None else getattr(config, "NEWS_FEEDS", [])
     max_age_days = max_age_days if max_age_days is not None else getattr(config, "NEWS_MAX_AGE_DAYS", 14)
@@ -193,7 +227,7 @@ def refresh(kb_dir=None, feeds=None, max_age_days=None, now=None,
     if generate is None:
         from src.news_digest import _anthropic_generate as generate
     seen = existing_urls(kb_dir)
-    written, errors = [], []
+    written, errors, skipped_non_pl = [], [], 0
     for feed in feeds:
         try:
             entries = recent(parse_feed(fetch(feed["url"]), feed["source"]),
@@ -203,6 +237,9 @@ def refresh(kb_dir=None, feeds=None, max_age_days=None, now=None,
             continue
         for e in entries:
             if not e["url"] or e["url"] in seen:
+                continue
+            if pl_terms is not None and not is_pl_relevant(e, pl_terms):
+                skipped_non_pl += 1
                 continue
             try:
                 write_article(kb_dir, e, article_to_markdown(e, generate, now))
@@ -216,4 +253,4 @@ def refresh(kb_dir=None, feeds=None, max_age_days=None, now=None,
     pruned_skipped = bool(errors and not written)
     pruned = [] if pruned_skipped else prune_stale(kb_dir, max_age_days, now)
     return {"written": written, "pruned": pruned, "errors": errors,
-            "pruned_skipped": pruned_skipped}
+            "pruned_skipped": pruned_skipped, "skipped_non_pl": skipped_non_pl}
