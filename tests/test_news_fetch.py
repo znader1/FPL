@@ -66,6 +66,36 @@ def _md(published):
             "- Fetched: 2026-07-26T00:00:00Z\n\n## Summary\n- x\n")
 
 
+def test_refresh_skips_prune_when_all_writes_fail(tmp_path):
+    # A systemic failure (e.g. missing API key) must NOT wipe the corpus.
+    d = tmp_path / "sportsmole.co.uk"
+    d.mkdir(parents=True)
+    old = d / "old.md"
+    old.write_text(_md("Tue, 17 Feb 2026 07:40:50 +0000"))  # would be pruned
+
+    def boom(_prompt):
+        raise RuntimeError("no ANTHROPIC_API_KEY")
+
+    res = nf.refresh(kb_dir=str(tmp_path),
+                     feeds=[{"source": "sportsmole.co.uk", "url": "http://x"}],
+                     max_age_days=14, now=NOW, fetch=lambda _u: RSS, generate=boom)
+    assert res["written"] == [] and res["errors"]
+    assert res["pruned"] == []      # guard tripped: nothing pruned
+    assert old.exists()             # stale md preserved, not nuked
+
+
+def test_refresh_writes_and_prunes_on_success(tmp_path):
+    (tmp_path / "sportsmole.co.uk").mkdir(parents=True)
+    (tmp_path / "sportsmole.co.uk" / "old.md").write_text(
+        _md("Tue, 17 Feb 2026 07:40:50 +0000"))
+    fake = lambda _p: '{"summary":["s"],"players":["Bukayo Saka"],"teams":["Arsenal"],"tags":["injury"]}'
+    res = nf.refresh(kb_dir=str(tmp_path),
+                     feeds=[{"source": "sportsmole.co.uk", "url": "http://x"}],
+                     max_age_days=14, now=NOW, fetch=lambda _u: RSS, generate=fake)
+    assert len(res["written"]) == 1   # the one fresh item digested
+    assert len(res["pruned"]) == 1    # stale md removed on a successful run
+
+
 def test_prune_stale_removes_old_keeps_fresh(tmp_path):
     d = tmp_path / "sportsmole.co.uk"
     d.mkdir(parents=True)

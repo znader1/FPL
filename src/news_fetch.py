@@ -210,5 +210,10 @@ def refresh(kb_dir=None, feeds=None, max_age_days=None, now=None,
                 seen.add(e["url"])
             except Exception as ex:  # noqa: BLE001
                 errors.append(f"{e['url']}: {ex}")
-    pruned = prune_stale(kb_dir, max_age_days, now)
-    return {"written": written, "pruned": pruned, "errors": errors}
+    # Guard: if the run wrote nothing AND hit errors, treat it as a systemic
+    # failure (missing key, network, feed outage) and DON'T prune -- otherwise a
+    # transient failure would silently wipe the whole corpus.
+    pruned_skipped = bool(errors and not written)
+    pruned = [] if pruned_skipped else prune_stale(kb_dir, max_age_days, now)
+    return {"written": written, "pruned": pruned, "errors": errors,
+            "pruned_skipped": pruned_skipped}

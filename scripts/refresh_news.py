@@ -13,12 +13,36 @@ Schedule (cron / launchd) to keep the corpus fresh, e.g. daily 06:00:
         .venv/bin/python scripts/refresh_news.py >> logs/refresh_news.log 2>&1
 """
 import argparse
+import os
 import sys
 
 from src import config, news_fetch
 
 
+def _load_env():
+    """Load ANTHROPIC_API_KEY (and friends) from the repo .env, same as the API
+    does. Without this a cron/manual run has no key and every digest fails.
+    Walks up from this file so it works from a worktree (where .env lives in the
+    parent checkout) as well as the main repo."""
+    try:
+        from dotenv import load_dotenv
+    except Exception:  # noqa: BLE001 - dotenv optional; env may already be set
+        return
+    d = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(6):
+        cand = os.path.join(d, ".env")
+        if os.path.isfile(cand):
+            load_dotenv(cand)
+            return
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    load_dotenv()  # fallback: CWD-based search
+
+
 def main(argv=None):
+    _load_env()
     ap = argparse.ArgumentParser(description="Refresh the FPL news corpus from RSS.")
     ap.add_argument("--kb-dir", default=None, help="override kb/auto/news dir")
     ap.add_argument("--max-age-days", type=int, default=None, help="freshness window")
@@ -44,9 +68,16 @@ def main(argv=None):
         print(f"dry-run: {total} recent items across {len(feeds)} feeds (nothing written)")
         return 0
 
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        print("WARN: ANTHROPIC_API_KEY not set -- digests will fail. Add it to "
+              ".env or the environment.", file=sys.stderr)
+
     res = news_fetch.refresh(kb_dir=args.kb_dir, max_age_days=args.max_age_days)
     print(f"written: {len(res['written'])}  pruned: {len(res['pruned'])}  "
           f"errors: {len(res['errors'])}")
+    if res.get("pruned_skipped"):
+        print("NOTE: prune skipped (no writes + errors) -- corpus preserved.",
+              file=sys.stderr)
     for u in res["written"]:
         print(f"  + {u}")
     for p in res["pruned"]:
