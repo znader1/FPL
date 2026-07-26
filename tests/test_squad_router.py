@@ -119,6 +119,32 @@ def test_lineup_defaults_to_horizon(monkeypatch):
     assert body["xi_objective"] == "horizon"
 
 
+def test_transfer_plan_returns_per_gw_plan(monkeypatch):
+    client = _client(monkeypatch)
+    ids = _legal_15(client)
+    r = client.post("/squad-picker/transfer-plan", json={
+        "player_ids": ids,
+        "params": {"budget_m": 1000.0, "projection_basis": "ppg",
+                   "start_free_transfers": 1, "ft_cap": 5},
+    })
+    assert r.status_code == 200
+    body = r.json()
+    assert body["valid"] is True
+    assert len(body["plan"]) >= 1
+    gw1 = body["plan"][0]
+    assert gw1["action"] in ("roll", "transfer")
+    assert gw1["free_transfers_before"] == 1
+    assert "total_net_gain" in body
+
+
+def test_transfer_plan_bad_squad_reports_violation(monkeypatch):
+    client = _client(monkeypatch)
+    r = client.post("/squad-picker/transfer-plan",
+                    json={"player_ids": [1, 2, 3], "params": {}})
+    body = r.json()
+    assert body["valid"] is False and body["violations"]
+
+
 def test_lineup_bad_quota_reports_violation(monkeypatch):
     client = _client(monkeypatch)
     ids = _legal_15(client)[:-1]  # 14 players

@@ -71,6 +71,22 @@ def lineup(payload: dict):
     return _sanitize(result)
 
 
+@router.post("/transfer-plan")
+def transfer_plan(payload: dict):
+    try:
+        bootstrap = fpl_client.get_bootstrap()
+        fixtures_raw = fpl_client.get_fixtures()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Live FPL fetch failed: {e}")
+    try:
+        result = squad_draft.build_transfer_plan(
+            bootstrap, fixtures_raw,
+            payload.get("player_ids", []), payload.get("params", {}))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Transfer plan failed: {e}")
+    return _sanitize(result)
+
+
 @router.post("/gk-pairs")
 def gk_pairs(params: dict):
     try:

@@ -1,7 +1,7 @@
 """Pure, dependency-injectable from-scratch squad draft (dev tool + API core)."""
 import pandas as pd
 
-from src import config, optimizer, player_knowledge, projections, transforms
+from src import config, optimizer, player_knowledge, projections, transfer_planner, transforms
 
 UNAVAILABLE_STATUSES = {"i", "s", "u", "n"}
 
@@ -26,6 +26,9 @@ DEFAULT_PARAMS = {
     "max_player_price": None,          # auto-build only: cap price per player to avoid loading up on premiums
     "formation": "auto",
     "xi_objective": "horizon",        # /lineup XI: next_gw | horizon (best 11 over the horizon) | per_gw (rotate)
+    "start_free_transfers": 1,        # transfer planner: FTs available entering the first horizon GW
+    "ft_cap": 5,                      # transfer planner: max banked free transfers
+    "allow_hits": True,               # transfer planner: may take a -4 when the horizon gain beats it
     "team_nudges": None,              # per-request xg/blend attack/defense nudges
     "player_knowledge": None,         # per-request player availability/minutes overrides (merged over the file)
 }
@@ -638,3 +641,36 @@ def build_lineup(bootstrap, fixtures_raw, player_ids, params=None):
         # how much re-picking the XI each GW beats keeping the opener's XI
         result["rotation_gain"] = round(rotate_total - projected["horizon_total"], 2)
     return result
+
+
+def build_transfer_plan(bootstrap, fixtures_raw, player_ids, params=None):
+    """Live wrapper: plan transfers for a chosen 15 across the fixture horizon
+    (1 FT/GW, bank up to ft_cap, roll-vs-use, -4 hits when worth it). Returns
+    {plan:[per-GW], total_net_gain, ...} or a validation error for a bad squad."""
+    p = {**DEFAULT_PARAMS, **(params or {})}
+    if params is None or params.get("gw_start") is None:
+        p["gw_start"] = _next_gw(bootstrap)
+    elements, teams, _etypes = transforms.tables_from_bootstrap(bootstrap)
+    fixtures = transforms.fixtures_df(fixtures_raw)
+    teams_short = teams.set_index("id")["short_name"].to_dict()
+    proj, gw_start, horizon, gws, notes = project_pool(elements, fixtures, teams_short, p)
+
+    ids = [int(x) for x in (player_ids or [])]
+    picked = proj[proj["id"].isin(ids)].copy()
+    violations = _validate_squad(picked, p)
+    missing = [i for i in ids if i not in set(int(x) for x in picked["id"].tolist())]
+    if missing:
+        violations.append(f"Unknown player ids: {missing}.")
+    if violations:
+        return {"ok": False, "valid": False, "violations": violations, "notes": notes}
+
+    cost = float(pd.to_numeric(picked["price_m"], errors="coerce").fillna(0.0).sum())
+    itb = max(0.0, float(p["budget_m"]) - cost)
+    plan = transfer_planner.plan_transfers(
+        proj, ids, gws, itb_m=itb,
+        start_ft=int(p.get("start_free_transfers") or 1),
+        ft_cap=int(p.get("ft_cap") or 5),
+        allow_hits=bool(p.get("allow_hits", True)))
+    plan.update({"ok": True, "valid": True, "gw_start": gw_start,
+                 "projection_basis": str(p["projection_basis"]), "notes": notes})
+    return plan
