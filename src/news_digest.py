@@ -13,9 +13,15 @@ import glob
 import json
 import os
 import re
+from datetime import date, timedelta
 
 from src import config
 from src.player_knowledge import _norm
+
+_MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+           "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
+_OUT_STATUS = {"i", "s", "u", "n"}  # injured / suspended / unavailable / not-in-squad
+_STATUS_NOTE = {"i": "injured", "s": "suspended", "u": "unavailable", "n": "not in squad"}
 
 SYSTEM = (
     "You are an FPL analyst. Given recent news about ONE player, decide if there "
@@ -99,6 +105,102 @@ def index_by_player(articles, elements):
                 out.setdefault(pid, []).append(a)
                 seen.add(pid)
     return out
+
+
+# --- Approach A: live bootstrap-news digester (first-party, no LLM) ----------
+
+def _event_date(s):
+    try:
+        return date.fromisoformat(str(s)[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_return_gw(news_text, events):
+    """Map an expected-return date in the bootstrap `news` text ("Expected back
+    21 Aug", "Suspended until 29 Aug") to the id of the first event whose
+    deadline is on/after that date. Returns None if no date is present, and
+    (last_gw + 1) if the return falls past every known event (still out all
+    horizon). The year is inferred from the events' date range."""
+    if not news_text:
+        return None
+    m = re.search(r"(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)",
+                  news_text, re.IGNORECASE)
+    if not m:
+        return None
+    day, mon = int(m.group(1)), _MONTHS[m.group(2).lower()[:3]]
+    evs = [(int(e["id"]), _event_date(e.get("deadline_time"))) for e in (events or [])]
+    evs = [(i, d) for i, d in evs if d]
+    if not evs:
+        return None
+    evs.sort(key=lambda x: x[1])
+    first = evs[0][1]
+    cands = []
+    for y in sorted({d.year for _, d in evs}):
+        try:
+            cands.append(date(y, mon, day))
+        except ValueError:
+            continue
+    if not cands:
+        return None
+    window = [d for d in cands if d >= first - timedelta(days=45)]
+    target = min(window) if window else min(cands)
+    for i, d in evs:
+        if d >= target:
+            return i
+    return evs[-1][0] + 1
+
+
+def digest_bootstrap_news(elements, events, current_gw=1):
+    """Turn the live FPL bootstrap injury signals (status / news /
+    chance_of_playing_next_round) into PROPOSED player-knowledge entries. Same
+    schema as the manual rail; source="fpl_bootstrap". Available players are
+    skipped. No network, no LLM -- this is first-party truth fetched on every
+    build."""
+    players = {}
+    if elements is None or "id" not in getattr(elements, "columns", []):
+        return {"players": players}
+    for _, r in elements.iterrows():
+        status = str(r.get("status") or "").strip().lower()
+        news = str(r.get("news") or "").strip()
+        chance = r.get("chance_of_playing_next_round")
+        try:
+            chance = None if chance is None or chance != chance else float(chance)
+        except (TypeError, ValueError):
+            chance = None
+
+        if status in _OUT_STATUS:
+            rgw = _parse_return_gw(news, events)
+            if rgw is not None:
+                if rgw <= int(current_gw):
+                    continue  # already back by the first projected GW
+                entry = {"availability": 1.0, "available_from_gw": rgw}
+            else:
+                entry = {"availability": 0.0, "available_from_gw": None}
+        elif status == "d":
+            av = chance / 100.0 if chance is not None else 0.5
+            if av >= 1.0:
+                continue
+            entry = {"availability": round(av, 3), "available_from_gw": None}
+        else:
+            continue  # 'a' (available) or unknown -> nothing to flag
+
+        entry.update({
+            "minutes_mult": 1.0,
+            "note": news or _STATUS_NOTE.get(status, status),
+            "source": "fpl_bootstrap",
+        })
+        players[str(int(r["id"]))] = entry
+    return {"players": players}
+
+
+def merge_proposals(article, bootstrap):
+    """Combine article-derived and bootstrap-derived proposals. Bootstrap wins
+    on player-id conflict (first-party injury truth beats a scraped rumour);
+    article-only entries are kept for narrative/rotation signal."""
+    merged = dict((article or {}).get("players", {}))
+    merged.update((bootstrap or {}).get("players", {}))
+    return {"players": merged}
 
 
 def _extract_json(raw):

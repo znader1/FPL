@@ -94,16 +94,24 @@ def digest_news(params: dict):
     from src import news_digest, transforms
     try:
         elements, _teams, _ = transforms.tables_from_bootstrap(bootstrap)
+        current_gw = squad_draft._next_gw(bootstrap)
+        # A: live first-party injury/availability signal (no LLM, always runs)
+        boot = news_digest.digest_bootstrap_news(
+            elements, bootstrap.get("events", []), current_gw=current_gw)
+        # B: narrative/rotation from the digested news corpus (LLM per match)
         articles = news_digest.load_news_articles((params or {}).get("kb_dir"))
         idx = news_digest.index_by_player(articles, elements)
-        current_gw = squad_draft._next_gw(bootstrap)
-        proposals = news_digest.propose_player_knowledge(idx, elements, current_gw=current_gw)
+        article_props = news_digest.propose_player_knowledge(
+            idx, elements, current_gw=current_gw)
+        # bootstrap wins on conflict; articles add players it doesn't flag
+        proposals = news_digest.merge_proposals(article_props, boot)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"News digest failed: {e}")
     return _sanitize({
         "proposals": proposals,
         "article_count": len(articles),
         "matched_players": len(idx),
+        "bootstrap_flags": len(boot["players"]),
     })
 
 

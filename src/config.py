@@ -203,6 +203,15 @@ FDR_KNOWLEDGE_DISCOUNT_PATH = "data/models/knowledge_discount.json"
 PLAYER_KNOWLEDGE_PATH = "data/models/player_knowledge.json"
 PLAYER_KNOWLEDGE_STALE_DAYS = 10
 
+# News corpus (Approach B: RSS refresh routine -> news_digest reads this dir).
+NEWS_KB_DIR = "kb/auto/news"
+NEWS_MAX_AGE_DAYS = 14   # digest only items this fresh; prune older md
+NEWS_FEEDS = [           # RSS sources (verified live 2026-07-26)
+    {"source": "sportsmole.co.uk", "url": "https://www.sportsmole.co.uk/football/rss.xml"},
+    {"source": "football-talk.co.uk", "url": "https://football-talk.co.uk/feed/"},
+    {"source": "betting.betfair.com", "url": "https://betting.betfair.com/football/rss.xml"},
+]
+
 # Cross-season carryover (season-start cold start). At a new season's launch there
 # is no current-season xG, so ratings start from the prior season's frozen seed
 # (regressed toward the mean) and the live signal takes over as matches accrue.

@@ -156,4 +156,30 @@ def test_digest_news_empty_kb(monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["article_count"] == 0
+    assert body["bootstrap_flags"] == 0
     assert body["proposals"]["players"] == {}
+
+
+def test_digest_news_flags_bootstrap_injury(monkeypatch):
+    # A-path: an injured player in the live bootstrap is proposed even with no
+    # news corpus and no LLM.
+    boot = _minimal_bootstrap()
+    boot["elements"][0]["status"] = "i"
+    boot["elements"][0]["news"] = "Groin injury - Expected back 21 Aug"
+    boot["events"] = [
+        {"id": 1, "is_next": True, "is_current": False, "deadline_time": "2026-08-15T17:30:00Z"},
+        {"id": 2, "is_next": False, "is_current": False, "deadline_time": "2026-08-22T17:30:00Z"},
+    ]
+    injured_id = str(boot["elements"][0]["id"])
+    monkeypatch.setattr(sr.fpl_client, "get_bootstrap", lambda: boot)
+    monkeypatch.setattr(sr.fpl_client, "get_fixtures", lambda: _minimal_fixtures_raw())
+    app = FastAPI(); app.include_router(sr.router)
+    client = TestClient(app)
+
+    r = client.post("/squad-picker/digest-news", json={"kb_dir": "does/not/exist"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["bootstrap_flags"] == 1
+    entry = body["proposals"]["players"][injured_id]
+    assert entry["source"] == "fpl_bootstrap"
+    assert entry["available_from_gw"] == 2
