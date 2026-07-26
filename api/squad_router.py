@@ -115,6 +115,23 @@ def digest_news(params: dict):
     })
 
 
+@router.post("/team-news")
+def team_news(params: dict):
+    try:
+        bootstrap = fpl_client.get_bootstrap()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Live FPL fetch failed: {e}")
+    from src import news_digest, transforms
+    try:
+        elements, _teams, _ = transforms.tables_from_bootstrap(bootstrap)
+        current_gw = squad_draft._next_gw(bootstrap)
+        result = news_digest.team_news_rollup(
+            elements, bootstrap.get("events", []), current_gw=current_gw)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Team news failed: {e}")
+    return _sanitize(result)
+
+
 @router.get("/knowledge")
 def get_knowledge():
     try:

@@ -194,6 +194,32 @@ def digest_bootstrap_news(elements, events, current_gw=1):
     return {"players": players}
 
 
+def team_news_rollup(elements, events, current_gw=1):
+    """Group the live bootstrap flags by team for the team-nudges panel (Level
+    1 integration): {"teams": {TEAM_SHORT: [{player_id, web_name, availability,
+    available_from_gw, note}, ...]}, "total": n}. Purely informational -- lets
+    the user set team nudges knowing who's out."""
+    boot = digest_bootstrap_news(elements, events, current_gw)["players"]
+    meta = {}
+    if elements is not None and {"id", "web_name", "team_short"}.issubset(
+            getattr(elements, "columns", [])):
+        for _, r in elements.iterrows():
+            meta[str(int(r["id"]))] = (str(r["team_short"]), str(r["web_name"]))
+    teams = {}
+    for pid, entry in boot.items():
+        ts, nm = meta.get(pid, ("?", pid))
+        teams.setdefault(ts, []).append({
+            "player_id": int(pid),
+            "web_name": nm,
+            "availability": entry["availability"],
+            "available_from_gw": entry.get("available_from_gw"),
+            "note": entry.get("note"),
+        })
+    for v in teams.values():
+        v.sort(key=lambda x: (x["availability"], x["web_name"]))
+    return {"teams": teams, "total": len(boot)}
+
+
 def merge_proposals(article, bootstrap):
     """Combine article-derived and bootstrap-derived proposals. Bootstrap wins
     on player-id conflict (first-party injury truth beats a scraped rumour);

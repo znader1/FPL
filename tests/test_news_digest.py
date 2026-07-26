@@ -128,6 +128,27 @@ def test_digest_bootstrap_skips_already_returned():
     assert out["players"] == {}
 
 
+def test_team_news_rollup_groups_by_team():
+    els = pd.DataFrame({
+        "id": [1, 2, 3, 4],
+        "web_name": ["Saliba", "Timber", "Salah", "Gomez"],
+        "team_short": ["ARS", "ARS", "LIV", "LIV"],
+        "status": ["i", "i", "a", "i"],
+        "news": ["Back injury - Unknown return date",
+                 "Groin injury - Expected back 21 Aug", "", "Muscular injury - Unknown return date"],
+        "chance_of_playing_next_round": [0, 0, 100, 0],
+    })
+    out = nd.team_news_rollup(els, EVENTS, current_gw=1)
+    assert out["total"] == 3          # Salah (available) not counted
+    assert set(out["teams"]) == {"ARS", "LIV"}
+    assert len(out["teams"]["ARS"]) == 2
+    ars = {p["web_name"]: p for p in out["teams"]["ARS"]}
+    assert ars["Saliba"]["availability"] == 0.0
+    assert ars["Timber"]["available_from_gw"] == 2
+    # out (avail 0) sorts before the one with a return date
+    assert out["teams"]["ARS"][0]["web_name"] == "Saliba"
+
+
 def test_merge_bootstrap_wins_on_conflict():
     article = {"players": {"1": {"availability": 0.5, "note": "rumour", "source": "a.md"}}}
     boot = {"players": {"1": {"availability": 0.0, "note": "injury", "source": "fpl_bootstrap"}}}
