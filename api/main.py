@@ -256,6 +256,18 @@ def _default_optimize_event_id(bootstrap):
     return _event_id(bootstrap, "is_next") or _event_id(bootstrap, "is_current") or 1
 
 
+def _is_pre_first_deadline(bootstrap):
+    """
+    True before the very first deadline of the season — no gameweek is current yet
+    but a next one exists. In this window FPL grants unlimited free transfers and
+    allows no point hits, so the FT/-4 transfer framing doesn't apply.
+    """
+    return (
+        _event_id(bootstrap, "is_current") is None
+        and _event_id(bootstrap, "is_next") is not None
+    )
+
+
 def _max_event_id(bootstrap):
     try:
         ev_ids = [int(ev.get("id")) for ev in bootstrap.get("events", []) if ev.get("id") is not None]
@@ -547,7 +559,18 @@ def build_recommendations(payload):
     if not itb_m_explicit and ctx.get("derived_itb_m") is not None:
         itb_m = ctx["derived_itb_m"]
         notes.append(f"Using bank from FPL: £{itb_m:.1f}m.")
-    if not free_transfers_explicit and ctx.get("derived_free_transfers") is not None:
+    # Before the first deadline of the season you have unlimited free transfers and
+    # cannot take hits — so the FT/-4 framing doesn't apply. Reframe the transfer
+    # preview as "best free upgrades to your squad" (capped at the engine's max moves).
+    pre_first_deadline = _is_pre_first_deadline(ctx["bootstrap"])
+    if pre_first_deadline and not free_transfers_explicit:
+        free_transfers = config.TRANSFER_MAX_MOVES
+        hit_cap = 0
+        notes.append(
+            "Pre-season: unlimited free transfers until the GW1 deadline — "
+            "showing the best free upgrades to your squad (no point hits)."
+        )
+    elif not free_transfers_explicit and ctx.get("derived_free_transfers") is not None:
         free_transfers = ctx["derived_free_transfers"]
         notes.append(f"Using free transfers from FPL: {free_transfers}.")
 
@@ -871,7 +894,11 @@ def build_recommendations(payload):
         "bench": bench_records,
         "position_panels": position_panels,
         "active_chip": ctx.get("myteam", {}).get("active_chip"),
-        "squad_source": "chip_draft" if chip_info.get("is_active") else "entry_picks",
+        "pre_first_deadline": bool(pre_first_deadline),
+        "squad_source": (
+            "manual" if (ctx.get("myteam") or {}).get("_source") == "manual"
+            else "chip_draft" if chip_info.get("is_active") else "entry_picks"
+        ),
         "chip_strategy": chip_info,
         "history_context": history_context,
         "scoring_guide": build_scoring_guide(
