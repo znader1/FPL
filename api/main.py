@@ -15,7 +15,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, league as league_mod, league_strategy, optimizer, projections, recommender, transfer_planner, transforms
+from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, league as league_mod, league_strategy, manual_squad, optimizer, projections, recommender, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key
 from src.insights import (
     build_chip_profile,
@@ -341,6 +341,25 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
                     "Squad loaded from your authenticated FPL account "
                     "(live pre-deadline team)."
                 )
+            except Exception as e:
+                last_err = e
+
+    # Final fallback: a manually-imported squad (no auth). Lets a manager see and
+    # work their pre-season XV before any GW locks, without cookies.
+    if not myteam or not used_event_id:
+        manual = manual_squad.load_manual_squad(entry_id)
+        if manual:
+            try:
+                planning_ev = next_event_id or current_event_id or 1
+                myteam = manual_squad.build_manual_myteam(
+                    elements,
+                    manual.get("player_ids") or [],
+                    captain_id=manual.get("captain_id"),
+                    vice_id=manual.get("vice_id"),
+                    planning_event_id=int(planning_ev),
+                )
+                used_event_id = int(planning_ev)
+                notes.append("Squad loaded from your manual pre-season import.")
             except Exception as e:
                 last_err = e
 
@@ -1110,6 +1129,62 @@ def squad_post(
         return err
     out = build_squad(payload)
     return JSONResponse(content=jsonable_encoder(out))
+
+
+@app.post("/squad/manual")
+def squad_manual_post(
+    payload=Body(None),
+    api_key=None, x_api_key=Header(None), authorization=Header(None),
+):
+    """
+    Import a squad manually (no FPL login) for the pre-first-deadline window.
+    Body: {entry_id, player_ids: [15 element ids], captain_id?, vice_id?}.
+    Validates composition/budget, persists it, and returns the rendered squad.
+    """
+    payload = payload or {}
+    err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key or payload.get("api_key"))
+    if err:
+        return err
+
+    entry_id = safe_int(payload.get("entry_id") or os.environ.get("FPL_ENTRY_ID"))
+    if not entry_id:
+        raise HTTPException(status_code=400, detail="Missing/invalid entry_id.")
+    player_ids = payload.get("player_ids") or []
+    captain_id = payload.get("captain_id")
+    vice_id = payload.get("vice_id")
+
+    bootstrap = get_bootstrap_cached()
+    elements, _teams, _ = transforms.tables_from_bootstrap(bootstrap)
+    planning_ev = _event_id(bootstrap, "is_next") or _event_id(bootstrap, "is_current") or 1
+
+    # Validate by attempting the build; surface a clean 400 on illegal selections.
+    try:
+        manual_squad.build_manual_myteam(
+            elements, player_ids, captain_id=captain_id,
+            vice_id=vice_id, planning_event_id=int(planning_ev),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    manual_squad.save_manual_squad(entry_id, player_ids, captain_id=captain_id, vice_id=vice_id)
+    out = build_squad({"entry_id": entry_id})
+    return JSONResponse(content=jsonable_encoder(out))
+
+
+@app.delete("/squad/manual")
+def squad_manual_delete(
+    entry_id=None,
+    api_key=None, x_api_key=Header(None), authorization=Header(None),
+):
+    """Remove a saved manual squad (e.g. once the real public fetch takes over)."""
+    err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
+    if err:
+        return err
+    entry_id = safe_int(entry_id or os.environ.get("FPL_ENTRY_ID"))
+    if not entry_id:
+        raise HTTPException(status_code=400, detail="Missing/invalid entry_id.")
+    removed = manual_squad.clear_manual_squad(entry_id)
+    return JSONResponse(content={"entry_id": int(entry_id), "removed": bool(removed)})
 
 
 @app.get("/recommendations")
