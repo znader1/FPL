@@ -311,6 +311,7 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
     myteam = None
     used_event_id = None
     last_err = None
+    my_team_ft = None
     for cand in candidates:
         try:
             myteam = fpl_client.get_entry_picks(entry_id, int(cand))
@@ -319,6 +320,29 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
         except Exception as e:
             last_err = e
             continue
+
+    # Fallback for pre-first-deadline / pre-season: the public /event/{gw}/picks/
+    # endpoint 404s for every GW until picks lock, but the squad is readable via the
+    # authenticated /api/my-team/{entry}/ endpoint. If the manager configured browser
+    # auth (FPL_COOKIE, optionally FPL_BEARER), fetch the live squad directly.
+    if not myteam or not used_event_id:
+        cookie = os.environ.get("FPL_COOKIE")
+        bearer = os.environ.get("FPL_BEARER")
+        if cookie or bearer:
+            try:
+                raw_my_team = fpl_client.get_entry_my_team(
+                    entry_id, cookie_header=cookie, bearer=bearer
+                )
+                planning_ev = next_event_id or current_event_id or 1
+                myteam = fpl_client.normalize_my_team(raw_my_team, int(planning_ev))
+                used_event_id = int(planning_ev)
+                my_team_ft = myteam.get("_free_transfers")
+                notes.append(
+                    "Squad loaded from your authenticated FPL account "
+                    "(live pre-deadline team)."
+                )
+            except Exception as e:
+                last_err = e
 
     if not myteam or not used_event_id:
         # Pre-season / pre-first-deadline: FPL publishes no public entry picks until
@@ -375,6 +399,14 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
                 derived_free_transfers = 1
         except Exception:
             pass  # keep default of 1
+
+    # Authenticated my-team reports the real free-transfer count directly; it beats
+    # the event_transfers heuristic (which wrongly infers a banked FT pre-season).
+    if my_team_ft is not None:
+        try:
+            derived_free_transfers = int(my_team_ft)
+        except (TypeError, ValueError):
+            pass
 
     squad_df = transforms.picks_to_df(myteam, elements)
     if squad_df is None or squad_df.empty:
