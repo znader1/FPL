@@ -337,6 +337,7 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
     # endpoint 404s for every GW until picks lock, but the squad is readable via the
     # authenticated /api/my-team/{entry}/ endpoint. If the manager configured browser
     # auth (FPL_COOKIE, optionally FPL_BEARER), fetch the live squad directly.
+    cookie_error = None
     if not myteam or not used_event_id:
         cookie = os.environ.get("FPL_COOKIE")
         bearer = os.environ.get("FPL_BEARER")
@@ -354,7 +355,9 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
                     "(live pre-deadline team)."
                 )
             except Exception as e:
+                cookie_error = e
                 last_err = e
+                logger.warning("Authenticated my-team fetch failed: %s", e)
 
     # Final fallback: a manually-imported squad (no auth). Lets a manager see and
     # work their pre-season XV before any GW locks, without cookies.
@@ -376,6 +379,15 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
                 last_err = e
 
     if not myteam or not used_event_id:
+        # A cookie/bearer was configured but the authenticated fetch failed — surface
+        # the real reason (401/403/bot-block/non-JSON) instead of the generic
+        # "not available yet" message, which would hide the actual problem.
+        if cookie_error is not None:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Authenticated FPL fetch failed: {cookie_error}",
+            )
+
         # Pre-season / pre-first-deadline: FPL publishes no public entry picks until
         # a gameweek locks, so /event/{gw}/picks/ 404s for every GW (and prior-season
         # history is wiped at rollover). Surface a clear message instead of a raw

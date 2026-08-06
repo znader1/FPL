@@ -291,13 +291,23 @@ def get_entry_my_team(entry_id, cookie_header=None, bearer=None, session=None):
         verify=_verify(),
         timeout=20,
     )
-    if r.status_code in (401, 403):
+    if r.status_code != 200:
+        snip = (r.text or "")[:200].replace("\n", " ")
+        if r.status_code in (401, 403):
+            raise RuntimeError(
+                f"{r.status_code} /api/my-team — not authenticated or blocked "
+                f"(cookie/bearer missing/expired, wrong manager, or bot-protection on "
+                f"the server IP). Body: {snip}"
+            )
+        raise RuntimeError(f"/api/my-team HTTP {r.status_code}. Body: {snip}")
+    try:
+        data = r.json()
+    except ValueError:
+        snip = (r.text or "")[:200].replace("\n", " ")
         raise RuntimeError(
-            f"{r.status_code} /api/my-team (not authenticated — FPL cookie/bearer "
-            f"missing, expired, or not the logged-in manager). Refresh FPL_COOKIE/FPL_BEARER."
+            f"/api/my-team returned non-JSON (likely a bot-protection challenge "
+            f"page served to the server). Body: {snip}"
         )
-    r.raise_for_status()
-    data = r.json()
     if not isinstance(data, dict):
         raise RuntimeError("/api/my-team returned a non-object payload.")
     return data
