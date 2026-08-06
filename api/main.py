@@ -530,6 +530,146 @@ def build_squad(payload):
     }
 
 
+def optimize_squad(payload):
+    """
+    "Improve my team" optimizer for the pre-deadline window (unlimited free
+    transfers, no hits). Repeatedly applies the best beneficial free swaps until
+    no swap clears `min_gain`, then reports the NET in/out diff and the change in
+    projected starting-XI points. Optionally persists the result as the squad.
+
+    Anchored to the current squad — it only swaps players that raise projected
+    points; it does not rebuild from scratch.
+    """
+    entry_id = payload.get("entry_id") or os.environ.get("FPL_ENTRY_ID")
+    horizon_gws = max(1, int(safe_int(payload.get("horizon_gws")) or 3))
+    min_gain = float(payload.get("min_gain") if payload.get("min_gain") is not None else 1.0)
+    max_rounds = max(1, int(safe_int(payload.get("max_rounds")) or 10))
+    # Cap on total changes ("improve my team" vs full rebuild). None = unlimited.
+    max_swaps = safe_int(payload.get("max_swaps"))
+    apply_result = parse_bool(payload.get("apply"), default=False)
+
+    ctx = load_fpl_context(entry_id, payload.get("squad_event_id"), with_fixtures=True)
+    entry_id = ctx["entry_id"]
+    bootstrap = ctx["bootstrap"]
+    elements = ctx["elements"]
+    teams_short = ctx["teams_short"]
+    fixtures = ctx["fixtures"]
+    squad_df = ctx["squad_df"]
+    itb_m = ctx.get("derived_itb_m") or 0.0
+
+    optimize_event_id = _default_optimize_event_id(bootstrap)
+    latest_n = getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3)
+    proj_all = projections.project_elements_next_gws(
+        elements=elements, fixtures=fixtures, teams_short_map=teams_short,
+        gw_start=int(optimize_event_id), horizon_gws=horizon_gws, latest_n_matches=latest_n,
+    )
+    proj_by_id = {}
+    if proj_all is not None and not proj_all.empty:
+        for r in proj_all.itertuples():
+            proj_by_id[int(getattr(r, "id"))] = {
+                "xpts_horizon": float(getattr(r, "xpts_horizon", 0.0) or 0.0),
+            }
+
+    def xi_points(sq):
+        # Measure on the SAME horizon basis the swaps optimize for (xpts_horizon),
+        # else the before/after metric is non-monotonic vs the number of swaps.
+        try:
+            res = optimizer.optimize_lineup(sq, proj_all, score_col="xpts_horizon")
+            return round(float(res.get("projected_points_with_captain") or 0.0), 1)
+        except Exception:
+            return None
+
+    orig_ids = [int(x) for x in pd.to_numeric(squad_df["player_id"], errors="coerce").dropna().astype(int).tolist()]
+    xpts_before = xi_points(squad_df)
+
+    cur_squad = squad_df.copy()
+    cur_itb = float(itb_m)
+    rounds = 0
+    applied_moves = 0
+    engine_cap = int(getattr(config, "TRANSFER_MAX_MOVES", 5))
+    for _ in range(max_rounds):
+        # Per round, request at most the remaining allowance (budget-feasible set).
+        remaining = engine_cap if max_swaps is None else max(0, int(max_swaps) - applied_moves)
+        if remaining <= 0:
+            break
+        preview = recommender.suggest_transfers(
+            squad_df=cur_squad, elements_all=proj_all, itb_m=cur_itb,
+            free_transfers=min(engine_cap, remaining), hit_cap=0,
+            score_col="xpts_horizon", horizon_gws=horizon_gws,
+        )
+        moves = [m for m in (preview.get("moves") or []) if float(m.get("score_gain") or 0.0) >= min_gain]
+        if not moves:
+            break
+        new_squad, stats = apply_transfer_moves_to_squad(cur_squad, moves, elements)
+        if stats.get("applied", 0) == 0:
+            break
+        cur_squad = new_squad
+        cur_itb = float(preview.get("remaining_itb", cur_itb))
+        applied_moves += int(stats.get("applied", 0))
+        rounds += 1
+
+    final_ids = [int(x) for x in pd.to_numeric(cur_squad["player_id"], errors="coerce").dropna().astype(int).tolist()]
+    xpts_after = xi_points(cur_squad)
+
+    # Net diff, paired by position for a clean out->in list.
+    el_idx = elements.set_index("id")
+    def _meta(pid):
+        if pid in el_idx.index:
+            row = el_idx.loc[pid]
+            return {
+                "id": pid,
+                "name": str(row.get("web_name")),
+                "pos": str(row.get("pos")),
+                "team": str(row.get("team_short")),
+                "price": round(float(row.get("now_cost", 0)) / 10.0, 1),
+                "xpts_horizon": round(proj_by_id.get(pid, {}).get("xpts_horizon", 0.0), 2),
+            }
+        return {"id": pid}
+
+    # Net diff, paired within a position by xP rank for a readable out->in list.
+    # NOTE: no per-swap "gain" — the moves are a budget-coupled SET (a cheap
+    # downgrade can fund a premium elsewhere), so only the squad-level total is
+    # meaningful. Attributing gain to individual pairs would misrepresent it.
+    removed = [p for p in orig_ids if p not in set(final_ids)]
+    added = [p for p in final_ids if p not in set(orig_ids)]
+    swaps = []
+    for pos in ("GKP", "DEF", "MID", "FWD"):
+        outs = sorted((_meta(p) for p in removed if _meta(p).get("pos") == pos),
+                      key=lambda m: m.get("xpts_horizon", 0.0), reverse=True)
+        ins = sorted((_meta(p) for p in added if _meta(p).get("pos") == pos),
+                     key=lambda m: m.get("xpts_horizon", 0.0), reverse=True)
+        for o, i in zip(outs, ins):
+            swaps.append({"position": pos, "out": o, "in": i})
+
+    applied = False
+    cap = vice = None
+    if final_ids:
+        ranked = sorted(final_ids, key=lambda p: proj_by_id.get(p, {}).get("xpts_horizon", 0.0), reverse=True)
+        cap = ranked[0] if ranked else None
+        vice = ranked[1] if len(ranked) > 1 else None
+    if apply_result and len(set(final_ids)) == 15:
+        manual_squad.save_manual_squad(entry_id, final_ids, captain_id=cap, vice_id=vice)
+        applied = True
+
+    return {
+        "entry_id": int(entry_id),
+        "horizon_gws": horizon_gws,
+        "min_gain": min_gain,
+        "max_swaps": int(max_swaps) if max_swaps is not None else None,
+        "rounds": int(rounds),
+        "num_swaps": len(swaps),
+        "swaps": swaps,
+        "xpts_before": xpts_before,
+        "xpts_after": xpts_after,
+        "total_gain": round((xpts_after - xpts_before), 1) if (xpts_before is not None and xpts_after is not None) else None,
+        "remaining_itb": round(cur_itb, 1),
+        "optimized_player_ids": final_ids,
+        "suggested_captain_id": cap,
+        "suggested_vice_id": vice,
+        "applied": applied,
+    }
+
+
 def build_recommendations(payload):
     total_start = time.perf_counter()
     timings = {}
@@ -1224,6 +1364,24 @@ def squad_manual_delete(
         raise HTTPException(status_code=400, detail="Missing/invalid entry_id.")
     removed = manual_squad.clear_manual_squad(entry_id)
     return JSONResponse(content={"entry_id": int(entry_id), "removed": bool(removed)})
+
+
+@app.post("/squad/optimize")
+def squad_optimize_post(
+    payload=Body(None),
+    api_key=None, x_api_key=Header(None), authorization=Header(None),
+):
+    """
+    "Improve my team" — apply all beneficial free swaps at once (pre-deadline).
+    Body: {entry_id, horizon_gws?, min_gain?, apply?}. Returns the net in/out diff
+    and projected-points change; with apply=true, persists the optimized squad.
+    """
+    payload = payload or {}
+    err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key or payload.get("api_key"))
+    if err:
+        return err
+    out = optimize_squad(payload)
+    return JSONResponse(content=jsonable_encoder(out))
 
 
 @app.get("/recommendations")
