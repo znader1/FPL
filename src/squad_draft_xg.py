@@ -150,6 +150,9 @@ def _ratings(elements, teams_short, team_nudges=None):
     file (default). Both calls degrade gracefully with an empty current-season
     xG frame."""
     ratings = fixture_difficulty.resolve_team_ratings(pd.DataFrame(), teams_short_map=teams_short)
+    # Sharpen the flat carryover defenses with last season's clean-sheet record
+    # BEFORE the manual nudges, so user overrides stay the final word.
+    ratings = fixture_difficulty.apply_cs_prior(ratings, elements)
     discount = _nudges_to_discount(team_nudges)
     ratings = fixture_difficulty.apply_knowledge_discount(
         ratings, discount=discount, teams_short_map=teams_short)

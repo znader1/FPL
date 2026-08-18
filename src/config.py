@@ -204,6 +204,8 @@ FDR_KNOWLEDGE_DISCOUNT_PATH = "data/models/knowledge_discount.json"
 # is no current-season xG, so ratings start from the prior season's frozen seed
 # (regressed toward the mean) and the live signal takes over as matches accrue.
 FDR_RATINGS_SEED_PATH = "data/models/team_ratings_seed.json"
+FDR_CS_PRIOR_WEIGHT = 0.35           # blend of clean-sheet-implied defense into the carryover rating (0 = off)
+FDR_CS_PRIOR_MIN_MATCHES = 6.0       # GK starts needed before the CS record counts as signal (guards season-reset stats)
 FDR_CARRYOVER_PRIOR_MATCHES = 8.0    # pseudo-matches of weight given to the prior-season seed
 FDR_CARRYOVER_REGRESSION = 0.30      # regress the prior-season rating this far toward 1.0 (mean)
 # Promoted teams have no top-flight xG and no seed: assume a weak default until games arrive.

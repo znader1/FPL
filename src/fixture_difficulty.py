@@ -380,6 +380,68 @@ def load_knowledge_discount(path=None):
         return {}
 
 
+def apply_cs_prior(ratings, elements, weight=None):
+    """
+    Blend last season's clean-sheet record into each team's ``defense``
+    multiplier. The carried-over xG defense ratings shrink hard toward 1.0,
+    which flattens P(clean sheet) across teams; actual CS counts are a sharper
+    cold-start signal of defensive quality.
+
+    Per team, the GK rows' summed ``clean_sheets`` over their summed ``starts``
+    (the team's matches with a recorded GK start) implies a per-match xGA via
+    Poisson inversion ``implied_xga = -ln(CS/matches)``, hence an implied
+    defense multiplier ``implied_xga / league_avg``. The new rating is
+    ``(1 - weight) * carryover + weight * implied``, clamped like every other
+    rating.
+
+    Bootstrap stats reset each season, so early-season samples are tiny and a
+    1-CS-in-1-start record would invert the signal; teams with fewer than
+    ``FDR_CS_PRIOR_MIN_MATCHES`` GK starts (or zero CS, or no GK rows) are
+    left untouched. Pre-season, the carried-over totals (~38 starts) pass the
+    gate. Returns a copy of ``ratings``.
+    """
+    w = float(weight if weight is not None else getattr(config, "FDR_CS_PRIOR_WEIGHT", 0.35))
+    out = dict(ratings)
+    if w <= 0.0 or elements is None or len(elements) == 0:
+        return out
+    df = elements
+    if "clean_sheets" not in df.columns or "team" not in df.columns:
+        return out
+
+    is_gk = pd.to_numeric(df.get("element_type"), errors="coerce") == 1
+    gks = df[is_gk]
+    if gks.empty:
+        return out
+    team_key = pd.to_numeric(gks["team"], errors="coerce")
+    cs_by_team = (
+        pd.to_numeric(gks["clean_sheets"], errors="coerce").fillna(0.0).groupby(team_key).sum()
+    )
+    starts_by_team = (
+        pd.to_numeric(gks.get("starts"), errors="coerce").fillna(0.0).groupby(team_key).sum()
+    )
+
+    league = float(out.get("_league", getattr(config, "FDR_LEAGUE_AVG_XG_FALLBACK", 1.40)))
+    lo = float(getattr(config, "FDR_RATING_MIN", 0.50))
+    hi = float(getattr(config, "FDR_RATING_MAX", 1.80))
+    min_matches = float(getattr(config, "FDR_CS_PRIOR_MIN_MATCHES", 6.0))
+
+    for team_id, cs in cs_by_team.items():
+        if not np.isfinite(team_id) or cs <= 0:
+            continue
+        matches = float(starts_by_team.get(team_id, 0.0))
+        if matches < min_matches:
+            continue
+        r = out.get(int(team_id))
+        if not isinstance(r, dict):
+            continue
+        cs_rate = min(float(cs), matches - 1.0) / matches  # avoid ln(0) at a perfect record
+        implied_xga = -np.log(cs_rate)
+        implied_def = implied_xga / league if league > 0 else 1.0
+        blended = (1.0 - w) * float(r.get("defense", 1.0)) + w * float(implied_def)
+        out[int(team_id)] = {**r, "defense": float(np.clip(blended, lo, hi))}
+    return out
+
+
 def apply_knowledge_discount(ratings, discount=None, teams_short_map=None, path=None):
     """
     Apply per-team manual attack/defense multipliers from the knowledge file.
