@@ -160,6 +160,7 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
     saves_per_xga = float(getattr(config, "OUTPUT_SAVES_PER_XGA", 2.0))
     save_pts_per = float(getattr(config, "OUTPUT_SAVE_POINTS_PER_SAVE", 1.0 / 3.0))
     bonus_per_xgi = float(getattr(config, "OUTPUT_BONUS_PER_XGI", 0.9))
+    cs_bonus_per = getattr(config, "OUTPUT_CS_BONUS_PER_CS", {})
     max_goals = float(getattr(config, "OUTPUT_MAX_GOALS_PER_GAME", 2.5))
     max_assists = float(getattr(config, "OUTPUT_MAX_ASSISTS_PER_GAME", 2.0))
     home_mult = float(getattr(config, "FDR_HOME_XG_MULT", 1.10))
@@ -240,7 +241,11 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
         # Conceded penalty applies to GKP/DEF, scaled by playing 60'.
         pts_conceded = float(conceded_pen.get(pos, 0.0)) * (conceded / 2.0) * prob_60
         pts_saves = (saves * save_pts_per * prob_60) if pos == "GKP" else 0.0
-        pts_bonus = (exp_goals + exp_assists) * bonus_per_xgi
+        # Attacking bonus (goals/assists BPS) + defensive bonus (clean-sheet /
+        # clearance / block BPS) so defenders/keepers aren't left with only
+        # their raw clean-sheet points.
+        pts_bonus = ((exp_goals + exp_assists) * bonus_per_xgi
+                     + clean_sheet * float(cs_bonus_per.get(pos, 0.0)))
 
         total = (pts_appearance + pts_goals + pts_assists + pts_cs
                  + pts_conceded + pts_saves + pts_bonus)

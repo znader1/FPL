@@ -367,6 +367,7 @@ def project_elements_next_gws(
     form_weight=config.PROJ_DEFAULT_FORM_WEIGHT,
     latest_n_matches=config.PROJ_DEFAULT_LATEST_N_MATCHES,
     fdr_strength=1.0,
+    home_away_strength=1.0,
 ):
     """
     Lightweight next-N gameweeks projection table (FPL-only baseline).
@@ -484,6 +485,10 @@ def project_elements_next_gws(
             if pd.notna(t)
             else 1.0
         )
+        if home_away_strength != 1.0:
+            # Scale only the home/away multiplier's deviation from 1.0 (home 1.06
+            # / away 0.94 by default). >1 amplifies the home-advantage swing.
+            home_away_mult = 1.0 + (home_away_mult - 1.0) * home_away_strength
         opp_form_mult = ann["team"].apply(
             lambda t: float(team_ctx.get(int(t), {}).get("opp_form_mult", 1.0))
             if pd.notna(t)

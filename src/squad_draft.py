@@ -1,7 +1,7 @@
 """Pure, dependency-injectable from-scratch squad draft (dev tool + API core)."""
 import pandas as pd
 
-from src import config, optimizer, projections, transforms
+from src import config, optimizer, player_knowledge, projections, transfer_planner, transforms
 
 UNAVAILABLE_STATUSES = {"i", "s", "u", "n"}
 
@@ -15,6 +15,7 @@ DEFAULT_PARAMS = {
     "projection_basis": "ppg",        # ppg | xg | blend
     "blend_weight": 0.0,
     "fdr_strength": 1.0,              # scales fixture-difficulty multiplier swing (0=off,1=default,>1=amplified)
+    "home_away_strength": 1.0,        # scales home/away multiplier swing (home 1.06/away 0.94; 0=off,1=default,>1=amplified)
     "minutes_prior_k": 500.0,
     "include_flagged": False,
     "min_chance_of_playing": 0,
@@ -22,8 +23,14 @@ DEFAULT_PARAMS = {
     "min_fwd_minutes": 0.0,
     "min_premium_attackers": None,
     "premium_floor": None,
+    "max_player_price": None,          # auto-build only: cap price per player to avoid loading up on premiums
     "formation": "auto",
+    "xi_objective": "horizon",        # /lineup XI: next_gw | horizon (best 11 over the horizon) | per_gw (rotate)
+    "start_free_transfers": 1,        # transfer planner: FTs available entering the first horizon GW
+    "ft_cap": 5,                      # transfer planner: max banked free transfers
+    "allow_hits": True,               # transfer planner: may take a -4 when the horizon gain beats it
     "team_nudges": None,              # per-request xg/blend attack/defense nudges
+    "player_knowledge": None,         # per-request player availability/minutes overrides (merged over the file)
 }
 
 
@@ -97,6 +104,42 @@ def _apply_minutes_shrink(elements, minutes_prior_k):
     return out
 
 
+def _apply_player_knowledge(proj, gws, by_id):
+    """Per player, per GW: xpts_gw *= availability(gw) * minutes_mult, where
+    availability(gw)=0 before an injury return-GW. Adds pk_availability (min
+    over the horizon) + pk_note columns and recomputes xpts_horizon. Players
+    absent from `by_id` are untouched."""
+    if not by_id:
+        return proj
+    proj = proj.copy()
+    proj["pk_availability"] = pd.NA
+    proj["pk_note"] = pd.NA
+    for pid, entry in by_id.items():
+        mask = proj["id"] == int(pid)
+        if not mask.any():
+            continue
+        av = entry.get("availability")
+        availability = 1.0 if av is None else float(av)
+        mm = entry.get("minutes_mult")
+        minutes_mult = 1.0 if mm is None else float(mm)
+        from_gw = entry.get("available_from_gw")
+        from_gw = int(from_gw) if from_gw not in (None, "") else None
+        min_eff = 1.0
+        for g in gws:
+            avail_g = 0.0 if (from_gw is not None and int(g) < from_gw) else availability
+            eff = avail_g * minutes_mult
+            col = f"xpts_gw{g}"
+            if col in proj.columns:
+                proj.loc[mask, col] = pd.to_numeric(proj.loc[mask, col], errors="coerce").fillna(0.0) * eff
+            min_eff = min(min_eff, eff)
+        proj.loc[mask, "pk_availability"] = round(min_eff, 3)
+        proj.loc[mask, "pk_note"] = entry.get("note")
+    xcols = [f"xpts_gw{g}" for g in gws if f"xpts_gw{g}" in proj.columns]
+    if xcols:
+        proj["xpts_horizon"] = proj[xcols].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1)
+    return proj
+
+
 def _premium_params(params):
     premium_floor = params.get("premium_floor")
     if premium_floor is None:
@@ -124,6 +167,48 @@ def _value_menu(proj, top_n=8):
     return menu
 
 
+def _optimize_xi(squad_df, proj, gws, gw_start, objective, formations):
+    """Pick the starting XI under `objective`, returning (display_lineup,
+    per_gw_lineups). next_gw = best XI for the opener; horizon = one XI that
+    maximises summed xpts over the whole horizon; per_gw = XI re-optimised each
+    GW (rotation ceiling), with display_lineup set to the opener's XI."""
+    def _opt(col):
+        lu = optimizer.optimize_lineup(squad_df, proj, score_col=col, formations=formations)
+        if lu is None and formations is not None:  # requested formation impossible
+            lu = optimizer.optimize_lineup(squad_df, proj, score_col=col)
+        return lu
+
+    if objective == "per_gw":
+        pm = proj.drop_duplicates("id").set_index("id")
+        per_gw_lineups, display = [], None
+        for g in gws:
+            col = f"xpts_gw{g}"
+            if col not in proj.columns:
+                continue
+            lu = _opt(col)
+            if lu is None:
+                continue
+            if display is None:
+                display = lu
+            xi_ids = [int(x) for x in lu["starting_xi"]["player_id"].tolist()]
+            cap = lu.get("captain_player_id")
+            xi_pts = sum(float(pd.to_numeric(pm.loc[pid, col], errors="coerce") or 0.0)
+                         for pid in xi_ids if pid in pm.index)
+            cap_bonus = (float(pd.to_numeric(pm.loc[int(cap), col], errors="coerce") or 0.0)
+                         if cap is not None and int(cap) in pm.index else 0.0)
+            per_gw_lineups.append({
+                "gw": g, "formation": lu["formation"], "starting_xi": xi_ids,
+                "captain_player_id": cap, "xi_points": round(xi_pts, 2),
+                "captain_bonus": round(cap_bonus, 2), "total": round(xi_pts + cap_bonus, 2)})
+        return display, per_gw_lineups
+
+    if objective == "horizon" and "xpts_horizon" in proj.columns:
+        col = "xpts_horizon"
+    else:
+        col = f"xpts_gw{gw_start}"
+    return _opt(col), None
+
+
 def _projected_points(lineup, proj, gws, gw_start):
     if not lineup:
         return {"per_gw": [], "horizon_total": 0.0}
@@ -148,7 +233,10 @@ def _projected_points(lineup, proj, gws, gw_start):
     return {"per_gw": per_gw, "horizon_total": round(sum(r["total"] for r in per_gw), 2)}
 
 
-def build_squad_from_frames(elements, fixtures, teams_short, params):
+def project_pool(elements, fixtures, teams_short, params):
+    """Shared projection pipeline for /build, /players, /lineup. Returns the
+    fully projected pool DataFrame plus the resolved gw window and notes.
+    No optimizer / squad-building -- pure per-player projection."""
     p = {**DEFAULT_PARAMS, **(params or {})}
     notes = _notable_exclusion_notes(elements)
     gw_start = int(p["gw_start"])
@@ -165,9 +253,18 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
         avail = avail[~drop].copy()
 
     basis = str(p["projection_basis"])
+    # Pre-season the FPL `form` field is ~0 for everyone, so the default
+    # 0.55*ppg + 0.45*form blend would halve every projection with no upside.
+    # With no form signal, weight ppg fully (cold-start). Scoped to the squad
+    # picker only; in-season (form>0) this is a no-op.
+    form_series = pd.to_numeric(avail.get("form"), errors="coerce").fillna(0.0)
+    preseason = bool(len(form_series) and form_series.abs().max() < 1e-9)
+    ppg_w = 1.0 if preseason else config.PROJ_DEFAULT_PPG_WEIGHT
+    form_w = 0.0 if preseason else config.PROJ_DEFAULT_FORM_WEIGHT
     ppg_proj = projections.project_elements_next_gws(
         elements=avail, fixtures=fixtures, teams_short_map=teams_short,
-        gw_start=gw_start, horizon_gws=horizon, fdr_strength=p["fdr_strength"])
+        gw_start=gw_start, horizon_gws=horizon, fdr_strength=p["fdr_strength"],
+        home_away_strength=p["home_away_strength"], ppg_weight=ppg_w, form_weight=form_w)
     if basis in ("xg", "blend"):
         from src import squad_draft_xg
         proj = squad_draft_xg.xg_projection(
@@ -181,6 +278,31 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
     xpts_cols = [f"xpts_gw{g}" for g in gws if f"xpts_gw{g}" in proj.columns]
     proj["xpts_horizon"] = proj[xpts_cols].apply(pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1) \
         if xpts_cols else 0.0
+    # The ppg projection (project_elements_next_gws) drops some passthrough
+    # columns; re-attach raw minutes/starts by id so the pool + filters work on
+    # every basis (blend/xg already keep them).
+    for col in ("minutes", "starts"):
+        if col not in proj.columns and "id" in proj.columns and col in avail.columns:
+            src = pd.to_numeric(avail.set_index("id")[col], errors="coerce")
+            proj[col] = proj["id"].map(src).fillna(0)
+
+    # Player-level knowledge (news/injury): availability + return-GW + minutes.
+    # Picker-scoped; file entries merged with any per-request override.
+    pk_file = player_knowledge.load_player_knowledge()
+    pk = player_knowledge.merge_request(pk_file, p.get("player_knowledge"))
+    by_id, pk_notes = player_knowledge.resolve_keys(pk, proj)
+    notes.extend(pk_notes)
+    stale = player_knowledge.staleness_note(
+        pk.get("as_of"), getattr(config, "PLAYER_KNOWLEDGE_STALE_DAYS", 10))
+    if stale:
+        notes.append(stale)
+    proj = _apply_player_knowledge(proj, gws, by_id)
+    return proj, gw_start, horizon, gws, notes
+
+
+def build_squad_from_frames(elements, fixtures, teams_short, params):
+    p = {**DEFAULT_PARAMS, **(params or {})}
+    proj, gw_start, horizon, gws, notes = project_pool(elements, fixtures, teams_short, p)
 
     objective = str(p["objective"])
     budget_m = float(p["budget_m"])
@@ -188,14 +310,30 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
         else int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3)
     premium_floor, premium_positions, min_premium = _premium_params(p)
 
+    # Auto-build only: optionally cap price per player so the optimizer doesn't
+    # load up on premiums. The full pool (proj) is still used for the XI
+    # optimization, value menu, and the /players list -- only the draft market
+    # is capped.
+    draft_pool = proj
+    mpp = p.get("max_player_price")
+    if mpp is not None and float(mpp) > 0:
+        keep = pd.to_numeric(proj["price_m"], errors="coerce").fillna(0.0) <= float(mpp)
+        draft_pool = proj[keep].copy()
+        notes.append(f"Auto-build capped to players ≤ £{float(mpp):.1f}m.")
+        # No premium exists under the cap, so don't require one (the premium
+        # captaincy constraint would otherwise be unsatisfiable and the build
+        # would collapse to all-fodder, leaving budget unspent).
+        if float(mpp) < premium_floor:
+            min_premium = 0
+
     if objective == "free_hit":
         build = optimizer.build_free_hit_squad(
-            elements_all=proj, score_col=f"xpts_gw{gw_start}",
+            elements_all=draft_pool, score_col=f"xpts_gw{gw_start}",
             budget_m=budget_m, max_per_team=max_per_team)
     else:
         score_col = "wildcard_score" if objective == "wildcard" else f"xpts_gw{gw_start}"
         build = optimizer.build_chip_squad(
-            elements_all=proj, score_col=score_col, budget_m=budget_m,
+            elements_all=draft_pool, score_col=score_col, budget_m=budget_m,
             max_per_team=max_per_team, min_premium_attackers=min_premium,
             premium_floor=premium_floor, premium_positions=premium_positions)
 
@@ -258,6 +396,54 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
     }
 
 
+def gk_rotation_pairs(bootstrap, fixtures_raw, params=None, top_n=8):
+    """Rank pairs of NAILED starting goalkeepers from different teams by their
+    rotation value = sum over the horizon of the better of the two each GW
+    (start whichever is home / has the easier fixture). Complementary home/away
+    fixtures naturally score highest. Returns top pairs for the manual picker."""
+    p = {**DEFAULT_PARAMS, **(params or {})}
+    pool = player_pool(bootstrap, fixtures_raw, p)["players"]
+    _mm = p.get("gk_pair_min_minutes")
+    min_min = 1500.0 if _mm is None else float(_mm)  # 0 means no minimum
+    _mpc = p.get("gk_pair_budget")
+    max_pair_cost = 11.0 if _mpc is None else float(_mpc)
+    gks = [g for g in pool if g["pos"] == "GKP" and g["minutes"] >= min_min]
+    gks.sort(key=lambda g: -g["xpts_horizon"])
+
+    def _home_by_gw(g):
+        m = {}
+        for fx in g["fixtures"]:
+            m[fx["gw"]] = m.get(fx["gw"], False) or fx["home"]
+        return m
+
+    pairs = []
+    for i in range(len(gks)):
+        for j in range(i + 1, len(gks)):
+            a, b = gks[i], gks[j]
+            if a["team_id"] == b["team_id"]:
+                continue  # same team can't rotate
+            cost = a["price_m"] + b["price_m"]
+            if cost > max_pair_cost + 1e-6:
+                continue
+            n = min(len(a["xpts_per_gw"]), len(b["xpts_per_gw"]))
+            rot = sum(max(a["xpts_per_gw"][k], b["xpts_per_gw"][k]) for k in range(n))
+            ha, hb = _home_by_gw(a), _home_by_gw(b)
+            gw_keys = sorted(set(ha) | set(hb))
+            home_weeks = sum(1 for g in gw_keys if ha.get(g) or hb.get(g))
+            pairs.append({
+                "player_ids": [a["player_id"], b["player_id"]],
+                "names": [a["web_name"], b["web_name"]],
+                "teams": [a["team_short"], b["team_short"]],
+                "prices": [a["price_m"], b["price_m"]],
+                "combined_cost_m": round(cost, 1),
+                "rotation_xpts": round(rot, 2),
+                "home_weeks": home_weeks,
+                "gws": len(gw_keys),
+            })
+    pairs.sort(key=lambda x: (-x["rotation_xpts"], -x["home_weeks"], x["combined_cost_m"]))
+    return {"pairs": pairs[:int(top_n)]}
+
+
 def _next_gw(bootstrap):
     for e in bootstrap.get("events", []):
         if e.get("is_next"):
@@ -278,3 +464,213 @@ def build_squad(bootstrap, fixtures_raw, params=None):
     fixtures = transforms.fixtures_df(fixtures_raw)
     teams_short = teams.set_index("id")["short_name"].to_dict()
     return build_squad_from_frames(elements, fixtures, teams_short, p)
+
+
+def _pool_num(v, d=0.0):
+    n = pd.to_numeric(v, errors="coerce")
+    return d if pd.isna(n) else float(n)
+
+
+def _is_na(v):
+    if v is None:
+        return True
+    try:
+        return bool(pd.isna(v))
+    except (TypeError, ValueError):
+        return False
+
+
+def _team_fixture_map(fixtures, teams_short, gws):
+    """{team_id: [{gw, opp(short), home, diff}, ...]} over the horizon GWs."""
+    out = {}
+    for g in gws:
+        by_team = transforms.fixtures_by_team_for_gw(fixtures, int(g))
+        for tid, items in (by_team or {}).items():
+            for it in items:
+                out.setdefault(int(tid), []).append({
+                    "gw": int(g),
+                    "opp": teams_short.get(int(it["opp"]), "?"),
+                    "home": bool(it["is_home"]),
+                    "diff": int(it["diff"]),
+                })
+    return out
+
+
+def _pool_records(proj, gws, team_fixtures=None):
+    """One JSON-safe record per projected player, for the /players list."""
+    team_fixtures = team_fixtures or {}
+    out = []
+    for _, r in proj.iterrows():
+        tid = int(_pool_num(r.get("team"), 0))
+        fx = sorted(team_fixtures.get(tid, []), key=lambda x: x["gw"])
+        diffs = [f["diff"] for f in fx if f["diff"] > 0]
+        avg_diff = round(sum(diffs) / len(diffs), 2) if diffs else None
+        home_games = sum(1 for f in fx if f["home"])
+        out.append({
+            "player_id": int(r["id"]),
+            "web_name": r.get("web_name"),
+            "pos": r.get("pos"),
+            "team_short": r.get("team_short"),
+            "team_id": int(_pool_num(r.get("team"), 0)),
+            "price_m": _pool_num(r.get("price_m")),
+            "points_per_game": _pool_num(r.get("points_per_game")),
+            "total_points": _pool_num(r.get("total_points")),
+            "minutes": int(_pool_num(r.get("minutes"), 0)),
+            "starts": int(_pool_num(r.get("starts"), 0)),
+            "selected_by_percent": _pool_num(r.get("selected_by_percent")),
+            "xpts_horizon": _pool_num(r.get("xpts_horizon")),
+            "xpts_per_gw": [_pool_num(r.get(f"xpts_gw{g}")) for g in gws],
+            "fixtures": fx,
+            "avg_diff": avg_diff,
+            "home_games": home_games,
+            "pk_availability": (None if _is_na(r.get("pk_availability"))
+                                else float(r.get("pk_availability"))),
+            "pk_note": (None if _is_na(r.get("pk_note")) else str(r.get("pk_note"))),
+        })
+    return out
+
+
+def player_pool(bootstrap, fixtures_raw, params=None):
+    """Live wrapper: full projected player pool (no optimizer)."""
+    p = {**DEFAULT_PARAMS, **(params or {})}
+    if params is None or params.get("gw_start") is None:
+        p["gw_start"] = _next_gw(bootstrap)
+    elements, teams, _etypes = transforms.tables_from_bootstrap(bootstrap)
+    fixtures = transforms.fixtures_df(fixtures_raw)
+    teams_short = teams.set_index("id")["short_name"].to_dict()
+    proj, gw_start, horizon, gws, _notes = project_pool(elements, fixtures, teams_short, p)
+    team_fixtures = _team_fixture_map(fixtures, teams_short, gws)
+    return {
+        "gw_start": gw_start,
+        "horizon_gws": horizon,
+        "projection_basis": str(p["projection_basis"]),
+        "players": _pool_records(proj, gws, team_fixtures),
+    }
+
+
+POSITION_QUOTA = {"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3}
+
+
+def _validate_squad(picked, params):
+    """picked: pool rows filtered to the chosen ids. Returns a list of
+    human-readable violation strings ([] when the 15 is legal)."""
+    p = {**DEFAULT_PARAMS, **(params or {})}
+    budget_m = float(p["budget_m"])
+    max_per_team = int(p["max_per_team"]) if p["max_per_team"] is not None \
+        else int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3)
+    v = []
+    if len(picked) != 15:
+        v.append(f"Squad must have 15 players (has {len(picked)}).")
+    counts = picked["pos"].value_counts().to_dict()
+    for pos, need in POSITION_QUOTA.items():
+        have = int(counts.get(pos, 0))
+        if have != need:
+            v.append(f"{pos}: need {need}, have {have}.")
+    team_counts = picked["team"].value_counts()
+    for team_id, n in team_counts[team_counts > max_per_team].items():
+        v.append(f"More than {max_per_team} from team {int(team_id)} (has {int(n)}).")
+    cost = float(pd.to_numeric(picked.get("price_m"), errors="coerce").fillna(0.0).sum())
+    if cost > budget_m + 1e-6:
+        v.append(f"Over budget: £{cost:.1f}m > £{budget_m:.1f}m.")
+    return v
+
+
+def build_lineup(bootstrap, fixtures_raw, player_ids, params=None):
+    """Live wrapper: validate a chosen 15 + auto-optimize the XI. Legal squads
+    return a /build-shaped result with valid=True; illegal squads return
+    valid=False plus violations (HTTP-200 user-editing state, not an error)."""
+    p = {**DEFAULT_PARAMS, **(params or {})}
+    if params is None or params.get("gw_start") is None:
+        p["gw_start"] = _next_gw(bootstrap)
+    elements, teams, _etypes = transforms.tables_from_bootstrap(bootstrap)
+    fixtures = transforms.fixtures_df(fixtures_raw)
+    teams_short = teams.set_index("id")["short_name"].to_dict()
+    proj, gw_start, horizon, gws, notes = project_pool(elements, fixtures, teams_short, p)
+
+    ids = [int(x) for x in (player_ids or [])]
+    picked = proj[proj["id"].isin(ids)].copy()
+    known = set(int(x) for x in picked["id"].tolist())
+    missing = [i for i in ids if i not in known]
+    violations = _validate_squad(picked, p)
+    if missing:
+        violations.append(f"Unknown player ids: {missing}.")
+    if violations:
+        return {"ok": False, "valid": False, "violations": violations, "notes": notes}
+
+    squad_df = picked[["id", "pos", "team"]].rename(columns={"id": "player_id"})
+    fixed_formations = _parse_formation(p["formation"], notes)
+    objective = str(p.get("xi_objective") or "horizon")
+    if objective not in ("next_gw", "horizon", "per_gw"):
+        objective = "horizon"
+    lineup, per_gw_lineups = _optimize_xi(
+        squad_df, proj, gws, gw_start, objective, fixed_formations)
+    if (lineup is not None and fixed_formations is not None
+            and tuple(lineup["formation"]) not in [tuple(f) for f in fixed_formations]):
+        notes.append(f"Formation '{p['formation']}' not possible for this squad; used auto.")
+
+    disp = proj[[c for c in ["id", "web_name", "pos", "team_short", "price_m",
+                             "points_per_game", "xpts_horizon", f"xpts_gw{gw_start}"] if c in proj.columns]]
+    view = squad_df.merge(disp, left_on="player_id", right_on="id", how="left", suffixes=("", "_p"))
+    cost = float(pd.to_numeric(view.get("price_m"), errors="coerce").fillna(0.0).sum())
+    budget_m = float(p["budget_m"])
+    projected = _projected_points(lineup, proj, gws, gw_start)
+    result = {
+        "ok": True,
+        "valid": True,
+        "violations": [],
+        "notes": notes,
+        "gw_start": gw_start,
+        "horizon_gws": horizon,
+        "projection_basis": str(p["projection_basis"]),
+        "xi_objective": objective,
+        "formation": lineup["formation"] if lineup else None,
+        "captain_player_id": lineup["captain_player_id"] if lineup else None,
+        "vice_player_id": lineup["vice_player_id"] if lineup else None,
+        "budget_m": round(budget_m, 2),
+        "squad_cost_m": round(cost, 2),
+        "remaining_budget_m": round(max(0.0, budget_m - cost), 2),
+        "squad": view.to_dict("records"),
+        "starting_xi": lineup["starting_xi"].to_dict("records") if lineup else [],
+        "bench": lineup["bench"].to_dict("records") if lineup else [],
+        "projected_points": projected,
+    }
+    if per_gw_lineups is not None:
+        rotate_total = round(sum(r["total"] for r in per_gw_lineups), 2)
+        result["per_gw_lineups"] = per_gw_lineups
+        result["rotation_total"] = rotate_total
+        # how much re-picking the XI each GW beats keeping the opener's XI
+        result["rotation_gain"] = round(rotate_total - projected["horizon_total"], 2)
+    return result
+
+
+def build_transfer_plan(bootstrap, fixtures_raw, player_ids, params=None):
+    """Live wrapper: plan transfers for a chosen 15 across the fixture horizon
+    (1 FT/GW, bank up to ft_cap, roll-vs-use, -4 hits when worth it). Returns
+    {plan:[per-GW], total_net_gain, ...} or a validation error for a bad squad."""
+    p = {**DEFAULT_PARAMS, **(params or {})}
+    if params is None or params.get("gw_start") is None:
+        p["gw_start"] = _next_gw(bootstrap)
+    elements, teams, _etypes = transforms.tables_from_bootstrap(bootstrap)
+    fixtures = transforms.fixtures_df(fixtures_raw)
+    teams_short = teams.set_index("id")["short_name"].to_dict()
+    proj, gw_start, horizon, gws, notes = project_pool(elements, fixtures, teams_short, p)
+
+    ids = [int(x) for x in (player_ids or [])]
+    picked = proj[proj["id"].isin(ids)].copy()
+    violations = _validate_squad(picked, p)
+    missing = [i for i in ids if i not in set(int(x) for x in picked["id"].tolist())]
+    if missing:
+        violations.append(f"Unknown player ids: {missing}.")
+    if violations:
+        return {"ok": False, "valid": False, "violations": violations, "notes": notes}
+
+    cost = float(pd.to_numeric(picked["price_m"], errors="coerce").fillna(0.0).sum())
+    itb = max(0.0, float(p["budget_m"]) - cost)
+    plan = transfer_planner.plan_transfers(
+        proj, ids, gws, itb_m=itb,
+        start_ft=int(p.get("start_free_transfers") or 1),
+        ft_cap=int(p.get("ft_cap") or 5),
+        allow_hits=bool(p.get("allow_hits", True)))
+    plan.update({"ok": True, "valid": True, "gw_start": gw_start,
+                 "projection_basis": str(p["projection_basis"]), "notes": notes})
+    return plan

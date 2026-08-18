@@ -15,7 +15,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, league as league_mod, league_strategy, optimizer, projections, recommender, transforms
+from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, league as league_mod, league_strategy, manual_squad, optimizer, projections, recommender, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key
 from src.insights import (
     build_chip_profile,
@@ -72,6 +72,8 @@ def _csv_env(name):
 cors_origins = _csv_env("FPL_API_CORS_ORIGINS")
 if not cors_origins:
     cors_origins = [
+        # Vite dev server hops 8080 -> 8081 -> 8082 -> 8083 as ports get taken,
+        # so allow the whole range for both hosts.
         "http://localhost:8080",
         "http://127.0.0.1:8080",
         "http://localhost:8081",
@@ -254,6 +256,18 @@ def _default_optimize_event_id(bootstrap):
     return _event_id(bootstrap, "is_next") or _event_id(bootstrap, "is_current") or 1
 
 
+def _is_pre_first_deadline(bootstrap):
+    """
+    True before the very first deadline of the season — no gameweek is current yet
+    but a next one exists. In this window FPL grants unlimited free transfers and
+    allows no point hits, so the FT/-4 transfer framing doesn't apply.
+    """
+    return (
+        _event_id(bootstrap, "is_current") is None
+        and _event_id(bootstrap, "is_next") is not None
+    )
+
+
 def _max_event_id(bootstrap):
     try:
         ev_ids = [int(ev.get("id")) for ev in bootstrap.get("events", []) if ev.get("id") is not None]
@@ -309,6 +323,7 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
     myteam = None
     used_event_id = None
     last_err = None
+    my_team_ft = None
     for cand in candidates:
         try:
             myteam = fpl_client.get_entry_picks(entry_id, int(cand))
@@ -318,7 +333,61 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
             last_err = e
             continue
 
+    # Fallback for pre-first-deadline / pre-season: the public /event/{gw}/picks/
+    # endpoint 404s for every GW until picks lock, but the squad is readable via the
+    # authenticated /api/my-team/{entry}/ endpoint. If the manager configured browser
+    # auth (FPL_COOKIE, optionally FPL_BEARER), fetch the live squad directly.
+    cookie_error = None
     if not myteam or not used_event_id:
+        cookie = os.environ.get("FPL_COOKIE")
+        bearer = os.environ.get("FPL_BEARER")
+        if cookie or bearer:
+            try:
+                raw_my_team = fpl_client.get_entry_my_team(
+                    entry_id, cookie_header=cookie, bearer=bearer
+                )
+                planning_ev = next_event_id or current_event_id or 1
+                myteam = fpl_client.normalize_my_team(raw_my_team, int(planning_ev))
+                used_event_id = int(planning_ev)
+                my_team_ft = myteam.get("_free_transfers")
+                notes.append(
+                    "Squad loaded from your authenticated FPL account "
+                    "(live pre-deadline team)."
+                )
+            except Exception as e:
+                cookie_error = e
+                last_err = e
+                logger.warning("Authenticated my-team fetch failed: %s", e)
+
+    # Final fallback: a manually-imported squad (no auth). Lets a manager see and
+    # work their pre-season XV before any GW locks, without cookies.
+    if not myteam or not used_event_id:
+        manual = manual_squad.load_manual_squad(entry_id)
+        if manual:
+            try:
+                planning_ev = next_event_id or current_event_id or 1
+                myteam = manual_squad.build_manual_myteam(
+                    elements,
+                    manual.get("player_ids") or [],
+                    captain_id=manual.get("captain_id"),
+                    vice_id=manual.get("vice_id"),
+                    planning_event_id=int(planning_ev),
+                )
+                used_event_id = int(planning_ev)
+                notes.append("Squad loaded from your manual pre-season import.")
+            except Exception as e:
+                last_err = e
+
+    if not myteam or not used_event_id:
+        # A cookie/bearer was configured but the authenticated fetch failed — surface
+        # the real reason (401/403/bot-block/non-JSON) instead of the generic
+        # "not available yet" message, which would hide the actual problem.
+        if cookie_error is not None:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Authenticated FPL fetch failed: {cookie_error}",
+            )
+
         # Pre-season / pre-first-deadline: FPL publishes no public entry picks until
         # a gameweek locks, so /event/{gw}/picks/ 404s for every GW (and prior-season
         # history is wiped at rollover). Surface a clear message instead of a raw
@@ -373,6 +442,14 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
                 derived_free_transfers = 1
         except Exception:
             pass  # keep default of 1
+
+    # Authenticated my-team reports the real free-transfer count directly; it beats
+    # the event_transfers heuristic (which wrongly infers a banked FT pre-season).
+    if my_team_ft is not None:
+        try:
+            derived_free_transfers = int(my_team_ft)
+        except (TypeError, ValueError):
+            pass
 
     squad_df = transforms.picks_to_df(myteam, elements)
     if squad_df is None or squad_df.empty:
@@ -453,6 +530,146 @@ def build_squad(payload):
     }
 
 
+def optimize_squad(payload):
+    """
+    "Improve my team" optimizer for the pre-deadline window (unlimited free
+    transfers, no hits). Repeatedly applies the best beneficial free swaps until
+    no swap clears `min_gain`, then reports the NET in/out diff and the change in
+    projected starting-XI points. Optionally persists the result as the squad.
+
+    Anchored to the current squad — it only swaps players that raise projected
+    points; it does not rebuild from scratch.
+    """
+    entry_id = payload.get("entry_id") or os.environ.get("FPL_ENTRY_ID")
+    horizon_gws = max(1, int(safe_int(payload.get("horizon_gws")) or 3))
+    min_gain = float(payload.get("min_gain") if payload.get("min_gain") is not None else 1.0)
+    max_rounds = max(1, int(safe_int(payload.get("max_rounds")) or 10))
+    # Cap on total changes ("improve my team" vs full rebuild). None = unlimited.
+    max_swaps = safe_int(payload.get("max_swaps"))
+    apply_result = parse_bool(payload.get("apply"), default=False)
+
+    ctx = load_fpl_context(entry_id, payload.get("squad_event_id"), with_fixtures=True)
+    entry_id = ctx["entry_id"]
+    bootstrap = ctx["bootstrap"]
+    elements = ctx["elements"]
+    teams_short = ctx["teams_short"]
+    fixtures = ctx["fixtures"]
+    squad_df = ctx["squad_df"]
+    itb_m = ctx.get("derived_itb_m") or 0.0
+
+    optimize_event_id = _default_optimize_event_id(bootstrap)
+    latest_n = getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3)
+    proj_all = projections.project_elements_next_gws(
+        elements=elements, fixtures=fixtures, teams_short_map=teams_short,
+        gw_start=int(optimize_event_id), horizon_gws=horizon_gws, latest_n_matches=latest_n,
+    )
+    proj_by_id = {}
+    if proj_all is not None and not proj_all.empty:
+        for r in proj_all.itertuples():
+            proj_by_id[int(getattr(r, "id"))] = {
+                "xpts_horizon": float(getattr(r, "xpts_horizon", 0.0) or 0.0),
+            }
+
+    def xi_points(sq):
+        # Measure on the SAME horizon basis the swaps optimize for (xpts_horizon),
+        # else the before/after metric is non-monotonic vs the number of swaps.
+        try:
+            res = optimizer.optimize_lineup(sq, proj_all, score_col="xpts_horizon")
+            return round(float(res.get("projected_points_with_captain") or 0.0), 1)
+        except Exception:
+            return None
+
+    orig_ids = [int(x) for x in pd.to_numeric(squad_df["player_id"], errors="coerce").dropna().astype(int).tolist()]
+    xpts_before = xi_points(squad_df)
+
+    cur_squad = squad_df.copy()
+    cur_itb = float(itb_m)
+    rounds = 0
+    applied_moves = 0
+    engine_cap = int(getattr(config, "TRANSFER_MAX_MOVES", 5))
+    for _ in range(max_rounds):
+        # Per round, request at most the remaining allowance (budget-feasible set).
+        remaining = engine_cap if max_swaps is None else max(0, int(max_swaps) - applied_moves)
+        if remaining <= 0:
+            break
+        preview = recommender.suggest_transfers(
+            squad_df=cur_squad, elements_all=proj_all, itb_m=cur_itb,
+            free_transfers=min(engine_cap, remaining), hit_cap=0,
+            score_col="xpts_horizon", horizon_gws=horizon_gws,
+        )
+        moves = [m for m in (preview.get("moves") or []) if float(m.get("score_gain") or 0.0) >= min_gain]
+        if not moves:
+            break
+        new_squad, stats = apply_transfer_moves_to_squad(cur_squad, moves, elements)
+        if stats.get("applied", 0) == 0:
+            break
+        cur_squad = new_squad
+        cur_itb = float(preview.get("remaining_itb", cur_itb))
+        applied_moves += int(stats.get("applied", 0))
+        rounds += 1
+
+    final_ids = [int(x) for x in pd.to_numeric(cur_squad["player_id"], errors="coerce").dropna().astype(int).tolist()]
+    xpts_after = xi_points(cur_squad)
+
+    # Net diff, paired by position for a clean out->in list.
+    el_idx = elements.set_index("id")
+    def _meta(pid):
+        if pid in el_idx.index:
+            row = el_idx.loc[pid]
+            return {
+                "id": pid,
+                "name": str(row.get("web_name")),
+                "pos": str(row.get("pos")),
+                "team": str(row.get("team_short")),
+                "price": round(float(row.get("now_cost", 0)) / 10.0, 1),
+                "xpts_horizon": round(proj_by_id.get(pid, {}).get("xpts_horizon", 0.0), 2),
+            }
+        return {"id": pid}
+
+    # Net diff, paired within a position by xP rank for a readable out->in list.
+    # NOTE: no per-swap "gain" — the moves are a budget-coupled SET (a cheap
+    # downgrade can fund a premium elsewhere), so only the squad-level total is
+    # meaningful. Attributing gain to individual pairs would misrepresent it.
+    removed = [p for p in orig_ids if p not in set(final_ids)]
+    added = [p for p in final_ids if p not in set(orig_ids)]
+    swaps = []
+    for pos in ("GKP", "DEF", "MID", "FWD"):
+        outs = sorted((_meta(p) for p in removed if _meta(p).get("pos") == pos),
+                      key=lambda m: m.get("xpts_horizon", 0.0), reverse=True)
+        ins = sorted((_meta(p) for p in added if _meta(p).get("pos") == pos),
+                     key=lambda m: m.get("xpts_horizon", 0.0), reverse=True)
+        for o, i in zip(outs, ins):
+            swaps.append({"position": pos, "out": o, "in": i})
+
+    applied = False
+    cap = vice = None
+    if final_ids:
+        ranked = sorted(final_ids, key=lambda p: proj_by_id.get(p, {}).get("xpts_horizon", 0.0), reverse=True)
+        cap = ranked[0] if ranked else None
+        vice = ranked[1] if len(ranked) > 1 else None
+    if apply_result and len(set(final_ids)) == 15:
+        manual_squad.save_manual_squad(entry_id, final_ids, captain_id=cap, vice_id=vice)
+        applied = True
+
+    return {
+        "entry_id": int(entry_id),
+        "horizon_gws": horizon_gws,
+        "min_gain": min_gain,
+        "max_swaps": int(max_swaps) if max_swaps is not None else None,
+        "rounds": int(rounds),
+        "num_swaps": len(swaps),
+        "swaps": swaps,
+        "xpts_before": xpts_before,
+        "xpts_after": xpts_after,
+        "total_gain": round((xpts_after - xpts_before), 1) if (xpts_before is not None and xpts_after is not None) else None,
+        "remaining_itb": round(cur_itb, 1),
+        "optimized_player_ids": final_ids,
+        "suggested_captain_id": cap,
+        "suggested_vice_id": vice,
+        "applied": applied,
+    }
+
+
 def build_recommendations(payload):
     total_start = time.perf_counter()
     timings = {}
@@ -494,7 +711,18 @@ def build_recommendations(payload):
     if not itb_m_explicit and ctx.get("derived_itb_m") is not None:
         itb_m = ctx["derived_itb_m"]
         notes.append(f"Using bank from FPL: £{itb_m:.1f}m.")
-    if not free_transfers_explicit and ctx.get("derived_free_transfers") is not None:
+    # Before the first deadline of the season you have unlimited free transfers and
+    # cannot take hits — so the FT/-4 framing doesn't apply. Reframe the transfer
+    # preview as "best free upgrades to your squad" (capped at the engine's max moves).
+    pre_first_deadline = _is_pre_first_deadline(ctx["bootstrap"])
+    if pre_first_deadline and not free_transfers_explicit:
+        free_transfers = config.TRANSFER_MAX_MOVES
+        hit_cap = 0
+        notes.append(
+            "Pre-season: unlimited free transfers until the GW1 deadline — "
+            "showing the best free upgrades to your squad (no point hits)."
+        )
+    elif not free_transfers_explicit and ctx.get("derived_free_transfers") is not None:
         free_transfers = ctx["derived_free_transfers"]
         notes.append(f"Using free transfers from FPL: {free_transfers}.")
 
@@ -818,7 +1046,11 @@ def build_recommendations(payload):
         "bench": bench_records,
         "position_panels": position_panels,
         "active_chip": ctx.get("myteam", {}).get("active_chip"),
-        "squad_source": "chip_draft" if chip_info.get("is_active") else "entry_picks",
+        "pre_first_deadline": bool(pre_first_deadline),
+        "squad_source": (
+            "manual" if (ctx.get("myteam") or {}).get("_source") == "manual"
+            else "chip_draft" if chip_info.get("is_active") else "entry_picks"
+        ),
         "chip_strategy": chip_info,
         "history_context": history_context,
         "scoring_guide": build_scoring_guide(
@@ -861,6 +1093,19 @@ def build_recommendations(payload):
     timings["transfer_preview_ms"] = elapsed_ms(ts)
     if include_transfers:
         out["transfers"] = transfer_preview
+
+    # Additive: a multi-GW roll/bank plan across the horizon (the single-GW
+    # `transfers` above never sequences GWs or accounts for the -4 hit). Uses
+    # the real squad, bank and free-transfer count. Never breaks the response.
+    if include_transfers and not chip_info.get("is_active"):
+        try:
+            _squad_ids = [int(x) for x in squad_df["player_id"].tolist()]
+            out["transfer_plan_horizon"] = transfer_planner.plan_transfers(
+                proj_all, _squad_ids, gws,
+                itb_m=safe_float(itb_m, default=0.0) or 0.0,
+                start_ft=int(free_transfers_value), ft_cap=5, allow_hits=True)
+        except Exception as e:  # noqa: BLE001 - planning must never fail the recommendation
+            logger.warning("horizon transfer plan failed: %s", e)
 
     ts = time.perf_counter()
     moves = transfer_preview.get("moves") if isinstance(transfer_preview, dict) else []
@@ -1062,6 +1307,80 @@ def squad_post(
     if err:
         return err
     out = build_squad(payload)
+    return JSONResponse(content=jsonable_encoder(out))
+
+
+@app.post("/squad/manual")
+def squad_manual_post(
+    payload=Body(None),
+    api_key=None, x_api_key=Header(None), authorization=Header(None),
+):
+    """
+    Import a squad manually (no FPL login) for the pre-first-deadline window.
+    Body: {entry_id, player_ids: [15 element ids], captain_id?, vice_id?}.
+    Validates composition/budget, persists it, and returns the rendered squad.
+    """
+    payload = payload or {}
+    err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key or payload.get("api_key"))
+    if err:
+        return err
+
+    entry_id = safe_int(payload.get("entry_id") or os.environ.get("FPL_ENTRY_ID"))
+    if not entry_id:
+        raise HTTPException(status_code=400, detail="Missing/invalid entry_id.")
+    player_ids = payload.get("player_ids") or []
+    captain_id = payload.get("captain_id")
+    vice_id = payload.get("vice_id")
+
+    bootstrap = get_bootstrap_cached()
+    elements, _teams, _ = transforms.tables_from_bootstrap(bootstrap)
+    planning_ev = _event_id(bootstrap, "is_next") or _event_id(bootstrap, "is_current") or 1
+
+    # Validate by attempting the build; surface a clean 400 on illegal selections.
+    try:
+        manual_squad.build_manual_myteam(
+            elements, player_ids, captain_id=captain_id,
+            vice_id=vice_id, planning_event_id=int(planning_ev),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    manual_squad.save_manual_squad(entry_id, player_ids, captain_id=captain_id, vice_id=vice_id)
+    out = build_squad({"entry_id": entry_id})
+    return JSONResponse(content=jsonable_encoder(out))
+
+
+@app.delete("/squad/manual")
+def squad_manual_delete(
+    entry_id=None,
+    api_key=None, x_api_key=Header(None), authorization=Header(None),
+):
+    """Remove a saved manual squad (e.g. once the real public fetch takes over)."""
+    err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
+    if err:
+        return err
+    entry_id = safe_int(entry_id or os.environ.get("FPL_ENTRY_ID"))
+    if not entry_id:
+        raise HTTPException(status_code=400, detail="Missing/invalid entry_id.")
+    removed = manual_squad.clear_manual_squad(entry_id)
+    return JSONResponse(content={"entry_id": int(entry_id), "removed": bool(removed)})
+
+
+@app.post("/squad/optimize")
+def squad_optimize_post(
+    payload=Body(None),
+    api_key=None, x_api_key=Header(None), authorization=Header(None),
+):
+    """
+    "Improve my team" — apply all beneficial free swaps at once (pre-deadline).
+    Body: {entry_id, horizon_gws?, min_gain?, apply?}. Returns the net in/out diff
+    and projected-points change; with apply=true, persists the optimized squad.
+    """
+    payload = payload or {}
+    err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key or payload.get("api_key"))
+    if err:
+        return err
+    out = optimize_squad(payload)
     return JSONResponse(content=jsonable_encoder(out))
 
 

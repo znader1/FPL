@@ -26,6 +26,7 @@ def _synthetic_elements():
                 "minutes": 90 if mirage else (1500 + i * 200),
                 "starts": 1 if mirage else (18 + i),
                 "selected_by_percent": "5.0", "penalties_order": None,
+                "total_points": 40 + i * 10,
                 "expected_goals_per_90": 0.2, "expected_assists_per_90": 0.1,
                 "expected_goal_involvements_per_90": 0.3,
                 "expected_goals_conceded_per_90": 1.0, "saves_per_90": 1.5,
@@ -180,3 +181,84 @@ def test_build_squad_xg_basis_via_bootstrap():
     assert len(squad) == 15
     counts = squad["pos"].value_counts().to_dict()
     assert counts == {"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3}
+
+
+def test_project_pool_returns_projected_columns():
+    from src import squad_draft, transforms
+    b, f = _minimal_bootstrap(), _minimal_fixtures_raw()
+    elements, teams, _ = transforms.tables_from_bootstrap(b)
+    fixtures = transforms.fixtures_df(f)
+    teams_short = teams.set_index("id")["short_name"].to_dict()
+    proj, gw_start, horizon, gws, notes = squad_draft.project_pool(
+        elements, fixtures, teams_short,
+        {**squad_draft.DEFAULT_PARAMS, "gw_start": 1, "horizon_gws": 5,
+         "projection_basis": "ppg"})
+    assert horizon == 5 and gws == [1, 2, 3, 4, 5]
+    for col in ["id", "pos", "price_m", "total_points", "xpts_horizon", "xpts_gw1"]:
+        assert col in proj.columns
+    assert (proj["xpts_horizon"] >= 0).all()
+
+
+def test_project_pool_preseason_uses_full_ppg():
+    from src import squad_draft, projections, transforms
+    b, f = _minimal_bootstrap(), _minimal_fixtures_raw()
+    elements, teams, _ = transforms.tables_from_bootstrap(b)
+    fixtures = transforms.fixtures_df(f)
+    ts = teams.set_index("id")["short_name"].to_dict()
+    params = {**squad_draft.DEFAULT_PARAMS, "gw_start": 1, "horizon_gws": 5,
+              "projection_basis": "ppg"}
+    proj, _gw, *_ = squad_draft.project_pool(elements, fixtures, ts, params)
+    # Same availability-filtered pool projected with the DEFAULT 0.55/0.45 blend.
+    avail = squad_draft._apply_minutes_shrink(
+        squad_draft._filter_availability(elements, False, 0), 500.0)
+    default_proj = projections.project_elements_next_gws(
+        elements=avail, fixtures=fixtures, teams_short_map=ts,
+        gw_start=1, horizon_gws=5, fdr_strength=1.0)
+    a = proj.set_index("id")["xpts_gw1"]
+    d = default_proj.set_index("id")["xpts_gw1"]
+    # Pre-season (form==0) => full ppg weight => >= default everywhere, > for some.
+    assert (a.loc[d.index] >= d - 1e-9).all()
+    assert (a.loc[d.index] > d + 1e-9).any()
+
+
+def test_home_away_strength_shifts_projection():
+    els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
+    off = squad_draft.build_squad_from_frames(els, fx, ts,
+        {"gw_start": 1, "horizon_gws": 5, "home_away_strength": 0.0})
+    amp = squad_draft.build_squad_from_frames(els, fx, ts,
+        {"gw_start": 1, "horizon_gws": 5, "home_away_strength": 3.0})
+    off_gw = [g["total"] for g in off["projected_points"]["per_gw"]]
+    amp_gw = [g["total"] for g in amp["projected_points"]["per_gw"]]
+    assert off_gw != amp_gw  # amplifying the home/away swing must move per-GW totals
+
+
+def test_max_player_price_caps_auto_build():
+    els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
+    res = squad_draft.build_squad_from_frames(els, fx, ts,
+        {"gw_start": 1, "horizon_gws": 5, "budget_m": 100.0, "max_player_price": 6.0})
+    assert res["ok"] is True, res.get("reason")
+    prices = [float(p["price_m"]) for p in res["squad"]]
+    assert max(prices) <= 6.0 + 1e-6, max(prices)
+
+
+def test_player_knowledge_return_gw_and_minutes():
+    els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
+    pid = int(els[els["web_name"] == "MID7"].iloc[0]["id"])
+    params = {**squad_draft.DEFAULT_PARAMS, "gw_start": 1, "horizon_gws": 5,
+              "player_knowledge": {"players": {str(pid): {"available_from_gw": 3, "minutes_mult": 0.5}}}}
+    proj, _g, _h, gws, notes = squad_draft.project_pool(els, fx, ts, params)
+    row = proj[proj["id"] == pid].iloc[0]
+    assert row["xpts_gw1"] == 0.0 and row["xpts_gw2"] == 0.0  # out before GW3
+    assert row["xpts_gw3"] > 0.0
+    assert row["pk_availability"] == 0.0  # min over horizon (GW1 out)
+    # a different player is untouched
+    other = proj[proj["web_name"] == "MID6"].iloc[0]
+    assert other["xpts_gw1"] > 0.0
+
+
+def test_player_knowledge_unknown_key_notes():
+    els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
+    params = {**squad_draft.DEFAULT_PARAMS, "gw_start": 1, "horizon_gws": 5,
+              "player_knowledge": {"players": {"NoSuchPlayer": {"availability": 0.0}}}}
+    _proj, _g, _h, _gws, notes = squad_draft.project_pool(els, fx, ts, params)
+    assert any("NoSuchPlayer" in n for n in notes)

@@ -199,6 +199,18 @@ FDR_RATING_MIN = 0.50                # clamp on attack/defense rating multiplier
 FDR_RATING_MAX = 1.80
 FDR_LEAGUE_AVG_XG_FALLBACK = 1.40    # per-team per-match league-average xG when data is thin
 FDR_KNOWLEDGE_DISCOUNT_PATH = "data/models/knowledge_discount.json"
+# Player-level knowledge (news/injury) for the squad picker.
+PLAYER_KNOWLEDGE_PATH = "data/models/player_knowledge.json"
+PLAYER_KNOWLEDGE_STALE_DAYS = 10
+
+# News corpus (Approach B: RSS refresh routine -> news_digest reads this dir).
+NEWS_KB_DIR = "kb/auto/news"
+NEWS_MAX_AGE_DAYS = 14   # digest only items this fresh; prune older md
+NEWS_FEEDS = [           # RSS sources (verified live 2026-07-26)
+    {"source": "sportsmole.co.uk", "url": "https://www.sportsmole.co.uk/football/rss.xml"},
+    {"source": "football-talk.co.uk", "url": "https://football-talk.co.uk/feed/"},
+    {"source": "betting.betfair.com", "url": "https://betting.betfair.com/football/rss.xml"},
+]
 
 # Cross-season carryover (season-start cold start). At a new season's launch there
 # is no current-season xG, so ratings start from the prior season's frozen seed
@@ -243,6 +255,10 @@ OUTPUT_GOALS_CONCEDED_PENALTY_PER_2 = {"GKP": -1.0, "DEF": -1.0, "MID": 0.0, "FW
 OUTPUT_SAVES_PER_XGA = 2.0           # rough expected saves per unit opponent xG (GKP)
 OUTPUT_SAVE_POINTS_PER_SAVE = 1.0 / 3.0
 OUTPUT_BONUS_PER_XGI = 0.9           # rough bonus points per expected goal involvement
+# Defensive bonus: BPS from clean sheets, clearances, blocks, recoveries earns
+# defenders/keepers bonus that attacking xGI misses. Bonus points per expected
+# clean sheet, by position (0 for FWD).
+OUTPUT_CS_BONUS_PER_CS = {"GKP": 1.0, "DEF": 1.2, "MID": 0.3, "FWD": 0.0}
 OUTPUT_POSITION_BASE_XG90 = {"GKP": 0.01, "DEF": 0.06, "MID": 0.12, "FWD": 0.30}
 OUTPUT_POSITION_BASE_XA90 = {"GKP": 0.01, "DEF": 0.06, "MID": 0.14, "FWD": 0.16}
 OUTPUT_MAX_GOALS_PER_GAME = 2.5      # sanity clamp on a single player's expected goals

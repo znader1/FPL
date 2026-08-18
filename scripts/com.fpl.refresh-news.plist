@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Durable daily FPL news refresh (Approach B). Runs scripts/refresh_news.py at
+  06:07 local, whether or not Claude/your terminal is open. Loads .env for the
+  Claude key itself; PL-filters + prunes stale md.
+
+  Install (from the FPL repo root, AFTER merging the branch so the script + config
+  exist on main):
+    mkdir -p logs
+    cp scripts/com.fpl.refresh-news.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.fpl.refresh-news.plist
+  Run once now to test:  launchctl start com.fpl.refresh-news
+  Watch:                 tail -f logs/refresh_news.log
+  Uninstall:             launchctl unload ~/Library/LaunchAgents/com.fpl.refresh-news.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.fpl.refresh-news</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/ziadnader/05_Projects/Tech/FPL-Assistant/FPL/.venv/bin/python</string>
+    <string>scripts/refresh_news.py</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/ziadnader/05_Projects/Tech/FPL-Assistant/FPL</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONPATH</key>
+    <string>.</string>
+  </dict>
+
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>6</integer>
+    <key>Minute</key>
+    <integer>7</integer>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/ziadnader/05_Projects/Tech/FPL-Assistant/FPL/logs/refresh_news.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/ziadnader/05_Projects/Tech/FPL-Assistant/FPL/logs/refresh_news.err</string>
+</dict>
+</plist>

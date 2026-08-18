@@ -10,6 +10,8 @@ router = APIRouter(prefix="/squad-picker", tags=["squad-picker"])
 
 KNOWLEDGE_PATH = getattr(config, "FDR_KNOWLEDGE_DISCOUNT_PATH",
                          "data/models/knowledge_discount.json")
+PLAYER_KNOWLEDGE_PATH = getattr(config, "PLAYER_KNOWLEDGE_PATH",
+                                "data/models/player_knowledge.json")
 
 
 def _sanitize(obj):
@@ -39,6 +41,113 @@ def build(params: dict):
     return _sanitize(result)
 
 
+@router.post("/players")
+def players(params: dict):
+    try:
+        bootstrap = fpl_client.get_bootstrap()
+        fixtures_raw = fpl_client.get_fixtures()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Live FPL fetch failed: {e}")
+    try:
+        result = squad_draft.player_pool(bootstrap, fixtures_raw, params or {})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Player pool failed: {e}")
+    return _sanitize(result)
+
+
+@router.post("/lineup")
+def lineup(payload: dict):
+    try:
+        bootstrap = fpl_client.get_bootstrap()
+        fixtures_raw = fpl_client.get_fixtures()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Live FPL fetch failed: {e}")
+    try:
+        result = squad_draft.build_lineup(
+            bootstrap, fixtures_raw,
+            payload.get("player_ids", []), payload.get("params", {}))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lineup failed: {e}")
+    return _sanitize(result)
+
+
+@router.post("/transfer-plan")
+def transfer_plan(payload: dict):
+    try:
+        bootstrap = fpl_client.get_bootstrap()
+        fixtures_raw = fpl_client.get_fixtures()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Live FPL fetch failed: {e}")
+    try:
+        result = squad_draft.build_transfer_plan(
+            bootstrap, fixtures_raw,
+            payload.get("player_ids", []), payload.get("params", {}))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Transfer plan failed: {e}")
+    return _sanitize(result)
+
+
+@router.post("/gk-pairs")
+def gk_pairs(params: dict):
+    try:
+        bootstrap = fpl_client.get_bootstrap()
+        fixtures_raw = fpl_client.get_fixtures()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Live FPL fetch failed: {e}")
+    try:
+        result = squad_draft.gk_rotation_pairs(bootstrap, fixtures_raw, params or {})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"GK pairs failed: {e}")
+    return _sanitize(result)
+
+
+@router.post("/digest-news")
+def digest_news(params: dict):
+    try:
+        bootstrap = fpl_client.get_bootstrap()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Live FPL fetch failed: {e}")
+    from src import news_digest, transforms
+    try:
+        elements, _teams, _ = transforms.tables_from_bootstrap(bootstrap)
+        current_gw = squad_draft._next_gw(bootstrap)
+        # A: live first-party injury/availability signal (no LLM, always runs)
+        boot = news_digest.digest_bootstrap_news(
+            elements, bootstrap.get("events", []), current_gw=current_gw)
+        # B: narrative/rotation from the digested news corpus (LLM per match)
+        articles = news_digest.load_news_articles((params or {}).get("kb_dir"))
+        idx = news_digest.index_by_player(articles, elements)
+        article_props = news_digest.propose_player_knowledge(
+            idx, elements, current_gw=current_gw)
+        # bootstrap wins on conflict; articles add players it doesn't flag
+        proposals = news_digest.merge_proposals(article_props, boot)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"News digest failed: {e}")
+    return _sanitize({
+        "proposals": proposals,
+        "article_count": len(articles),
+        "matched_players": len(idx),
+        "bootstrap_flags": len(boot["players"]),
+    })
+
+
+@router.post("/team-news")
+def team_news(params: dict):
+    try:
+        bootstrap = fpl_client.get_bootstrap()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Live FPL fetch failed: {e}")
+    from src import news_digest, transforms
+    try:
+        elements, _teams, _ = transforms.tables_from_bootstrap(bootstrap)
+        current_gw = squad_draft._next_gw(bootstrap)
+        result = news_digest.team_news_rollup(
+            elements, bootstrap.get("events", []), current_gw=current_gw)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Team news failed: {e}")
+    return _sanitize(result)
+
+
 @router.get("/knowledge")
 def get_knowledge():
     try:
@@ -46,6 +155,25 @@ def get_knowledge():
             return json.load(f)
     except FileNotFoundError:
         return {"as_of": None, "teams": {}}
+
+
+@router.get("/player-knowledge")
+def get_player_knowledge():
+    try:
+        with open(PLAYER_KNOWLEDGE_PATH) as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {"as_of": None, "players": {}}
+
+
+@router.post("/player-knowledge")
+def save_player_knowledge(payload: dict):
+    import os
+    data = {"as_of": payload.get("as_of"), "players": payload.get("players", {})}
+    os.makedirs(os.path.dirname(PLAYER_KNOWLEDGE_PATH) or ".", exist_ok=True)
+    with open(PLAYER_KNOWLEDGE_PATH, "w") as f:
+        json.dump(data, f, indent=2)
+    return data
 
 
 @router.post("/knowledge")
