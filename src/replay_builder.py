@@ -4,10 +4,11 @@ Reuses the leak-safe walk-forward engine (Vaastav data via backtest_adapter).
 No network, no FastAPI."""
 import pandas as pd
 
-from src import projections, ownership_ev, backtest_data
+from src import projections, ownership_ev, backtest_data, captain_advisor
 from src.backtest_adapter import build_engine_inputs
 
 POS_NAME = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
+_VAASTAV_POS = {"GKP": "GKP", "GK": "GKP", "DEF": "DEF", "MID": "MID", "FWD": "FWD"}
 
 
 def optimal_captain(squad_ids, actuals):
@@ -40,11 +41,50 @@ def model_projection(gw, season="2025-26", horizon=3):
 
 
 def _model_captain(squad_ids, proj):
-    """Highest model_xpts player among the squad."""
+    """Highest model_xpts player among the squad (naive; kept as fallback)."""
     in_squad = proj[proj["player_id"].isin([int(x) for x in squad_ids])]
     if in_squad.empty:
         return None
     return int(in_squad.loc[in_squad["model_xpts"].idxmax(), "player_id"])
+
+
+def _advisor_model_captain(squad_ids, proj, season, gw):
+    """Captain the squad the way the real app does — via captain_advisor, which
+    applies position-ceiling multipliers + a premium price bonus (favours
+    premium MID/FWD over cheap high-EV picks). Falls back to naive max on any
+    data gap."""
+    from pathlib import Path
+    ids = [int(x) for x in squad_ids]
+    gwf = Path("data/vaastav") / season / "gws" / f"gw{int(gw)}.csv"
+    if not ids or not gwf.exists():
+        return _model_captain(squad_ids, proj)
+    meta = pd.read_csv(gwf)[["element", "position", "value"]].drop_duplicates("element")
+    meta["player_id"] = meta["element"].astype(int)
+    meta["pos"] = meta["position"].map(_VAASTAV_POS)
+    meta["price_m"] = pd.to_numeric(meta["value"], errors="coerce") / 10.0
+    df = (pd.DataFrame({"player_id": ids})
+          .merge(proj, on="player_id", how="left")
+          .merge(meta[["player_id", "pos", "price_m"]], on="player_id", how="left"))
+    df["xpts"] = df["model_xpts"].fillna(0.0)
+    df["fixture_count"] = 1
+    df["name"] = df["player_id"]
+    df["team"] = ""
+    df = df.dropna(subset=["pos"])
+    if df.empty:
+        return _model_captain(squad_ids, proj)
+    return int(captain_advisor.pick_captain_id(df))
+
+
+def _season_name_map(season, base="data/vaastav"):
+    """element id -> web_name for the whole season (covers sold players too)."""
+    from pathlib import Path
+    path = Path(base) / season / "players_raw.csv"
+    if not path.exists():
+        return {}
+    df = pd.read_csv(path)
+    if "id" not in df.columns or "web_name" not in df.columns:
+        return {}
+    return {int(i): str(n) for i, n in zip(df["id"], df["web_name"])}
 
 
 def build_gw_record(gw, season, entry_snapshot, horizon=3):
@@ -85,13 +125,28 @@ def build_gw_record(gw, season, entry_snapshot, horizon=3):
          "actual_points": int(r.total_points)}
         for r in merged.itertuples()
     ]
-    record["model_captain"] = _model_captain(squad_ids, proj)
+    record["model_captain"] = _advisor_model_captain(squad_ids, proj, season, gw)
     record["optimal_captain"] = optimal_captain(squad_ids, actuals)
 
     ownership = _gw_global_ownership(gw, season)
     record["sp2_candidates"] = _sp2_candidates(gw, season, proj, actuals, ownership)
     # Suggested transfer: best single upgrade in the squad's weakest slot by model xPts.
     record["suggested_transfer"] = _suggest_transfer(squad_ids, proj)
+
+    # element id -> web_name for every id the UI can render this GW: your squad,
+    # captains, the suggested transfer, SP2 candidates, and your actual transfer.
+    name_map = _season_name_map(season)
+    referenced = set(int(x) for x in squad_ids)
+    referenced.update(x for x in (record["model_captain"], record["optimal_captain"]) if x)
+    if record["suggested_transfer"]:
+        referenced.update([record["suggested_transfer"]["sell"], record["suggested_transfer"]["buy"]])
+    referenced.update(c["element"] for c in record["sp2_candidates"])
+    your_tf = gw_entry.get("transfers") or {}
+    referenced.update(int(x) for x in (your_tf.get("in") or []))
+    referenced.update(int(x) for x in (your_tf.get("out") or []))
+    if gw_entry.get("captain"):
+        referenced.add(int(gw_entry["captain"]))
+    record["names"] = {int(pid): name_map.get(int(pid), f"#{int(pid)}") for pid in referenced}
     return record
 
 

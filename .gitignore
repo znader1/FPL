@@ -38,3 +38,5 @@ data/models/*
 # Misc
 *.db
 kb/
+# Personal GW-replay snapshots (never commit — contains personal entry data)
+data/replay/
