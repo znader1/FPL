@@ -69,7 +69,7 @@ def rates_from_bootstrap(elements):
     })
 
 
-def minutes_from_bootstrap(elements):
+def minutes_from_bootstrap(elements, season_matches=None):
     """
     Cold-start minutes projection from the bootstrap's carried-over
     last-season ``minutes``/``starts`` totals (proxy for
@@ -89,8 +89,18 @@ def minutes_from_bootstrap(elements):
     mins = pd.to_numeric(df.get("minutes"), errors="coerce").fillna(0.0)
     starts = pd.to_numeric(df.get("starts"), errors="coerce").fillna(0.0)
 
-    # Last season had up to 38 apps; approximate p_start and expected minutes.
-    p_start = (starts / 38.0).clip(0.0, 1.0)
+    # Denominator: pre-season the bootstrap carries 38-match aggregates; once
+    # the season starts FPL resets the stats, so dividing current starts by 38
+    # would bury every new first-choice (2 starts after GW2 -> p_start 0.05).
+    # In-season callers pass the finished-GW count; a pseudo-match of 0.5
+    # starts shrinks tiny samples so one GW doesn't overcommit.
+    if season_matches is not None and 0 < int(season_matches) < 38:
+        n = float(int(season_matches))
+        shrink = float(getattr(config, "MINUTES_INSEASON_SHRINK_PSEUDO", 1.0))
+        p_start = ((starts + 0.5 * shrink) / (n + shrink)).clip(0.0, 1.0)
+    else:
+        # Pre-season: last season had up to 38 apps.
+        p_start = (starts / 38.0).clip(0.0, 1.0)
     avg_min_when_start = (mins / starts.where(starts > 0, other=1)).clip(0.0, 90.0)
     exp_minutes = (p_start * avg_min_when_start).clip(0.0, 90.0)
 
@@ -120,6 +130,19 @@ def minutes_from_bootstrap(elements):
     out.index = ids[ids.notna()].astype(int)
     out.index.name = "id"
     return out[~out.index.duplicated(keep="last")]
+
+
+def season_matches_from_fixtures(fixtures):
+    """Count fully finished GWs in the fixtures frame — the in-season
+    denominator for ``minutes_from_bootstrap``. Returns None pre-season
+    (no finished GW), which keeps the 38-match carryover behaviour."""
+    if fixtures is None or len(fixtures) == 0:
+        return None
+    if "finished" not in fixtures.columns or "event" not in fixtures.columns:
+        return None
+    fin = fixtures.groupby("event")["finished"].all()
+    n = int(fin.sum())
+    return n if n > 0 else None
 
 
 def _nudges_to_discount(team_nudges):
@@ -190,7 +213,8 @@ def xg_projection(elements, fixtures, teams_short, gw_start, horizon, blend_weig
     # scalar) on a non-unique index and would raise inside float(...).
     rates = rates.drop_duplicates(subset=["player_id"], keep="last")
 
-    minutes_df = minutes_from_bootstrap(elements)
+    minutes_df = minutes_from_bootstrap(
+        elements, season_matches=season_matches_from_fixtures(fixtures))
     ratings = _ratings(elements, teams_short, team_nudges)
 
     base = elements.copy()

@@ -216,6 +216,7 @@ NEWS_FEEDS = [           # RSS sources (verified live 2026-07-26)
 # is no current-season xG, so ratings start from the prior season's frozen seed
 # (regressed toward the mean) and the live signal takes over as matches accrue.
 FDR_RATINGS_SEED_PATH = "data/models/team_ratings_seed.json"
+MINUTES_INSEASON_SHRINK_PSEUDO = 1.0 # pseudo-matches of 0.5 starts mixed into in-season p_start (small-sample damping)
 FDR_CS_PRIOR_WEIGHT = 0.35           # blend of clean-sheet-implied defense into the carryover rating (0 = off)
 FDR_CS_PRIOR_MIN_MATCHES = 6.0       # GK starts needed before the CS record counts as signal (guards season-reset stats)
 FDR_CARRYOVER_PRIOR_MATCHES = 8.0    # pseudo-matches of weight given to the prior-season seed
