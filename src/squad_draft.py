@@ -21,6 +21,7 @@ DEFAULT_PARAMS = {
     "min_chance_of_playing": 0,
     "max_per_team": None,
     "min_fwd_minutes": 0.0,
+    "min_minutes": 0.0,
     "min_premium_attackers": None,
     "premium_floor": None,
     "max_player_price": None,          # auto-build only: cap price per player to avoid loading up on premiums
@@ -92,6 +93,27 @@ def _parse_formation(spec, notes=None):
     if notes is not None:
         notes.append(f"Invalid formation '{spec}'; using auto.")
     return None
+
+
+def _apply_min_minutes(avail, min_minutes, min_fwd_minutes):
+    """Drop players below the historical-minutes floors. ``min_minutes``
+    applies to every outfield position (GKP exempt — a cheap backup GK is a
+    legitimate structure); ``min_fwd_minutes`` composes as the stricter
+    FWD-only bound. Missing minutes count as 0 (never-played fringe)."""
+    mm = float(min_minutes or 0.0)
+    fwd_mm = float(min_fwd_minutes or 0.0)
+    if mm <= 0 and fwd_mm <= 0:
+        return avail
+    if "minutes" in avail.columns:
+        mins = pd.to_numeric(avail["minutes"], errors="coerce").fillna(0.0)
+    else:
+        mins = pd.Series(0.0, index=avail.index)
+    drop = pd.Series(False, index=avail.index)
+    if mm > 0:
+        drop |= (avail["pos"] != "GKP") & (mins < mm)
+    if fwd_mm > 0:
+        drop |= (avail["pos"] == "FWD") & (mins < fwd_mm)
+    return avail[~drop].copy()
 
 
 def _apply_minutes_shrink(elements, minutes_prior_k):
@@ -247,10 +269,7 @@ def project_pool(elements, fixtures, teams_short, params):
 
     avail = _filter_availability(elements, p["include_flagged"], p["min_chance_of_playing"])
     avail = _apply_minutes_shrink(avail, p["minutes_prior_k"])
-    mins = pd.to_numeric(avail.get("minutes"), errors="coerce").fillna(0.0)
-    if float(p["min_fwd_minutes"]) > 0:
-        drop = (avail["pos"] == "FWD") & (mins < float(p["min_fwd_minutes"]))
-        avail = avail[~drop].copy()
+    avail = _apply_min_minutes(avail, p.get("min_minutes"), p["min_fwd_minutes"])
 
     basis = str(p["projection_basis"])
     # Pre-season the FPL `form` field is ~0 for everyone, so the default
