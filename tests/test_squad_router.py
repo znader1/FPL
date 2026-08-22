@@ -3,15 +3,27 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import api.squad_router as sr
+from src.auth import require_admin, require_user
 from tests.test_squad_draft import _minimal_bootstrap, _minimal_fixtures_raw
+
+
+def _app_with_router():
+    """Build a test app whose auth dependencies are stubbed out.
+
+    Auth itself is covered in tests/test_auth_security.py; these tests exercise
+    the router's behaviour, so we override the gates rather than mint real JWTs.
+    """
+    app = FastAPI()
+    app.include_router(sr.router)
+    app.dependency_overrides[require_user] = lambda: None
+    app.dependency_overrides[require_admin] = lambda: None
+    return app
 
 
 def _client(monkeypatch):
     monkeypatch.setattr(sr.fpl_client, "get_bootstrap", lambda: _minimal_bootstrap())
     monkeypatch.setattr(sr.fpl_client, "get_fixtures", lambda: _minimal_fixtures_raw())
-    app = FastAPI()
-    app.include_router(sr.router)
-    return TestClient(app)
+    return TestClient(_app_with_router())
 
 
 def test_build_endpoint_returns_legal_squad(monkeypatch):
@@ -29,7 +41,7 @@ def test_knowledge_get_and_post_roundtrip(tmp_path, monkeypatch):
     kb = tmp_path / "knowledge_discount.json"
     kb.write_text('{"as_of":"2026-06-10","teams":{}}')
     monkeypatch.setattr(sr, "KNOWLEDGE_PATH", str(kb))
-    app = FastAPI(); app.include_router(sr.router)
+    app = _app_with_router()
     client = TestClient(app)
 
     g = client.get("/squad-picker/knowledge")
@@ -192,7 +204,7 @@ def test_gk_rotation_pairs(monkeypatch):
 def test_player_knowledge_get_post_roundtrip(tmp_path, monkeypatch):
     pk = tmp_path / "player_knowledge.json"
     monkeypatch.setattr(sr, "PLAYER_KNOWLEDGE_PATH", str(pk))
-    app = FastAPI(); app.include_router(sr.router)
+    app = _app_with_router()
     client = TestClient(app)
     assert client.get("/squad-picker/player-knowledge").json() == {"as_of": None, "players": {}}
     p = client.post("/squad-picker/player-knowledge",
@@ -209,9 +221,12 @@ def test_players_endpoint_carries_pk_fields(monkeypatch):
     assert "pk_availability" in row and "pk_note" in row
 
 
-def test_digest_news_empty_kb(monkeypatch):
+def test_digest_news_empty_kb(tmp_path, monkeypatch):
+    # kb_dir is no longer client-controllable (security fix); point the configured
+    # corpus at an empty dir to exercise the no-articles path.
+    monkeypatch.setattr(sr.config, "NEWS_KB_DIR", str(tmp_path / "empty"))
     client = _client(monkeypatch)
-    r = client.post("/squad-picker/digest-news", json={"kb_dir": "does/not/exist"})
+    r = client.post("/squad-picker/digest-news", json={})
     assert r.status_code == 200
     body = r.json()
     assert body["article_count"] == 0
@@ -219,7 +234,7 @@ def test_digest_news_empty_kb(monkeypatch):
     assert body["proposals"]["players"] == {}
 
 
-def test_digest_news_flags_bootstrap_injury(monkeypatch):
+def test_digest_news_flags_bootstrap_injury(tmp_path, monkeypatch):
     # A-path: an injured player in the live bootstrap is proposed even with no
     # news corpus and no LLM.
     boot = _minimal_bootstrap()
@@ -230,12 +245,13 @@ def test_digest_news_flags_bootstrap_injury(monkeypatch):
         {"id": 2, "is_next": False, "is_current": False, "deadline_time": "2026-08-22T17:30:00Z"},
     ]
     injured_id = str(boot["elements"][0]["id"])
+    monkeypatch.setattr(sr.config, "NEWS_KB_DIR", str(tmp_path / "empty"))
     monkeypatch.setattr(sr.fpl_client, "get_bootstrap", lambda: boot)
     monkeypatch.setattr(sr.fpl_client, "get_fixtures", lambda: _minimal_fixtures_raw())
-    app = FastAPI(); app.include_router(sr.router)
+    app = _app_with_router()
     client = TestClient(app)
 
-    r = client.post("/squad-picker/digest-news", json={"kb_dir": "does/not/exist"})
+    r = client.post("/squad-picker/digest-news", json={})
     assert r.status_code == 200
     body = r.json()
     assert body["bootstrap_flags"] == 1

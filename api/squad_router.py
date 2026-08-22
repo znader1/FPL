@@ -1,9 +1,10 @@
 """Mounted ONLY when SQUAD_PICKER_MODE=1 (see api/main.py). Dev-only squad picker."""
 import json
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from src import config, fpl_client, squad_draft
+from src.auth import require_admin, require_user
 from src.utils import clean_value
 
 router = APIRouter(prefix="/squad-picker", tags=["squad-picker"])
@@ -27,7 +28,7 @@ def _sanitize(obj):
     return clean_value(obj)
 
 
-@router.post("/build")
+@router.post("/build", dependencies=[Depends(require_user)])
 def build(params: dict):
     try:
         bootstrap = fpl_client.get_bootstrap()
@@ -41,7 +42,7 @@ def build(params: dict):
     return _sanitize(result)
 
 
-@router.post("/players")
+@router.post("/players", dependencies=[Depends(require_user)])
 def players(params: dict):
     try:
         bootstrap = fpl_client.get_bootstrap()
@@ -55,7 +56,7 @@ def players(params: dict):
     return _sanitize(result)
 
 
-@router.post("/lineup")
+@router.post("/lineup", dependencies=[Depends(require_user)])
 def lineup(payload: dict):
     try:
         bootstrap = fpl_client.get_bootstrap()
@@ -71,7 +72,7 @@ def lineup(payload: dict):
     return _sanitize(result)
 
 
-@router.post("/transfer-plan")
+@router.post("/transfer-plan", dependencies=[Depends(require_user)])
 def transfer_plan(payload: dict):
     try:
         bootstrap = fpl_client.get_bootstrap()
@@ -87,7 +88,7 @@ def transfer_plan(payload: dict):
     return _sanitize(result)
 
 
-@router.post("/gk-pairs")
+@router.post("/gk-pairs", dependencies=[Depends(require_user)])
 def gk_pairs(params: dict):
     try:
         bootstrap = fpl_client.get_bootstrap()
@@ -101,7 +102,7 @@ def gk_pairs(params: dict):
     return _sanitize(result)
 
 
-@router.post("/digest-news")
+@router.post("/digest-news", dependencies=[Depends(require_user)])
 def digest_news(params: dict):
     try:
         bootstrap = fpl_client.get_bootstrap()
@@ -114,8 +115,10 @@ def digest_news(params: dict):
         # A: live first-party injury/availability signal (no LLM, always runs)
         boot = news_digest.digest_bootstrap_news(
             elements, bootstrap.get("events", []), current_gw=current_gw)
-        # B: narrative/rotation from the digested news corpus (LLM per match)
-        articles = news_digest.load_news_articles((params or {}).get("kb_dir"))
+        # B: narrative/rotation from the digested news corpus (LLM per match).
+        # kb_dir is fixed to the configured corpus — never client-supplied
+        # (a caller-chosen path would let any dir on disk be read into the LLM).
+        articles = news_digest.load_news_articles(None)
         idx = news_digest.index_by_player(articles, elements)
         article_props = news_digest.propose_player_knowledge(
             idx, elements, current_gw=current_gw)
@@ -131,7 +134,7 @@ def digest_news(params: dict):
     })
 
 
-@router.post("/team-news")
+@router.post("/team-news", dependencies=[Depends(require_user)])
 def team_news(params: dict):
     try:
         bootstrap = fpl_client.get_bootstrap()
@@ -148,7 +151,7 @@ def team_news(params: dict):
     return _sanitize(result)
 
 
-@router.get("/knowledge")
+@router.get("/knowledge", dependencies=[Depends(require_user)])
 def get_knowledge():
     try:
         with open(KNOWLEDGE_PATH) as f:
@@ -157,7 +160,7 @@ def get_knowledge():
         return {"as_of": None, "teams": {}}
 
 
-@router.get("/player-knowledge")
+@router.get("/player-knowledge", dependencies=[Depends(require_user)])
 def get_player_knowledge():
     try:
         with open(PLAYER_KNOWLEDGE_PATH) as f:
@@ -166,7 +169,7 @@ def get_player_knowledge():
         return {"as_of": None, "players": {}}
 
 
-@router.post("/player-knowledge")
+@router.post("/player-knowledge", dependencies=[Depends(require_admin)])
 def save_player_knowledge(payload: dict):
     import os
     data = {"as_of": payload.get("as_of"), "players": payload.get("players", {})}
@@ -176,7 +179,7 @@ def save_player_knowledge(payload: dict):
     return data
 
 
-@router.post("/knowledge")
+@router.post("/knowledge", dependencies=[Depends(require_admin)])
 def save_knowledge(payload: dict):
     data = {"as_of": payload.get("as_of"), "teams": payload.get("teams", {})}
     with open(KNOWLEDGE_PATH, "w") as f:

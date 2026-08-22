@@ -10,13 +10,17 @@ except ImportError:
     pass
 
 import pandas as pd
-from fastapi import Body, FastAPI, Header, HTTPException
+from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 
 from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, league as league_mod, league_strategy, manual_squad, optimizer, projections, recommender, transfer_planner, transforms
-from src.auth import check_api_key, check_admin_key
+from src.auth import check_api_key, check_admin_key, require_user
 from src.insights import (
     build_chip_profile,
     build_scoring_guide,
@@ -41,23 +45,33 @@ from src.utils import (
 )
 
 
-app = FastAPI(title="FPL Assistant API", version="0.3.0")
+# Interactive API docs are disabled by default in production (they enumerate
+# every route). Set FPL_ENABLE_DOCS=1 to turn them back on for a given env.
+_docs_on = os.environ.get("FPL_ENABLE_DOCS") == "1"
+app = FastAPI(
+    title="FPL Assistant API",
+    version="0.3.0",
+    docs_url="/docs" if _docs_on else None,
+    redoc_url="/redoc" if _docs_on else None,
+    openapi_url="/openapi.json" if _docs_on else None,
+)
 logger = logging.getLogger(__name__)
 
 # --- personal GW replay (local-only; never enabled in production) ---
 if os.environ.get("REPLAY_MODE") == "1":
     from api.replay_router import router as replay_router
-    app.include_router(replay_router)
+    app.include_router(replay_router, dependencies=[Depends(require_user)])
 
-# --- dev-only squad picker (never enabled in production) ---
+# --- squad picker (SQUAD_PICKER_MODE=1). Auth is enforced per-route inside the
+#     router: login for reads/build, admin key for the knowledge writes. ---
 if os.environ.get("SQUAD_PICKER_MODE") == "1":
     from api.squad_router import router as squad_picker_router
     app.include_router(squad_picker_router)
 
-# Mount /chat endpoint (orchestrator agent over HTTP)
+# Mount /chat endpoint (orchestrator agent over HTTP) — LLM calls, login required.
 try:
     from api.chat import router as chat_router
-    app.include_router(chat_router)
+    app.include_router(chat_router, dependencies=[Depends(require_user)])
 except Exception as e:
     logger.warning(f"Chat router not loaded: {e}")
 
@@ -95,6 +109,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# --- per-IP rate limiting (defense-in-depth against LLM cost / DoS abuse) ---
+def _client_ip(request):
+    # Fly (and most proxies) put the real client IP first in X-Forwarded-For.
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    return get_remote_address(request)
+
+
+_rl_default = _csv_env("FPL_RATE_LIMITS") or ["90/minute", "1500/hour"]
+limiter = Limiter(key_func=_client_ip, default_limits=_rl_default, headers_enabled=True)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 
 _bootstrap_cache = {"ts": 0.0, "data": None}
@@ -1185,8 +1215,12 @@ def build_recommendations(payload):
 
 def build_xpts_evaluation(payload):
     payload = payload or {}
-    history_csv_path = payload.get("history_csv_path")
-    base_dir = payload.get("base_dir") or "data/processed/fpl"
+    # history_csv_path / base_dir are deliberately NOT read from the request:
+    # a caller-chosen path is an SSRF + arbitrary-file-read oracle because
+    # pandas.read_csv follows http(s) URLs and absolute filesystem paths.
+    # Always evaluate against the fixed processed-data directory.
+    history_csv_path = None
+    base_dir = "data/processed/fpl"
     window = safe_int(payload.get("window", 3))
     min_gw = safe_int(payload.get("min_gw", 2))
     topk = safe_int(payload.get("topk", 25))
@@ -1325,7 +1359,7 @@ def squad_manual_post(
     if err:
         return err
 
-    entry_id = safe_int(payload.get("entry_id") or os.environ.get("FPL_ENTRY_ID"))
+    entry_id = safe_int(payload.get("entry_id"))
     if not entry_id:
         raise HTTPException(status_code=400, detail="Missing/invalid entry_id.")
     player_ids = payload.get("player_ids") or []
@@ -1359,7 +1393,7 @@ def squad_manual_delete(
     err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
     if err:
         return err
-    entry_id = safe_int(entry_id or os.environ.get("FPL_ENTRY_ID"))
+    entry_id = safe_int(entry_id)
     if not entry_id:
         raise HTTPException(status_code=400, detail="Missing/invalid entry_id.")
     removed = manual_squad.clear_manual_squad(entry_id)
@@ -1485,7 +1519,7 @@ def league_strategy_post(
         mode=mode,
         bootstrap=bootstrap,
         projections_df=proj_df,
-        model=payload.get("model"),
+        model=None,  # server default — never a client-chosen (costly) model
         fixture_ticker=fixture_ticker,
     )
     if proj_error:
@@ -1512,7 +1546,9 @@ def explain_post(
         rec_payload = {k: v for k, v in payload.items() if k != "recommendations"}
         recs = build_recommendations(rec_payload)
 
-    out = explainer.explain(recs, model=payload.get("model"))
+    # model is not taken from the request — a client-chosen model lets a caller
+    # force the most expensive model on our key. Server default is used.
+    out = explainer.explain(recs)
     return JSONResponse(content=jsonable_encoder(out))
 
 
