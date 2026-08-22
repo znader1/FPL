@@ -93,8 +93,10 @@ def build_expected_points(
     horizon_total = pd.Series(0.0, index=out.index, dtype="float64")
     for gw in gws:
         player_rates = output_model.compute_player_rates(match_df, gw)
+        dc_rates = output_model.compute_dc_rates(match_df, gw)
         mins = minutes_model.minutes_projection(elements, minutes_history, gw)
-        ep = output_model.expected_points(elements, fixtures, ratings, player_rates, mins, gw)
+        ep = output_model.expected_points(
+            elements, fixtures, ratings, player_rates, mins, gw, dc_rates=dc_rates)
 
         col = f"xpts_model_gw{gw}"
         if ep is None or ep.empty:

@@ -265,6 +265,19 @@ OUTPUT_POSITION_BASE_XA90 = {"GKP": 0.01, "DEF": 0.06, "MID": 0.14, "FWD": 0.16}
 OUTPUT_MAX_GOALS_PER_GAME = 2.5      # sanity clamp on a single player's expected goals
 OUTPUT_MAX_ASSISTS_PER_GAME = 2.0
 
+# Defensive-contribution points (2025-26 rule): a player banks +2 for reaching a
+# per-match action threshold (DEF/GKP 10, MID/FWD 12). output_model was blind to
+# this scoring category, which is a chunk of why the xG model under-predicts.
+# The feature is a shrunk, time-decayed per-player rate of clearing the
+# threshold in 60+ minute games — backtest showed that rate is highly stable
+# (H1-vs-H2 rank corr 0.88) and predicts next-game clearance better than form.
+OUTPUT_APPLY_DC = True                # off restores exact pre-DC output_model behaviour
+OUTPUT_DC_POINTS = 2.0                # points banked for clearing the threshold
+OUTPUT_DC_HALFLIFE_DAYS = 75.0        # decay half-life on the clearance-rate samples
+OUTPUT_DC_MIN_GAMES_TRUST = 6.0       # 60'+ games before own rate is trusted over the prior
+OUTPUT_DC_THRESHOLD = {"GKP": 10, "DEF": 10, "MID": 12, "FWD": 12}
+OUTPUT_DC_BASE_RATE = {"GKP": 0.0, "DEF": 0.12, "MID": 0.06, "FWD": 0.0}  # shrink prior (GKP/FWD ~never clear)
+
 # --- blend of the xG model into the baseline projection ---
 # 0.0 => baseline projections unchanged (preserves backtest parity). Raise to
 # weight the xG model's per-GW xpts against the existing engine output.

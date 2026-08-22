@@ -126,6 +126,79 @@ def compute_player_rates(match_df, gw, halflife_days=None, min_minutes_trust=Non
     return pd.DataFrame(rows)
 
 
+def compute_dc_rates(match_df, gw, halflife_days=None, min_games_trust=None):
+    """
+    Per-player probability of banking defensive-contribution points, from
+    history strictly before ``gw``.
+
+    For each 60+ minute game we mark whether the player's ``defensive_contribution``
+    reached the position threshold, then take a time-decayed mean of that
+    indicator, shrunk toward a position base rate by sample size. Returns
+    columns: ``player_id, dc_clear_rate, pos``. Empty frame when the column is
+    absent (older history) so the caller degrades to no DC term.
+    """
+    halflife_days = float(halflife_days if halflife_days is not None
+                          else getattr(config, "OUTPUT_DC_HALFLIFE_DAYS", 75.0))
+    min_trust = float(min_games_trust if min_games_trust is not None
+                      else getattr(config, "OUTPUT_DC_MIN_GAMES_TRUST", 6.0))
+    thresholds = getattr(config, "OUTPUT_DC_THRESHOLD", {})
+    base_rate = getattr(config, "OUTPUT_DC_BASE_RATE", {})
+
+    empty = pd.DataFrame(columns=["player_id", "dc_clear_rate", "pos"])
+    if match_df is None or match_df.empty:
+        return empty
+    df = match_df.copy()
+    if any(c not in df.columns for c in ["element", "minutes", "defensive_contribution"]):
+        return empty
+
+    df["element"] = pd.to_numeric(df["element"], errors="coerce")
+    df["minutes"] = pd.to_numeric(df["minutes"], errors="coerce").fillna(0.0)
+    df["dc"] = pd.to_numeric(df["defensive_contribution"], errors="coerce").fillna(0.0)
+
+    gw_col = "event" if "event" in df.columns else ("round" if "round" in df.columns else None)
+    if gw_col:
+        ev = pd.to_numeric(df[gw_col], errors="coerce")
+        df = df[ev.notna() & (ev < int(gw))].copy()
+    # Rate is defined over games the player actually started; cameo appearances
+    # can't realistically reach the threshold and would depress every rate.
+    df = df[df["element"].notna() & (df["minutes"] >= 60)].copy()
+    if df.empty:
+        return empty
+    df["element"] = df["element"].astype(int)
+
+    pos_lookup = {}
+    if "element_type" in df.columns:
+        et = df.groupby("element")["element_type"].first()
+        pos_lookup = {int(k): _ELEMENT_TYPE_TO_POS.get(int(v), "MID")
+                      for k, v in et.items() if pd.notna(v)}
+
+    ts_col = "kickoff_time_x" if "kickoff_time_x" in df.columns else (
+        "kickoff_time" if "kickoff_time" in df.columns else None)
+    df["w"] = fixture_difficulty._decay_weights(
+        df[ts_col] if ts_col else pd.Series(pd.NaT, index=df.index),
+        None, halflife_days,
+    )
+
+    rows = []
+    for pid, g in df.groupby("element"):
+        pos = pos_lookup.get(int(pid), "MID")
+        thr = float(thresholds.get(pos, 12))
+        cleared = (g["dc"] >= thr).astype("float64")
+        w = g["w"].astype("float64")
+        wsum = float(w.sum())
+        if wsum <= 0:
+            continue
+        rate = float((cleared * w).sum() / wsum)
+        n_games = int(len(g))
+
+        conf = min(1.0, n_games / min_trust) if min_trust > 0 else 1.0
+        prior = float(base_rate.get(pos, 0.05))
+        rate = conf * rate + (1.0 - conf) * prior
+        rows.append({"player_id": int(pid), "dc_clear_rate": max(0.0, min(1.0, rate)), "pos": pos})
+
+    return pd.DataFrame(rows) if rows else empty
+
+
 # ---------------------------------------------------------------------------
 # Expected points per fixture
 # ---------------------------------------------------------------------------
@@ -141,12 +214,16 @@ def _resolve_pos(row):
         return "MID"
 
 
-def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw):
+def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw, dc_rates=None):
     """
     Expected FPL points per player for a single GW (DGW-aware: sums per fixture).
 
     Returns a DataFrame keyed by ``id`` with the total ``exp_points`` plus a
     breakdown column per scoring source.
+
+    ``dc_rates`` (optional, from ``compute_dc_rates``) adds the
+    defensive-contribution scoring category. Left as None it contributes 0, so
+    existing callers keep their exact behaviour.
     """
     try:
         from . import transforms
@@ -174,6 +251,11 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
     rates = player_rates.set_index("player_id") if (
         player_rates is not None and not player_rates.empty) else pd.DataFrame()
     mins = minutes_df if (minutes_df is not None and not minutes_df.empty) else pd.DataFrame()
+
+    apply_dc = bool(getattr(config, "OUTPUT_APPLY_DC", True))
+    dc_points = float(getattr(config, "OUTPUT_DC_POINTS", 2.0))
+    dcr = dc_rates.set_index("player_id") if (
+        apply_dc and dc_rates is not None and not dc_rates.empty) else pd.DataFrame()
 
     el = elements_df.copy()
     el["id"] = pd.to_numeric(el["id"], errors="coerce")
@@ -241,6 +323,10 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
         # Conceded penalty applies to GKP/DEF, scaled by playing 60'.
         pts_conceded = float(conceded_pen.get(pos, 0.0)) * (conceded / 2.0) * prob_60
         pts_saves = (saves * save_pts_per * prob_60) if pos == "GKP" else 0.0
+        # Defensive-contribution points: banked only in a 60'+ appearance, so
+        # scale the clearance rate by prob_60 the same way clean sheets are.
+        dc_rate = float(dcr.loc[pid, "dc_clear_rate"]) if pid in dcr.index else 0.0
+        pts_dc = dc_points * dc_rate * prob_60
         # Attacking bonus (goals/assists BPS) + defensive bonus (clean-sheet /
         # clearance / block BPS) so defenders/keepers aren't left with only
         # their raw clean-sheet points.
@@ -248,7 +334,7 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
                      + clean_sheet * float(cs_bonus_per.get(pos, 0.0)))
 
         total = (pts_appearance + pts_goals + pts_assists + pts_cs
-                 + pts_conceded + pts_saves + pts_bonus)
+                 + pts_conceded + pts_saves + pts_bonus + pts_dc)
 
         rows.append({
             "id": pid,
@@ -260,6 +346,7 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
             "ep_conceded": float(pts_conceded),
             "ep_saves": float(pts_saves),
             "ep_bonus": float(pts_bonus),
+            "ep_dc": float(pts_dc),
             "exp_goals": exp_goals,
             "exp_assists": exp_assists,
             "exp_minutes": float(exp_min),
