@@ -14,10 +14,12 @@ from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.exception_handlers import http_exception_handler
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, league as league_mod, league_strategy, manual_squad, optimizer, projections, recommender, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key, require_user
@@ -102,6 +104,14 @@ if not cors_origins:
         "http://127.0.0.1:3000",
     ]
 
+# "*" with allow_credentials makes Starlette reflect whichever Origin calls,
+# which would let any site issue credentialed cross-origin requests. Refuse to
+# boot rather than serve that combination.
+if "*" in cors_origins:
+    raise RuntimeError(
+        "FPL_API_CORS_ORIGINS must list explicit origins; '*' is unsafe with credentials."
+    )
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
@@ -125,6 +135,27 @@ limiter = Limiter(key_func=_client_ip, default_limits=_rl_default, headers_enabl
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _scrub_server_errors(request, exc):
+    """Keep internal failure text out of 5xx responses.
+
+    Routes raise HTTPException with the underlying exception interpolated into
+    `detail`, which hands callers container paths, upstream URLs and errno
+    strings. Client errors (4xx) carry deliberate, useful messages, so those
+    pass through untouched.
+    """
+    if exc.status_code >= 500:
+        logger.error(
+            "%s %s -> %s: %s", request.method, request.url.path, exc.status_code, exc.detail
+        )
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": "Upstream data source unavailable." if exc.status_code == 502
+                     else "Internal server error."},
+        )
+    return await http_exception_handler(request, exc)
 
 
 _bootstrap_cache = {"ts": 0.0, "data": None}
