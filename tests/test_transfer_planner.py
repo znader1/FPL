@@ -104,7 +104,7 @@ def test_verdicts_roll_and_spend_with_reasoning():
     ])
     out = tp.plan_transfers(proj_roll, squad_ids=[1], gws=[10, 11], itb_m=0.0, start_ft=1, min_gain=2.0)
     assert out["verdict"] == "roll"
-    assert out["first_gw_ft_before"] == 1 and out["first_gw_ft_after"] == 1
+    assert out["first_gw_ft_before"] == 1 and out["first_gw_ft_after"] == 2
     assert "roll" in out["reasoning"].lower()
 
     proj_spend = _proj_frame([

@@ -218,7 +218,11 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
         "verdict": verdict,
         "reasoning": reasoning,
         "first_gw_ft_before": plan[0]["free_transfers_before"] if plan else int(start_ft),
-        "first_gw_ft_after": plan[0]["free_transfers_after"] if plan else int(start_ft),
+        "first_gw_ft_after": (
+            min(int(ft_cap), plan[0]["free_transfers_before"] + 1)
+            if plan and plan[0]["action"] == "roll"
+            else plan[0]["free_transfers_after"] if plan else int(start_ft)
+        ),
     }
 
 
