@@ -8,11 +8,12 @@ Wildcard/Free-Hit gameweeks consume no free transfers.
 
 from src import config
 
-FT_MAX = int(getattr(config, "FT_MAX", 5))
 _CHIP_NO_CONSUME = {"wildcard", "freehit"}
 
 
-def clamp_ft(value, ft_max=FT_MAX):
+def clamp_ft(value, ft_max=None):
+    if ft_max is None:
+        ft_max = int(getattr(config, "FT_MAX", 5))
     if value is None:
         return None
     try:
@@ -21,7 +22,9 @@ def clamp_ft(value, ft_max=FT_MAX):
         return None
 
 
-def derive_free_transfers(events, chips, next_event_id, ft_max=FT_MAX):
+def derive_free_transfers(events, chips, next_event_id, ft_max=None):
+    if ft_max is None:
+        ft_max = int(getattr(config, "FT_MAX", 5))
     chip_gws = {
         int(c.get("event")) for c in (chips or [])
         if str(c.get("name") or "").lower() in _CHIP_NO_CONSUME and c.get("event") is not None

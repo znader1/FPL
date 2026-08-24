@@ -51,3 +51,11 @@ def test_clamp_ft():
     assert clamp_ft(9) == 5
     assert clamp_ft(None) is None
     assert clamp_ft("2") == 2
+
+
+def test_runtime_config_override(monkeypatch):
+    # Verify that config.FT_MAX is read at call time, not import time.
+    from src import config
+    monkeypatch.setattr(config, "FT_MAX", 3)
+    assert clamp_ft(9) == 3
+    assert derive_free_transfers([_ev(1, 0), _ev(2, 0), _ev(3, 0)], [], next_event_id=4) == 3
