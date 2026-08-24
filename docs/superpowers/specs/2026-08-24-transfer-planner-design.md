@@ -1,97 +1,106 @@
-# Transfer Planner: FT Banking, Injury Priority, GW-Boundary Correctness
+# Transfer Planner v2: FT Banking Verdict, Injury Priority, GW-Boundary Correctness, xG-Powered Projections
 
-**Date:** 2026-08-24
+**Date:** 2026-08-24 (v2 revision 2026-08-25)
 **Status:** Approved design, pending implementation plan
 **Branch:** backend `feature/xg-expected-points`, frontend branch off `fix/auth-token-on-api-calls`
 
+## v2 revision note
+
+v1 designed a new two-branch module before discovering `src/transfer_planner.py` already ships a greedy multi-GW roll/bank horizon walk (commit `e013f98`), emitted as `transfer_plan_horizon` and rendered by the frontend's `HorizonTransferPlan`. v2 extends that module instead of duplicating it, and adds workstream B: making the projections that feed it xG-based, gated on backtest evidence.
+
 ## Problem
 
-The transfer recommender decides one gameweek at a time and always proposes spending the free transfer, even when the best available move gains little. The 2026-27 rule change allows banking up to 5 free transfers, which the current FT derivation (binary 1/2 heuristic) cannot represent. Two further correctness gaps: recommendations can consume data from a gameweek still being played, and injured players are only softly prioritised for removal.
+The shipped horizon planner rolls/spends on a raw threshold but: ignores injuries entirely, exposes no single verdict the UI can lead with, receives a free-transfer count derived by a binary 1/2 heuristic (rule allows banking to 5), and consumes form data that can include a half-played gameweek. Separately, projections still run on the ppg/form baseline — the xG expected-points stack (including the new defensive-contribution term) sits inert at `PROJ_MODEL_BLEND_WEIGHT = 0.0`.
 
 ## Goals
 
-1. Recommend **rolling** the FT when banking projects more total points than spending now.
-2. Track free transfers accurately up to the cap of 5.
-3. Force a transfer (never recommend rolling) when a red-flagged player sits in the likely XI.
-4. Target the next deadline and use only fully finished gameweeks for form inputs.
-5. Gate the planner behind a backtest win before it defaults on.
+**Workstream A — planner correctness:**
+1. Red-flagged likely-XI players force a spend verdict; rolling is never recommended while one sits in the XI.
+2. Top-level `verdict` + human `reasoning` on the plan (`roll` / `spend` / `spend_forced_injury`).
+3. FT derivation accurate to the 5-cap banking rule (authenticated value clamped [1,5]; season-walk fallback).
+4. Recommendations target the next deadline; form inputs use only finished gameweeks.
+5. Planner A/B backtest (planner-driven transfers vs always-spend) on 2025-26 before any default-behaviour claim.
 
-Non-goals: multi-GW beam search over move sequences (approach A, rejected), DP over FT states (approach C, rejected as overkill), price-change prediction, any change to the xG shadow-model blend (orthogonal; planner consumes whatever projections produce).
+**Workstream B — xG-powered predictions:**
+6. Run the DC-term A/B and the blend-weight sweep on 2025-26 Vaastav data; raise `PROJ_MODEL_BLEND_WEIGHT` to the winning weight only if it beats the baseline. Planner and all recommendations then run on xG-blended, latest-data projections with zero code coupling.
+
+Non-goals: rewriting the greedy walk into beam/DP (backtest decides if that's ever needed), price prediction, new response blocks (extend `transfer_plan_horizon` in place).
 
 ## Architecture
 
-New pure module `src/transfer_planner.py`, dependency-injectable like the backtest modules. `suggest_transfers` in `src/recommender.py` is **not modified** — the planner calls it per branch.
+No new modules. Touched units:
 
 ```
-api/main.py /recommendations
-  → src/transfer_planner.py  plan_transfers()     [NEW]
-      → src/recommender.py   suggest_transfers()  [unchanged, called per branch]
-      → projections xpts_gw{N} columns            [already exist]
-  → response gains an additive "transfer_plan" block
+api/main.py            FT season-walk fallback; clamp; pass injury columns onward
+src/transfer_planner.py  injury gate + verdict/reasoning fields (extends plan_transfers)
+src/projections.py     finished-GW-only form inputs (audit + targeted fix)
+src/config.py          PROJ_MODEL_BLEND_WEIGHT raise (workstream B, evidence-gated)
+scripts/backtest_season.py  --planner A/B mode
+frontend RecommendationsPanel/HorizonTransferPlan  verdict banner (additive)
 ```
 
-### Config (`src/config.py`)
+## Workstream A design
 
-| Name | Default | Meaning |
-|---|---|---|
-| `PLANNER_ENABLED` | `False` | Master flag; stays off until the backtest gate passes |
-| `PLANNER_LOOKAHEAD_GWS` | `1` | How far ahead the bank branch looks |
-| `PLANNER_ROLL_MARGIN` | `0.4` | Bank branch must beat spend by this many xPts to recommend rolling (hysteresis against projection noise) |
-| `FT_MAX` | `5` | 2026-27 banking cap |
+### Injury gate (`src/transfer_planner.py`)
 
-## Planner algorithm (`plan_transfers`)
+`_build_info` gains `status` and `chance_of_playing_next_round` per player. Red flag = `status` in (`i`, `s`, `u`) or `chance == 0`. In the first horizon GW, red-flagged squad members in the likely XI (top-11 of squad by first-GW xPts, formation-legal not required for this check) are forced sells: the walk must propose their best like-for-like replacement even when gain < `min_gain` (threshold bypassed for forced sells only). While a forced sell exists, `action` for that GW is `transfer` and the top-level verdict is `spend_forced_injury`. Red-flagged bench players and yellow doubts (25/50/75) change nothing.
 
-Inputs: squad frame, elements, in-the-bank money, free transfers, projections with `xpts_gw{N}` columns, next event id.
+### Verdict + reasoning
 
-1. **Injury gate.** Squad players with red-flag status (`i` long-term, `s`, `u`, or `chance_of_playing_next_round == 0`) who are in the likely XI (current optimizer starters) force verdict `spend_forced_injury`. Branch comparison is skipped; `suggest_transfers` runs normally — the existing `injury_sell_boost` ordering and `TRANSFER_GUARDRAIL_INJURY_OVERRIDE` min-gain bypass already surface the replacement. Red-flagged bench players do not force; yellow doubts (25/50/75) keep their existing soft boost.
-2. **Branch SPEND.** `suggest_transfers(..., free_transfers=ft, score_col="xpts_horizon")` → `gain_spend`.
-3. **Branch BANK.** Squad unchanged for the next GW (0 gain now); re-run `suggest_transfers` with `free_transfers=min(ft+1, FT_MAX)` scored on the horizon shifted one GW (`xpts_gw{next+1}` onward) → `gain_bank`. The extra FT lets the beam find two-move combinations invisible to a single-FT search.
-4. **Verdict.** `roll` if `gain_bank − gain_spend > PLANNER_ROLL_MARGIN` and `ft < FT_MAX`; otherwise `spend`. At `ft == FT_MAX`, never roll (the FT would be forfeited). Both branch gains and the margin are returned.
+`plan_transfers` return gains:
+- `verdict`: from the first horizon GW — `spend_forced_injury` (injury gate fired) else `transfer`→`spend` / `roll`→`roll`.
+- `reasoning`: template string, e.g. roll: `"Best available move gains +1.3 xPts (< 2.0 threshold). Roll the FT (2→3) — next GW the plan makes 2 moves for +4.1."`; spend: names the move(s) and gain; forced: names the flagged player.
+- `first_gw_ft_before` / `first_gw_ft_after` for the banner.
+All additive; existing per-GW `plan` list unchanged.
 
-Stated simplification: the bank branch assumes next-GW prices ≈ current prices and no new injuries. Projection noise dominates one week of price drift; accepted.
+### FT derivation (`api/main.py`)
 
-## FT derivation (`api/main.py`)
+- Authenticated `my_team._free_transfers`: clamp to [1, 5] (today unclamped int).
+- Fallback: replace the binary heuristic with a season walk over `entry/{id}/history` current-season events (add the fetch if not already in this path): start `ft = 1` at GW1; per finished GW `ft = min(5, ft − event_transfers + 1)` with floor 0 before the +1; Wildcard/Free-Hit GWs consume no banked FTs (chip GWs from `chips` list in the same history payload). Unfinished (in-play) GW: its `event_transfers` still subtracts — spent is spent — but the +1 accrual for the next GW only counts once that GW's deadline has passed.
 
-- Authenticated path: `my_team._free_transfers` is the real value — trust it, clamp to [1, `FT_MAX`].
-- Fallback: replace the binary heuristic with a season walk over the `entry/{id}/history` events (reuse the response if the endpoint is already fetched in this path; otherwise add the one call), simulating the rule from GW1: `ft = min(FT_MAX, ft − used + 1)` per finished GW; Wildcard/Free-Hit gameweeks do not consume banked FTs.
+### GW-boundary rules (`src/projections.py`, `api/main.py`)
 
-## GW-boundary rules
+- Transfer target: audit `/recommendations` for `is_current` leakage while a GW is in play; target is always the `is_next` deadline.
+- Form inputs (recent-average window, `latest_n_matches`): only rounds whose event has `finished == true`; in-progress GW rows dropped via the same exclusion mechanism as blank GWs.
 
-- Transfer target is always the `is_next` deadline; audit the `/recommendations` path for `is_current` leakage while a GW is in play.
-- Recent-form windows and the FT season walk consume only rounds whose event has `finished == true` (same exclusion mechanism as blank GWs). In-progress GW rows are dropped from performance inputs.
-- `event_transfers` of the in-play GW still counts for FT math — transfers already spent are spent; only performance data of unfinished rounds is excluded.
+### Backtest gate (`scripts/backtest_season.py`)
+
+New `--planner` mode: transfers each GW are chosen by `plan_transfers`'s first-GW action (including rolling) instead of the always-spend path. A/B vs the existing always-spend baseline over 2025-26 GW2–29. Report total points, transfer count, hits taken.
+
+## Workstream B design (xG activation)
+
+Pure evidence runs — the code already exists:
+1. **DC A/B:** `OUTPUT_APPLY_DC` on vs off through the season backtest; keep on only if MAE/total-points don't regress.
+2. **Blend sweep:** the existing blend-weight sweep (commit `c40e10b`) over `PROJ_MODEL_BLEND_WEIGHT` ∈ {0.0 … 1.0}; pick the argmax on 2025-26.
+3. **Decision:** raise `PROJ_MODEL_BLEND_WEIGHT` default to the winner only if it beats weight 0.0; record numbers in the plan. In-season: knowledge-discount file + live 2026-27 data keep ratings current (existing refresh path); cold-start convergence monitoring stays per roadmap.
 
 ## API contract
 
-Additive `transfer_plan` block in the `/recommendations` response; all existing fields unchanged. Absent when `PLANNER_ENABLED` is off.
+`transfer_plan_horizon` extended (additive):
 
 ```json
 {
   "verdict": "roll | spend | spend_forced_injury",
-  "free_transfers": 2,
-  "ft_after_roll": 3,
-  "gain_spend": 0.9,
-  "gain_bank": 3.1,
-  "margin": 2.2,
-  "spend_moves": ["...existing move payload shape..."],
-  "bank_preview_moves": ["...the two-move combo found next GW..."],
-  "reasoning": "Bank the FT (2→3): double move next GW projects +3.1 xPts vs +0.9 spending now."
+  "reasoning": "Best available move gains +1.3 xPts (< 2.0). Roll the FT (2→3) — next GW the plan makes 2 moves for +4.1.",
+  "first_gw_ft_before": 2,
+  "first_gw_ft_after": 3,
+  "...": "all existing fields unchanged (gws, plan[], total_net_gain, ...)"
 }
 ```
 
 ## Frontend
 
-Branch off `fix/auth-token-on-api-calls` (keeps auth + staging wiring). Changes are additive: verdict banner on the transfers view, bank-preview move cards reusing the existing move-card rendering, and the `transfer_plan` type added to `src/lib/fplAssistantApi.ts`. With no `transfer_plan` in the response, the UI renders exactly as today.
+`HorizonTransferPlan` gains a verdict banner (three variants + hidden when fields absent); `FplTransferPlanHorizon` type extended in `src/lib/fplAssistantApi.ts`. Existing table rendering untouched.
 
 ## Error handling
 
-- Planner failures degrade gracefully: any exception inside `plan_transfers` logs and omits the `transfer_plan` block — the legacy recommendation payload is never blocked.
-- Missing `xpts_gw{next+1}` columns (end of season, short projection horizon) → bank branch unavailable → verdict `spend` with reasoning noting the horizon limit.
-- History fetch failure → FT falls back to the authenticated value or 1.
+- Planner exceptions: existing behaviour kept — block omitted, response never breaks.
+- History fetch failure → FT falls back to authenticated value, else existing heuristic, else 1.
+- Missing status columns in projections → injury gate no-ops (no force, no crash).
 
 ## Testing
 
-- **Unit:** planner pure functions — roll verdict, margin hysteresis, `ft == FT_MAX` never rolls, injury force (red starter vs red bench vs yellow), FT season walk including Wildcard/Free-Hit weeks, graceful degradation paths.
-- **Backtest gate:** extend `scripts/backtest_season.py` with a `--planner` mode; A/B the banking planner vs always-spend over 2025-26 GW2–29 on Vaastav data. `PLANNER_ENABLED` defaults on only if banking wins or ties total points.
-- **Frontend:** vitest component test for the banner (all three verdicts + absent block).
-- **Staging:** full flow on the existing staging pair (Fly dev app + Vercel preview) before any prod flip.
+- **Unit:** FT season walk (banking to 5, WC/FH weeks, in-play GW spend-but-no-accrual); injury gate (red starter forces, red bench doesn't, yellow doesn't, missing columns no-op); verdict/reasoning for all three verdicts; clamp of authenticated FT.
+- **Backtest:** `--planner` A/B; DC A/B; blend sweep. Numbers recorded in the plan doc before any default flips.
+- **Frontend:** vitest for the banner variants + absent-field fallback.
+- **Staging:** full flow on the existing staging pair before prod flip.
