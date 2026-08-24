@@ -624,9 +624,12 @@ def optimize_squad(payload):
 
     optimize_event_id = _default_optimize_event_id(bootstrap)
     latest_n = getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3)
+    finished_events = [safe_int(e.get("id")) for e in bootstrap.get("events", []) if e.get("finished")]
+    finished_gw_max = max([e for e in finished_events if e], default=None)
     proj_all = projections.project_elements_next_gws(
         elements=elements, fixtures=fixtures, teams_short_map=teams_short,
         gw_start=int(optimize_event_id), horizon_gws=horizon_gws, latest_n_matches=latest_n,
+        finished_gw_max=finished_gw_max,
     )
     proj_by_id = {}
     if proj_all is not None and not proj_all.empty:
@@ -908,6 +911,8 @@ def build_recommendations(payload):
 
     ts = time.perf_counter()
     try:
+        finished_events = [safe_int(e.get("id")) for e in ctx["bootstrap"].get("events", []) if e.get("finished")]
+        finished_gw_max = max([e for e in finished_events if e], default=None)
         proj_all = projections.project_elements_next_gws(
             elements=elements,
             fixtures=fixtures,
@@ -915,6 +920,7 @@ def build_recommendations(payload):
             gw_start=projection_start_event_id,
             horizon_gws=projection_horizon_gws,
             latest_n_matches=latest_n_matches,
+            finished_gw_max=finished_gw_max,
         )
         if wildcard_is_active:
             proj_all = projections.add_wildcard_scores(

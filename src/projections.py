@@ -205,7 +205,7 @@ def load_latest_player_gw_history(path=None, base_dir="data/processed/fpl"):
     return df.copy()
 
 
-def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/processed/fpl", fixtures=None):
+def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/processed/fpl", fixtures=None, finished_gw_max=None):
     """
     Build recent player-by-GW averages before `gw_start`.
     Uses recent calendar GWs before `gw_start`.
@@ -221,6 +221,8 @@ def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/
     window_start = max(1, int(gw_start) - int(window))
 
     prior_hist = hist[hist["gw"] < gw_start].copy()
+    if finished_gw_max is not None:
+        prior_hist = prior_hist[prior_hist["gw"] <= int(finished_gw_max)].copy()
     if prior_hist.empty:
         return pd.DataFrame()
 
@@ -368,6 +370,7 @@ def project_elements_next_gws(
     latest_n_matches=config.PROJ_DEFAULT_LATEST_N_MATCHES,
     fdr_strength=1.0,
     home_away_strength=1.0,
+    finished_gw_max=None,
 ):
     """
     Lightweight next-N gameweeks projection table (FPL-only baseline).
@@ -403,7 +406,7 @@ def project_elements_next_gws(
     recent_blend_weight = clamp(getattr(config, "PROJ_PLAYER_RECENT_BLEND_WEIGHT", 0.65), 0.0, 1.0)
     ep_next_blend_weight = clamp(getattr(config, "PROJ_EP_NEXT_BLEND_WEIGHT", 0.45), 0.0, 1.0)
 
-    recent_gw = player_recent_gw_map(gw_start=gw_start, window=recent_window, fixtures=fixtures)
+    recent_gw = player_recent_gw_map(gw_start=gw_start, window=recent_window, fixtures=fixtures, finished_gw_max=finished_gw_max)
     recent_history_max_gw = None
     if recent_gw is not None and not recent_gw.empty:
         if "recent_history_max_gw" in recent_gw.columns:
