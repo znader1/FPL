@@ -219,6 +219,14 @@ def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/
     gw_start = int(gw_start)
     window = max(1, int(window or getattr(config, "PROJ_PLAYER_RECENT_GW_WINDOW", 5) or 5))
     window_start = max(1, int(gw_start) - int(window))
+    # Exclusive upper bound for "prior" GWs. Normally gw_start itself (only GWs
+    # strictly before the planning GW count). When finished_gw_max is set, also
+    # cap it there so the blank-GW fixture backfill below (which spans
+    # [window_start, gw_end_exclusive)) can't resurrect a cutoff-excluded GW as
+    # a fabricated zero-point row just because its fixture is scheduled.
+    gw_end_exclusive = int(gw_start)
+    if finished_gw_max is not None:
+        gw_end_exclusive = min(int(gw_start), int(finished_gw_max) + 1)
 
     prior_hist = hist[hist["gw"] < gw_start].copy()
     if finished_gw_max is not None:
@@ -238,7 +246,7 @@ def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/
             fx["event"] = pd.to_numeric(fx["event"], errors="coerce")
             fx = fx[fx["event"].notna()].copy()
             fx["event"] = fx["event"].astype(int)
-            fx = fx[(fx["event"] >= int(window_start)) & (fx["event"] < int(gw_start))].copy()
+            fx = fx[(fx["event"] >= int(window_start)) & (fx["event"] < int(gw_end_exclusive))].copy()
             if not fx.empty:
                 home = fx[["event", "team_h"]].rename(columns={"team_h": "team_id"}).copy() if "team_h" in fx.columns else pd.DataFrame()
                 away = fx[["event", "team_a"]].rename(columns={"team_a": "team_id"}).copy() if "team_a" in fx.columns else pd.DataFrame()
@@ -262,7 +270,7 @@ def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/
         if not latest_team.empty:
             latest_team["player_id"] = pd.to_numeric(latest_team["player_id"], errors="coerce").astype(int)
             latest_team["gw_team_id_end"] = pd.to_numeric(latest_team["gw_team_id_end"], errors="coerce").astype(int)
-            gws_df = pd.DataFrame({"gw": list(range(int(window_start), int(gw_start)))})
+            gws_df = pd.DataFrame({"gw": list(range(int(window_start), int(gw_end_exclusive)))})
             latest_team["__tmp"] = 1
             gws_df["__tmp"] = 1
             grid = latest_team.merge(gws_df, on="__tmp", how="inner").drop(columns=["__tmp"])
