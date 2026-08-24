@@ -21,7 +21,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, league as league_mod, league_strategy, manual_squad, optimizer, projections, recommender, transfer_planner, transforms
+from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, manual_squad, optimizer, projections, recommender, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key, require_user
 from src.insights import (
     build_chip_profile,
@@ -493,24 +493,28 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
     # Chip GWs (wildcard/freehit) reset the count to 1.
     derived_free_transfers = 1
     last_active_chip = (myteam.get("active_chip") or "").lower()
-    if last_active_chip not in ("wildcard", "freehit"):
-        try:
-            # eh is already the entry_history for used_event_id (the current squad GW).
-            cur_transfers = int(eh.get("event_transfers") or 0)
-            if cur_transfers == 0:
-                derived_free_transfers = 2
-            else:
-                derived_free_transfers = 1
-        except Exception:
-            pass  # keep default of 1
+    try:
+        history = fpl_client.get_entry_history(entry_id)
+        next_ev_for_ft = _event_id(bootstrap, "is_next") or (int(used_event_id) + 1)
+        derived_free_transfers = ft_tracker.derive_free_transfers(
+            history.get("current") or [],
+            history.get("chips") or [],
+            next_event_id=next_ev_for_ft,
+        )
+    except Exception:
+        # History unavailable (pre-season wipe, 403): fall back to the old
+        # single-GW heuristic rather than fail the request.
+        if last_active_chip not in ("wildcard", "freehit"):
+            try:
+                cur_transfers = int(eh.get("event_transfers") or 0)
+                derived_free_transfers = 2 if cur_transfers == 0 else 1
+            except Exception:
+                pass
 
-    # Authenticated my-team reports the real free-transfer count directly; it beats
-    # the event_transfers heuristic (which wrongly infers a banked FT pre-season).
-    if my_team_ft is not None:
-        try:
-            derived_free_transfers = int(my_team_ft)
-        except (TypeError, ValueError):
-            pass
+    # Authenticated my-team reports the real count directly; it wins, clamped to [1, FT_MAX].
+    clamped = ft_tracker.clamp_ft(my_team_ft)
+    if clamped is not None:
+        derived_free_transfers = clamped
 
     squad_df = transforms.picks_to_df(myteam, elements)
     if squad_df is None or squad_df.empty:
