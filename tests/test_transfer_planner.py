@@ -17,6 +17,112 @@ def _proj(rows, gws=(1, 2, 3)):
 GWS = [1, 2, 3]
 
 
+def _player(pid, pos, price=5.0, xpts=0.0, team=None, status="a", chance=100):
+    """A player spec for _proj_frame. Distinct default team per id keeps the
+    3-per-club cap out of the way unless a test cares about it."""
+    return {
+        "id": pid,
+        "pos": pos,
+        "price_m": price,
+        "xpts": xpts,
+        "team_short": team or f"T{pid}",
+        "status": status,
+        "chance": chance,
+    }
+
+
+def _proj_frame(players, gws=(10, 11), with_status_cols=True):
+    """rows: list of _player(...) dicts. Builds xpts_gw{N} columns for `gws`,
+    plus status/chance_of_playing_next_round columns unless disabled."""
+    recs = []
+    for p in players:
+        r = {
+            "id": p["id"],
+            "web_name": f"P{p['id']}",
+            "pos": p["pos"],
+            "team_short": p["team_short"],
+            "price_m": p["price_m"],
+        }
+        for g in gws:
+            r[f"xpts_gw{g}"] = p["xpts"]
+        if with_status_cols:
+            r["status"] = p["status"]
+            r["chance_of_playing_next_round"] = p["chance"]
+        recs.append(r)
+    return pd.DataFrame(recs)
+
+
+def test_red_flag_starter_forces_spend_verdict():
+    # Squad player with status "i" and a cheap same-position replacement available;
+    # replacement gain is BELOW min_gain — the forced sell must happen anyway.
+    proj = _proj_frame([
+        _player(1, "DEF", price=4.0, xpts=0.2, status="i"),   # injured squad DEF
+        _player(2, "DEF", price=4.0, xpts=1.0),               # replacement, gain 0.8 < min_gain 2.0
+        _player(3, "MID", price=8.0, xpts=6.0),
+    ])
+    out = tp.plan_transfers(proj, squad_ids=[1, 3], gws=[10, 11], itb_m=0.0, start_ft=1, min_gain=2.0)
+    assert out["verdict"] == "spend_forced_injury"
+    first = out["plan"][0]
+    assert first["action"] == "transfer"
+    assert any(m["sell"]["id"] == 1 for m in first["moves"])
+    assert "P1" in out["reasoning"]  # reasoning names the flagged player
+
+
+def test_red_flag_zero_chance_also_forces():
+    proj = _proj_frame([
+        _player(1, "DEF", price=4.0, xpts=0.2, status="d", chance=0),
+        _player(2, "DEF", price=4.0, xpts=1.0),
+    ])
+    out = tp.plan_transfers(proj, squad_ids=[1], gws=[10], itb_m=0.0, start_ft=1, min_gain=2.0)
+    assert out["verdict"] == "spend_forced_injury"
+
+
+def test_yellow_doubt_does_not_force():
+    proj = _proj_frame([
+        _player(1, "DEF", price=4.0, xpts=2.0, status="d", chance=75),
+        _player(2, "DEF", price=4.0, xpts=2.5),   # gain 1.0 < min_gain -> roll
+    ])
+    out = tp.plan_transfers(proj, squad_ids=[1], gws=[10, 11], itb_m=0.0, start_ft=1, min_gain=2.0)
+    assert out["verdict"] == "roll"
+
+
+def test_red_flag_bench_does_not_force():
+    # 12 squad players; the red-flagged one has the LOWEST first-GW xpts -> bench (not top-11)
+    players = [_player(i, "MID", price=5.0, xpts=4.0 + i * 0.1) for i in range(1, 12)]
+    players.append(_player(99, "DEF", price=4.0, xpts=0.1, status="i"))
+    players.append(_player(100, "DEF", price=4.0, xpts=0.5))  # weak replacement, gain < min_gain
+    proj = _proj_frame(players)
+    out = tp.plan_transfers(proj, squad_ids=[p_id for p_id in range(1, 12)] + [99],
+                             gws=[10, 11], itb_m=0.0, start_ft=1, min_gain=2.0)
+    assert out["verdict"] == "roll"
+
+
+def test_verdicts_roll_and_spend_with_reasoning():
+    proj_roll = _proj_frame([
+        _player(1, "DEF", price=4.0, xpts=3.0),
+        _player(2, "DEF", price=4.0, xpts=3.5),   # gain 1.0 < 2.0
+    ])
+    out = tp.plan_transfers(proj_roll, squad_ids=[1], gws=[10, 11], itb_m=0.0, start_ft=1, min_gain=2.0)
+    assert out["verdict"] == "roll"
+    assert out["first_gw_ft_before"] == 1 and out["first_gw_ft_after"] == 1
+    assert "roll" in out["reasoning"].lower()
+
+    proj_spend = _proj_frame([
+        _player(1, "DEF", price=4.0, xpts=1.0),
+        _player(2, "DEF", price=4.0, xpts=6.0),   # gain 10.0 > 2.0
+    ])
+    out = tp.plan_transfers(proj_spend, squad_ids=[1], gws=[10, 11], itb_m=0.0, start_ft=1, min_gain=2.0)
+    assert out["verdict"] == "spend"
+    assert out["reasoning"]
+
+
+def test_missing_status_columns_noop():
+    # Frames without status/chance columns must not crash and never force
+    proj = _proj_frame([_player(1, "DEF", price=4.0, xpts=3.0)], with_status_cols=False)
+    out = tp.plan_transfers(proj, squad_ids=[1], gws=[10], itb_m=0.0, start_ft=1, min_gain=2.0)
+    assert out["verdict"] in ("roll", "spend")
+
+
 def test_proposes_obvious_upgrade_at_first_gw():
     proj = _proj([
         (1, "Weak", "MID", "AAA", 5.0, 2.0),    # owned

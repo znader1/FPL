@@ -1165,8 +1165,18 @@ def build_recommendations(payload):
     if include_transfers and not chip_info.get("is_active"):
         try:
             _squad_ids = [int(x) for x in squad_df["player_id"].tolist()]
+            # The planner's injury gate needs status / chance_of_playing_next_round.
+            # proj_all normally already carries them (projections.py keeps both),
+            # but merge from the elements frame defensively if a path ever drops them.
+            _plan_proj = proj_all
+            _elements_df = elements if isinstance(elements, pd.DataFrame) else pd.DataFrame(elements)
+            if "status" not in _plan_proj.columns and "status" in _elements_df.columns:
+                _status_cols = ["id", "status"]
+                if "chance_of_playing_next_round" in _elements_df.columns:
+                    _status_cols.append("chance_of_playing_next_round")
+                _plan_proj = _plan_proj.merge(_elements_df[_status_cols], on="id", how="left")
             out["transfer_plan_horizon"] = transfer_planner.plan_transfers(
-                proj_all, _squad_ids, gws,
+                _plan_proj, _squad_ids, gws,
                 itb_m=safe_float(itb_m, default=0.0) or 0.0,
                 start_ft=int(free_transfers_value), ft_cap=5, allow_hits=True)
         except Exception as e:  # noqa: BLE001 - planning must never fail the recommendation

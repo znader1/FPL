@@ -149,6 +149,14 @@ TRANSFER_BEAM_WIDTH = 8
 TRANSFER_BEAM_SELLERS = 8
 TRANSFER_BEAM_BUYERS = 6
 
+# --- Horizon planner injury gate (src/transfer_planner.py) ---
+# A squad player in the likely first-GW XI with one of these statuses is
+# force-sold ahead of the normal greedy roll/spend decision, even if the
+# best replacement's gain is below TRANSFER's min_gain threshold.
+TRANSFER_PLANNER_RED_FLAG_STATUSES = ("i", "s", "u")
+# chance_of_playing_next_round at/below this also forces a sell (e.g. 0 == ruled out).
+TRANSFER_PLANNER_RED_FLAG_MAX_CHANCE = 0.0
+
 # -----------------------------
 # Strategy recommendation tuning
 # -----------------------------
