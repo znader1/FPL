@@ -34,6 +34,7 @@ from src.backtest_data import (
 )
 from src.backtest_adapter import build_engine_inputs
 from src import projections as engine_projections
+from src import transfer_planner
 from src.chip_advisor import plan_chips_smart, recommend_chips
 from src.captain_advisor import pick_captain_id as advisor_pick_captain
 from src.transfer_advisor import top_transfer as advisor_top_transfer
@@ -423,6 +424,58 @@ def plan_chips(
     return chips
 
 
+# ---------- transfer move application (shared by every decision mode) ----------
+
+def _apply_squad_move(squad: pd.DataFrame, market: pd.DataFrame, sell_id: int, buy_id: int) -> pd.DataFrame:
+    """Swap `sell_id` out of `squad` for `buy_id` (metadata looked up in `market`).
+    Shared by every transfer-decision path (simple `suggest_transfer`, `--smart-transfers`,
+    `--planner`) so the squad-dataframe surgery lives in exactly one place.
+    """
+    buy_row = market[market["player_id"] == buy_id].iloc[0]
+    new_squad = squad[squad["player_id"] != sell_id].copy()
+    new_squad = pd.concat([new_squad, pd.DataFrame([{
+        "player_id": int(buy_row["player_id"]),
+        "name": buy_row["name"],
+        "pos": buy_row["pos"],
+        "team": buy_row["team"],
+        "price_m": float(buy_row["price_m"]),
+    }])], ignore_index=True)
+    return new_squad
+
+
+def build_planner_proj(horizon_proj: dict[int, pd.DataFrame]) -> pd.DataFrame:
+    """Reshape the per-GW projection frames the backtest already builds (each keyed
+    by GW, with player_id/name/pos/team/price_m/xpts columns -- the same shape
+    `project_gw`/`project_gw_engine` return for a single target GW) into the wide
+    `xpts_gw{N}`-column frame `transfer_planner.plan_transfers` expects (it also
+    wants `id`/`web_name`/`team_short` naming instead of `player_id`/`name`/`team`).
+
+    Pure function, no I/O -- unit-testable on its own.
+    """
+    gws = sorted(horizon_proj.keys())
+    if not gws:
+        return pd.DataFrame(columns=["id", "web_name", "pos", "team_short", "price_m"])
+
+    meta = None
+    xpts_by_gw = {}
+    for g in gws:
+        df = horizon_proj[g]
+        frame_meta = df[["player_id", "name", "pos", "team", "price_m"]].drop_duplicates("player_id")
+        if meta is None:
+            meta = frame_meta.copy()
+        else:
+            missing = frame_meta[~frame_meta["player_id"].isin(meta["player_id"])]
+            if not missing.empty:
+                meta = pd.concat([meta, missing], ignore_index=True)
+        xpts_by_gw[g] = df[["player_id", "xpts"]].rename(columns={"xpts": f"xpts_gw{g}"})
+
+    out = meta.rename(columns={"player_id": "id", "name": "web_name", "team": "team_short"})
+    for g in gws:
+        out = out.merge(xpts_by_gw[g].rename(columns={"player_id": "id"}), on="id", how="left")
+        out[f"xpts_gw{g}"] = pd.to_numeric(out[f"xpts_gw{g}"], errors="coerce").fillna(0.0)
+    return out
+
+
 # ---------- weekly chip decision ----------
 
 PHASE1_END = 19
@@ -534,6 +587,7 @@ def run_backtest(
     enable_can_bonus: bool = False,
     manual_chip_plan: dict | None = None,
     smart_transfers: bool = False,
+    planner: bool = False,
 ) -> pd.DataFrame:
     teams = load_teams(season)
     fixtures_all = load_fixtures(season)
@@ -566,6 +620,7 @@ def run_backtest(
             bank_m = 0.0
 
     free_transfers = 1
+    ft_state = 1  # tracked separately under the src/ft_tracker.py rule (cap 5), --planner arm only
     total_points = 0
     total_hits = 0
     log = []
@@ -646,6 +701,7 @@ def run_backtest(
         hit_cost = 0
         transfer = None
         free_hit_temp_squad = None
+        plan_action = None
 
         # --- Chip handling ---
         if chip_this_gw == "wildcard":
@@ -663,7 +719,45 @@ def run_backtest(
             free_hit_temp_squad = fh_squad[["player_id", "name", "pos", "team", "price_m"]].reset_index(drop=True)
         elif chip_this_gw is None or chip_this_gw in ("triple_captain", "bench_boost"):
             # Normal transfer flow (TC and BB don't affect transfers)
-            if smart_transfers:
+            if planner:
+                # Horizon walk via transfer_planner.plan_transfers; take only the FIRST
+                # horizon GW's decision (roll or transfer) — the rest of the horizon is
+                # re-planned fresh next GW as new projections/actuals come in.
+                planner_horizon = [g for g in range(gw, min(gw + 4, end_gw + 1))]
+                horizon_proj = {gw: market}
+                for fgw in planner_horizon[1:]:
+                    try:
+                        if use_engine:
+                            horizon_proj[fgw] = project_gw_engine(fgw, season=season, horizon=1)
+                        else:
+                            horizon_proj[fgw] = project_gw(fgw, full_history[full_history["gw"] < fgw], fixtures_all, teams)
+                    except Exception:
+                        pass
+                planner_proj = build_planner_proj(horizon_proj)
+                plan_result = transfer_planner.plan_transfers(
+                    planner_proj,
+                    squad["player_id"].astype(int).tolist(),
+                    planner_horizon,
+                    itb_m=bank_m,
+                    start_ft=ft_state,
+                    ft_cap=5,
+                    allow_hits=False,
+                )
+                first = plan_result["plan"][0] if plan_result.get("plan") else None
+                plan_action = first["action"] if first else None
+                gw_moves = first["moves"] if first and first["action"] == "transfer" else []
+                for mv in gw_moves:
+                    squad = _apply_squad_move(squad, market, mv["sell"]["id"], mv["buy"]["id"])
+                    bank_m += mv["sell"]["price"] - mv["buy"]["price"]
+                # FT-state update must match src/ft_tracker.py exactly (cap 5, +1/GW, floor 0).
+                ft_state = min(5, max(ft_state - len(gw_moves), 0) + 1)
+                if gw_moves:
+                    transfer = {
+                        "sell_name": "+".join(m["sell"]["name"] for m in gw_moves),
+                        "buy_name": "+".join(m["buy"]["name"] for m in gw_moves),
+                    }
+                # allow_hits=False above means the planner never takes a -4 hit itself.
+            elif smart_transfers:
                 # Build 3-GW projection cache for the advisor
                 horizon_proj = {gw: market}
                 for fgw in range(gw + 1, min(gw + 3, end_gw + 1)):
@@ -696,17 +790,9 @@ def run_backtest(
                     }
             else:
                 transfer = suggest_transfer(squad_proj, market, bank_m, min_gain=min_transfer_gain)
-            if transfer:
-                sell = squad[squad["player_id"] == transfer["sell_id"]].iloc[0]
-                buy_row = market[market["player_id"] == transfer["buy_id"]].iloc[0]
-                squad = squad[squad["player_id"] != transfer["sell_id"]].copy()
-                squad = pd.concat([squad, pd.DataFrame([{
-                    "player_id": int(buy_row["player_id"]),
-                    "name": buy_row["name"],
-                    "pos": buy_row["pos"],
-                    "team": buy_row["team"],
-                    "price_m": float(buy_row["price_m"]),
-                }])], ignore_index=True)
+
+            if not planner and transfer:
+                squad = _apply_squad_move(squad, market, transfer["sell_id"], transfer["buy_id"])
                 bank_m += transfer["sell_price"] - transfer["buy_price"]
                 if free_transfers > 0:
                     free_transfers -= 1
@@ -738,9 +824,11 @@ def run_backtest(
         cap_multiplier_extra = 2 if chip_this_gw == "triple_captain" else 1
         gw_points = float(squad_actuals["total_points"].sum()) + cap_multiplier_extra * captain_pts - hit_cost
 
-        # Free transfer rollover
-        free_transfers = min(2, free_transfers + 1) if not transfer else free_transfers + 1
-        free_transfers = min(2, free_transfers)
+        # Free transfer rollover (non-planner arms only; --planner tracks ft_state
+        # itself via the src/ft_tracker.py rule, applied right after its moves above)
+        if not planner:
+            free_transfers = min(2, free_transfers + 1) if not transfer else free_transfers + 1
+            free_transfers = min(2, free_transfers)
 
         total_points += gw_points
         log.append({
@@ -753,7 +841,8 @@ def run_backtest(
             "hit": hit_cost,
             "chip": chip_this_gw or "",
             "bank": round(bank_m, 1),
-            "ft": free_transfers,
+            "ft": ft_state if planner else free_transfers,
+            "action": (plan_action or "hold") if planner else ("transfer" if transfer else "hold"),
             "total": total_points,
         })
 
@@ -778,6 +867,9 @@ def main():
                     help="Decide chips week-by-week using chip_advisor (recommended)")
     ap.add_argument("--smart-transfers", action="store_true",
                     help="Use transfer_advisor (multi-GW horizon, captain-aware)")
+    ap.add_argument("--planner", action="store_true",
+                    help="Choose per-GW transfers (and rolls) via transfer_planner.plan_transfers "
+                         "first-GW action -- a 4-GW roll/bank-aware horizon walk, hits disabled")
     ap.add_argument("--chip-plan", default=None,
                     help="Manual chip plan as comma-separated 'chip:gw' pairs, e.g. 'wildcard:6,bench_boost:8,free_hit:15,triple_captain:17,triple_captain_2:26'")
     ap.add_argument("--can-bonus", action="store_true",
@@ -801,6 +893,7 @@ def main():
         args.season, args.start, args.end, args.initial_squad, args.min_gain,
         args.use_engine, chips_mode, args.can_bonus, manual_chip_plan,
         smart_transfers=args.smart_transfers,
+        planner=args.planner,
     )
 
     out = Path(args.out)

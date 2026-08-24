@@ -677,4 +677,56 @@ git commit -m "feat(transfers): verdict banner on the horizon plan"
 
 ## Results
 
+### Task 6: `--planner` A/B backtest (2026-08-24)
+
+Added `--planner` to `scripts/backtest_season.py` alongside the existing `--smart-transfers`
+("always-spend": greedy 1-for-1 via `transfer_advisor.top_transfer` every GW it clears a
+0.6-xPts bar). `--planner` instead re-runs `transfer_planner.plan_transfers` fresh every real
+GW over a 4-GW rolling horizon (`[gw, min(gw+4, end+1))`), applies only that call's FIRST-GW
+decision (roll or up to `max_moves_per_gw` transfers, `min_gain=2.0` default, `allow_hits=False`
+so it never takes a -4), then advances to the next real GW with the resulting squad/bank. Its
+own FT counter (`ft_state`) follows `src/ft_tracker.py` exactly: `ft = min(5, max(ft - used, 0) + 1)`
+per GW (cap 5) — kept separate from the pre-existing `free_transfers` variable used by the other
+two arms, which still caps at 2 (unchanged, no behaviour-flag flips).
+
+Per-GW projection frames (`project_gw`/`project_gw_engine` output: `player_id`/`name`/`pos`/
+`team`/`price_m`/`xpts`) don't natively carry the multi-GW `xpts_gw{N}` columns
+`transfer_planner.plan_transfers` expects, so a new pure helper `build_planner_proj` reshapes
+a `{gw: frame}` dict (built the same way `--smart-transfers` already builds its own horizon
+cache) into the wide `id`/`web_name`/`pos`/`team_short`/`price_m`/`xpts_gw{N}` frame. Move
+application (`_apply_squad_move`) was extracted from the old inline sell/buy block so it's
+shared by all three transfer-decision modes (simple `suggest_transfer`, `--smart-transfers`,
+`--planner`) instead of duplicated for the planner's multi-move-per-GW case.
+
+**Smoke run (GW2–10, `--use-engine`, both arms):** both completed. In this short early-season
+window every GW had a swap clearing the bar on both arms (0 rolls) — confirmed via a standalone
+`plan_transfers` call on an intermediate squad/bank state that the roll branch *does* fire when
+the horizon-summed gain doesn't clear 2.0; it just didn't happen to occur inside GW2–10 with this
+particular squad trajectory.
+
+**Full A/B run (GW2–29, `--use-engine`, season 2025-26):**
+
+| Arm | Total pts | Avg pts/GW | Transfers | Rolls | Hit-GWs | Pts lost to hits | Captain hits (≥10pt) |
+|---|---|---|---|---|---|---|---|
+| `--smart-transfers` (always-spend) | **1415** | 50.54 | 28 | 0 | 0 | 0 | 7/28 (25%) |
+| `--planner` (roll/bank-aware) | **1546** | 55.21 | 27 | 1 | 0 | 0 | 9/28 (32%) |
+
+Planner beat always-spend by **+131 pts** over the 28-GW window. The one roll GW was GW29 (the
+final GW in range), where the horizon collapses to a single GW — a much higher single-GW bar
+than the multi-GW-summed bar used earlier in the season, so rolling became the better call.
+Neither arm took a hit (both stayed within 1 FT/GW everywhere it mattered). The point gap is
+driven by which swaps each arm's own transfer-selection logic finds attractive week to week
+(different candidate-ranking code paths, `transfer_advisor.top_transfer` vs
+`transfer_planner.plan_transfers`), not purely by the roll/spend policy — the single observed
+roll only accounts for one GW's difference.
+
+Commands run:
+```bash
+python scripts/backtest_season.py --season 2025-26 --start 2 --end 29 --use-engine --smart-transfers --out data/backtest/ab_spend.csv
+python scripts/backtest_season.py --season 2025-26 --start 2 --end 29 --use-engine --planner --out data/backtest/ab_planner.csv
+```
+
+Full pytest suite: 202 passed (includes new `tests/test_backtest_season_planner.py` covering
+`build_planner_proj` and `_apply_squad_move`). No behaviour flags flipped.
+
 (filled by Tasks 6–8)
