@@ -135,6 +135,13 @@ def test_flag_wiring_offline_deterministic(monkeypatch):
         minutes_model, "minutes_projection", lambda elements, hist, gw: mock_mins.copy()
     )
 
+    # Isolate from the unrelated xG-blend feature (PROJ_MODEL_BLEND_WEIGHT): this test
+    # is specifically about the minutes-mult exact-once-application invariant, and the
+    # blend term doesn't scale with minutes_mult, so a nonzero weight breaks the
+    # `xpts_on == xpts_off * minutes_mult` assertion for reasons orthogonal to what's
+    # under test here.
+    monkeypatch.setattr(config, "PROJ_MODEL_BLEND_WEIGHT", 0.0, raising=False)
+
     monkeypatch.setattr(config, "PROJ_APPLY_MINUTES_MODEL", False, raising=False)
     off = projections.project_elements_next_gws(
         elements, fixtures, teams_short_map, gw_start=gw_start, horizon_gws=3

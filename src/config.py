@@ -288,9 +288,13 @@ OUTPUT_DC_THRESHOLD = {"GKP": 10, "DEF": 10, "MID": 12, "FWD": 12}
 OUTPUT_DC_BASE_RATE = {"GKP": 0.0, "DEF": 0.12, "MID": 0.06, "FWD": 0.0}  # shrink prior (GKP/FWD ~never clear)
 
 # --- blend of the xG model into the baseline projection ---
-# 0.0 => baseline projections unchanged (preserves backtest parity). Raise to
-# weight the xG model's per-GW xpts against the existing engine output.
-PROJ_MODEL_BLEND_WEIGHT = 0.0
+# Set from the Task 8 sweep (docs/superpowers/plans/2026-08-25-transfer-planner-v2.md
+# ## Results): scripts.backtest_blend_sweep over 2025-26 GW6-29 (24 GWs), DC=True,
+# weight 0.5 beat weight 0.0 on every metric (MAE -0.202/-9.47%, captain hit +0.042,
+# top10 +0.029, regret -0.334), with MAE improving monotonically across the whole
+# grid and no regression at any weight. 0.5 is the top of the script's default grid,
+# not a confirmed interior optimum -- see the Task 8 caveats in the plan doc.
+PROJ_MODEL_BLEND_WEIGHT = 0.5
 
 # --- minutes/rotation-risk multiplier (surgical, applied in projections.py) ---
 # Master flag: when True, project_elements_next_gws replaces the crude

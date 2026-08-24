@@ -218,10 +218,13 @@ def _optimize_xi(squad_df, proj, gws, gw_start, objective, formations):
                          for pid in xi_ids if pid in pm.index)
             cap_bonus = (float(pd.to_numeric(pm.loc[int(cap), col], errors="coerce") or 0.0)
                          if cap is not None and int(cap) in pm.index else 0.0)
+            xi_pts_r, cap_bonus_r = round(xi_pts, 2), round(cap_bonus, 2)
             per_gw_lineups.append({
                 "gw": g, "formation": lu["formation"], "starting_xi": xi_ids,
-                "captain_player_id": cap, "xi_points": round(xi_pts, 2),
-                "captain_bonus": round(cap_bonus, 2), "total": round(xi_pts + cap_bonus, 2)})
+                "captain_player_id": cap, "xi_points": xi_pts_r,
+                # total from the already-rounded parts so it always matches their sum
+                # (rounding xi_pts + cap_bonus independently can be off by a cent of a point).
+                "captain_bonus": cap_bonus_r, "total": round(xi_pts_r + cap_bonus_r, 2)})
         return display, per_gw_lineups
 
     if objective == "horizon" and "xpts_horizon" in proj.columns:
@@ -249,9 +252,12 @@ def _projected_points(lineup, proj, gws, gw_start):
         cap_bonus = 0.0
         if cap_id is not None and int(cap_id) in pm.index:
             cap_bonus = float(pd.to_numeric(pm.loc[int(cap_id), col], errors="coerce") or 0.0)
-        per_gw.append({"gw": g, "xi_points": round(xi_pts, 2),
-                       "captain_bonus": round(cap_bonus, 2),
-                       "total": round(xi_pts + cap_bonus, 2)})
+        xi_pts_r, cap_bonus_r = round(xi_pts, 2), round(cap_bonus, 2)
+        # total from the already-rounded parts so it always matches their sum
+        # (rounding xi_pts + cap_bonus independently can be off by a cent of a point).
+        per_gw.append({"gw": g, "xi_points": xi_pts_r,
+                       "captain_bonus": cap_bonus_r,
+                       "total": round(xi_pts_r + cap_bonus_r, 2)})
     return {"per_gw": per_gw, "horizon_total": round(sum(r["total"] for r in per_gw), 2)}
 
 

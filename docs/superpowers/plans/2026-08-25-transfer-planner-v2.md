@@ -814,3 +814,98 @@ weight tested, matches it exactly on captain hit rate, is a statistical wash on 
 (no regression), improves rank correlation, and meaningfully reduces the model's total-points
 under-prediction. No arm/metric shows DC=True regressing DC=False outside noise.
 
+### Task 8: blend-weight sweep + decision (2026-08-24)
+
+With Task 7's decision (`OUTPUT_APPLY_DC = True`, unchanged) in place, ran
+`scripts/backtest_blend_sweep.py`'s own default weight grid over the same closest-supported
+window, GW6–29 (2025-26) — same `--min-gw 6` constraint as Task 7 (xG ratings need GW6+ of
+history).
+
+**Command run (verbatim):**
+```bash
+PYTHONPATH=. python -m scripts.backtest_blend_sweep --min-gw 6 --max-gws 24
+```
+(This is the same run already captured as the "DC=True" row-set in Task 7's sweep table above —
+reproduced here for Task 8's own record since it's the artifact this task's decision is based
+on.)
+
+**Per-weight metric table (`OUTPUT_APPLY_DC = True`, GW6–29, 24 GWs):**
+
+| weight | MAE | Δ MAE vs 0.0 | capt hit | capt regret | top10 |
+|---|---|---|---|---|---|
+| 0.00 | 2.130 | +0.000 | 0.083 | 11.792 | 0.096 |
+| 0.10 | 2.070 | −0.060 | 0.125 | 10.875 | 0.104 |
+| 0.20 | 2.020 | −0.109 | 0.125 | 11.292 | 0.100 |
+| 0.30 | 1.980 | −0.150 | 0.125 | 11.500 | 0.113 |
+| 0.40 | 1.950 | −0.180 | 0.125 | 11.583 | 0.113 |
+| 0.50 | 1.928 | −0.202 | 0.125 | 11.458 | 0.125 |
+
+Script's own verdict line: `Best weight 0.50: MAE 0.2016 lower than baseline (9.47% better).`
+MAE improves monotonically as weight rises across the whole tested grid (0.0→0.5), never
+reversing; captain hit rate jumps from 0.083→0.125 the moment the blend turns on (weight ≥ 0.10)
+and is flat after that; top10 precision also rises monotonically (0.096→0.125). Regret is noisy
+(no clear monotonic trend, all values within ~1pt of each other) but never worse than the
+weight=0.0 baseline (11.792) at any nonzero weight.
+
+The grid tops out at 0.50 (the script's own `DEFAULT_WEIGHTS`); the true argmax over the
+supported grid is **weight = 0.50** (best MAE, best top10, tied-best captain hit, and its
+diagnose-table spearman of 0.3285 is the highest of the three diagnose weights tested in Task 7).
+The improving trend does not plateau by 0.50 — MAE is still falling at the top of the grid — so
+0.50 is the best *evaluated* point, not a confirmed interior optimum; noted as a limitation below.
+
+**Decision: set `PROJ_MODEL_BLEND_WEIGHT = 0.5`** (was `0.0`). Weight 0.5 beats weight 0.0 on
+every metric in the table (MAE −0.202 / −9.47%, captain hit +0.042, top10 +0.029, regret
+−0.334) with no regression on any axis over the 24-GW window. Comment added in `src/config.py`
+citing this sweep.
+
+**Caveats (recorded, not blocking):** (1) the sweep script's own printed warning — "Small
+margins on ~30 GWs are noise — confirm before shipping" — applies; a 24-GW single-season window
+is a modest sample. (2) The grid stops at 0.50 while MAE is still improving at that edge, so a
+follow-up sweep extending past 0.50 (e.g. 0.6–1.0) would be needed to find a true interior
+optimum rather than a grid-edge best; not done here since the brief scopes this task to "the
+sweep script's own grid". (3) `backtest_blend_diagnose.py`'s three-point grid (0, 0.25, 0.5) was
+only run as part of Task 7's DC diagnostic and wasn't independently re-swept for Task 8, since
+its own weights are a subset of the sweep grid already tabulated above and its purpose (shrinkage
+vs. skill check) was already answered in Task 7's evidence.
+
+**Full test suite after the config change:** first run surfaced 2 pre-existing failures, both
+caused by the projections pipeline no longer being a no-op at `PROJ_MODEL_BLEND_WEIGHT=0.5`
+(previously masked at the shipped `0.0` default):
+
+1. `tests/test_projections_minutes.py::test_flag_wiring_offline_deterministic` — this test
+   verifies the minutes-model rotation multiplier is applied *exactly once*
+   (`xpts_on == xpts_off * minutes_mult`, catching a double-discount bug). It never pinned
+   `PROJ_MODEL_BLEND_WEIGHT`, relying on the module default. The xG-blend term doesn't scale
+   with `minutes_mult`, so once the global default became 0.5 the exact-multiplication identity
+   broke for reasons entirely orthogonal to what the test checks. Fixed by monkeypatching
+   `config.PROJ_MODEL_BLEND_WEIGHT = 0.0` inside the test to isolate it from the unrelated
+   blend feature — restores the original intent (minutes-mult exactness) rather than loosening
+   the assertion.
+2. `tests/test_squad_draft.py::test_projected_points_present_and_summed` — asserts
+   `total == xi_points + captain_bonus` within `1e-6`. `src/squad_draft.py` (`_projected_points`
+   and the `per_gw` lineup builder) was independently rounding `xi_pts`, `cap_bonus`, and
+   `xi_pts + cap_bonus` to 2dp from the raw floats, which is not guaranteed to be self-consistent
+   (`round(a,2) + round(b,2)` can differ from `round(a+b,2)` by up to a cent of a point). This is
+   a real, pre-existing rounding bug — with the old `0.0` default the specific synthetic-test
+   floats happened not to hit a rounding boundary, so it was latent. `PROJ_MODEL_BLEND_WEIGHT=0.5`
+   changed the underlying floats and exposed it (in production this would also show up as, e.g.,
+   a squad-picker screen where the displayed XI points + captain bonus don't add up to the
+   displayed total). Fixed in `src/squad_draft.py` (both the `per_gw` objective branch and
+   `_projected_points`) by deriving `total` from the *already-rounded* `xi_points`/
+   `captain_bonus` instead of rounding the raw sum independently — guarantees the invariant
+   holds for the values actually returned to callers, not just a test-tolerance widening.
+
+After both fixes: `python -m pytest -q` → **203 passed** (was 202 before Task 8's changes; +1
+from a new pinning of an existing test, no new tests added).
+
+Commands run:
+```bash
+PYTHONPATH=. python -m scripts.backtest_blend_sweep --min-gw 6 --max-gws 24
+python -m pytest -q          # 2 failed, 201 passed (before fixes)
+python -m pytest -q          # 203 passed (after fixes)
+```
+
+**Files changed (Task 8):** `src/config.py` (`PROJ_MODEL_BLEND_WEIGHT` 0.0 → 0.5, comment cites
+this sweep), `src/squad_draft.py` (rounding-consistency fix, both projected-points builders),
+`tests/test_projections_minutes.py` (pin `PROJ_MODEL_BLEND_WEIGHT=0.0` in the minutes-mult
+exactness test), this plan doc.
