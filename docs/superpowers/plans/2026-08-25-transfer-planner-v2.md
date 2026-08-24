@@ -729,4 +729,88 @@ python scripts/backtest_season.py --season 2025-26 --start 2 --end 29 --use-engi
 Full pytest suite: 202 passed (includes new `tests/test_backtest_season_planner.py` covering
 `build_planner_proj` and `_apply_squad_move`). No behaviour flags flipped.
 
-(filled by Tasks 6–8)
+### Task 7: DC term A/B (2026-08-24)
+
+**Runner chosen:** neither `backtest_xg_basis.py` (explicitly "NOT an accuracy backtest" — a
+live-pool ppg-vs-xg divergence snapshot, no historical actuals) nor `backtest_season.py`
+exercises `OUTPUT_APPLY_DC` at the shipped config: `output_model.py` only runs inside
+`projections.project_elements_next_gws` when `PROJ_MODEL_BLEND_WEIGHT > 0` (confirmed by
+reading `src/projections.py:578-588` — `build_expected_points` is behind
+`if blend_weight > 0.0`), and both `backtest_season.py`'s `--use-engine` path and the shipped
+default (`PROJ_MODEL_BLEND_WEIGHT = 0.0`) never enter that branch, so DC would be provably inert
+there. `scripts/backtest_blend_sweep.py` and `scripts/backtest_blend_diagnose.py` *do* exercise
+it (they sweep `PROJ_MODEL_BLEND_WEIGHT` through the same `project_elements_next_gws` path), so
+these were used instead — sweeping the standard weight grid isolates DC's effect at every weight
+including the extreme (weight=1.0 = pure xG model, no ppg blend), which is the cleanest, least
+confounded way to see DC's own contribution before Task 8's blend-weight question.
+
+No CLI/env toggle exists for `OUTPUT_APPLY_DC` (confirmed: only `tests/test_dc_model.py`
+monkeypatches it) — toggled via a temporary `src/config.py` edit between runs, restored after
+(`git diff src/config.py` shows no net change).
+
+Neither existing script reports a **summed total-points** figure (both report means/MAE, not
+sums). Wrote a one-off scratchpad script (`dc_ab_totals.py`, not committed — reuses the real
+`_frame_for_gw`/`_team_name_to_id` helpers from `backtest_blend_sweep.py` verbatim, no
+reimplemented modeling logic) to sum projected vs. actual points at weight=1.0.
+
+**Window:** GW2–29 requested; `backtest_blend_sweep.py --min-gw` defaults to 6 with the comment
+"needs enough history for xG ratings" — confirmed `xG model produces ratings at GW6: True`, so
+the closest supported window actually used is **GW6–29 (24 GWs)**, 2025-26 season.
+
+**Commands run (verbatim):**
+```bash
+PYTHONPATH=. python -m scripts.backtest_blend_sweep --min-gw 6 --max-gws 24
+PYTHONPATH=. python -m scripts.backtest_blend_diagnose --min-gw 6 --max-gws 24
+PYTHONPATH=. python dc_ab_totals.py --min-gw 6 --max-gws 24 --weight 1.0
+```
+(each run twice: once with `OUTPUT_APPLY_DC = True` (current/shipped), once with `= False`,
+editing `src/config.py` between runs and restoring to `True` afterward.)
+
+**Sweep — MAE / captain hit / captain regret / top10 precision, by weight:**
+
+| weight | MAE (DC=True) | MAE (DC=False) | capt hit (both) | regret (True) | regret (False) | top10 (True) | top10 (False) |
+|---|---|---|---|---|---|---|---|
+| 0.00 | 2.130 | 2.130 | 0.083 | 11.792 | 11.792 | 0.096 | 0.096 |
+| 0.10 | 2.070 | 2.075 | 0.125 | 10.875 | 11.167 | 0.104 | 0.104 |
+| 0.20 | 2.020 | 2.028 | 0.125 | 11.292 | 11.500 | 0.100 | 0.104 |
+| 0.30 | 1.980 | 1.989 | 0.125 | 11.500 | 11.458 | 0.113 | 0.113 |
+| 0.40 | 1.950 | 1.960 | 0.125 | 11.583 | 11.500 | 0.113 | 0.117 |
+| 0.50 | 1.928 | 1.938 | 0.125 | 11.458 | 11.375 | 0.125 | 0.117 |
+
+Weight 0.00 is byte-identical between arms — expected sanity check, since DC is fully gated
+behind the blend and weight 0 never invokes it. At every weight ≥ 0.10, DC=True has strictly
+lower (better) MAE than DC=False (by 0.005–0.010, consistent direction all 5 weights). Captain
+hit rate is identical at every weight. Regret and top10 precision are a wash within
+GW6–29-sized noise (each arm wins ~half the weights, by ≤0.3 pts / ≤0.008 respectively).
+
+**Diagnose — spearman rank corr / top10 recall / mean pred vs mean actual (weights 0, 0.25, 0.5):**
+
+| weight | spearman (True) | spearman (False) | top10 recall (True) | top10 recall (False) | mean pred (True) | mean pred (False) | mean actual |
+|---|---|---|---|---|---|---|---|
+| 0.00 | 0.2973 | 0.2973 | 0.113 | 0.113 | 1.259 | 1.259 | 2.987 |
+| 0.25 | 0.3162 | 0.3130 | 0.117 | 0.125 | 1.540 | 1.509 | 2.987 |
+| 0.50 | 0.3285 | 0.3213 | 0.138 | 0.133 | 1.820 | 1.760 | 2.987 |
+
+DC=True raises rank correlation with actual points at both nonzero weights (0.3162 vs 0.3130,
+0.3285 vs 0.3213) and pulls mean predicted points closer to mean actual (both still well below —
+this is the shrinkage-vs-skill check from the diagnose script's own docstring; here the rank
+correlation genuinely improves alongside the mean shifting up, so it isn't pure shrinkage).
+
+**Totals — weight=1.0 (pure xG model), GW6–29, players with minutes>0 (n=7271 player-GW rows):**
+
+| Arm | SUM projected | SUM actual | diff (proj − actual) | ratio proj/actual |
+|---|---|---|---|---|
+| DC=True | 17318.3 | 21718.0 | −4399.7 | 0.7974 |
+| DC=False | 16435.0 | 21718.0 | −5283.0 | 0.7567 |
+
+Both arms under-predict total points (expected — pure xG-per-90 output misses bonus points,
+defensive-contribution points, etc. by design), but DC=True closes **883.3 of the 5283.0-point
+gap** (~17% of the shortfall) versus DC=False, exactly matching the config comment's stated
+purpose ("a chunk of why the xG model under-predicts").
+
+**Decision: keep `OUTPUT_APPLY_DC = True`** (no config change — reverted the temporary edit;
+`git diff src/config.py` is empty). Evidence: DC=True strictly beats DC=False on MAE at every
+weight tested, matches it exactly on captain hit rate, is a statistical wash on regret/top10
+(no regression), improves rank correlation, and meaningfully reduces the model's total-points
+under-prediction. No arm/metric shows DC=True regressing DC=False outside noise.
+
