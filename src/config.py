@@ -118,6 +118,7 @@ TRANSFER_MIN_SCORE_GAIN = 0.60
 TRANSFER_HIT_POINTS_STEP = 4
 TRANSFER_MAX_MOVES = 5
 TRANSFER_DEFAULT_HOT_TOPN = 5
+FT_MAX = 5                              # 2026-27: free transfers bank up to 5
 
 TRANSFER_SET_PIECE_WEIGHTS = {
     "penalties": {1: 3.1, 2: 1.2, 3: 0.35},
