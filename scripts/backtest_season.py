@@ -702,6 +702,7 @@ def run_backtest(
         transfer = None
         free_hit_temp_squad = None
         plan_action = None
+        gw_moves = []  # planner moves this GW; stays [] (used=0) on wildcard/free_hit chip GWs
 
         # --- Chip handling ---
         if chip_this_gw == "wildcard":
@@ -749,8 +750,6 @@ def run_backtest(
                 for mv in gw_moves:
                     squad = _apply_squad_move(squad, market, mv["sell"]["id"], mv["buy"]["id"])
                     bank_m += mv["sell"]["price"] - mv["buy"]["price"]
-                # FT-state update must match src/ft_tracker.py exactly (cap 5, +1/GW, floor 0).
-                ft_state = min(5, max(ft_state - len(gw_moves), 0) + 1)
                 if gw_moves:
                     transfer = {
                         "sell_name": "+".join(m["sell"]["name"] for m in gw_moves),
@@ -824,9 +823,14 @@ def run_backtest(
         cap_multiplier_extra = 2 if chip_this_gw == "triple_captain" else 1
         gw_points = float(squad_actuals["total_points"].sum()) + cap_multiplier_extra * captain_pts - hit_cost
 
-        # Free transfer rollover (non-planner arms only; --planner tracks ft_state
-        # itself via the src/ft_tracker.py rule, applied right after its moves above)
-        if not planner:
+        # Free transfer rollover — runs every GW regardless of chip, matching how
+        # FPL itself accrues FT even on wildcard/free-hit GWs (they just consume 0).
+        if planner:
+            # Must match src/ft_tracker.py exactly: ft = min(5, max(ft - used, 0) + 1).
+            # `gw_moves` is [] (used=0) on wildcard/free_hit GWs since the planner
+            # branch that populates it is skipped for those chips.
+            ft_state = min(5, max(ft_state - len(gw_moves), 0) + 1)
+        else:
             free_transfers = min(2, free_transfers + 1) if not transfer else free_transfers + 1
             free_transfers = min(2, free_transfers)
 
