@@ -25,6 +25,9 @@ ELEMENTS_KEEP = [
     "corners_and_indirect_freekicks_order","corners_and_indirect_freekicks_text",
     # UI icons
     "photo","code",
+    # xG / expected-points stack (retained last-season per-90 aggregates pre-season)
+    "expected_goals_per_90","expected_assists_per_90","expected_goals_conceded_per_90",
+    "saves_per_90","starts",
 ]
 
 # Position labels to show
@@ -115,6 +118,7 @@ TRANSFER_MIN_SCORE_GAIN = 0.60
 TRANSFER_HIT_POINTS_STEP = 4
 TRANSFER_MAX_MOVES = 5
 TRANSFER_DEFAULT_HOT_TOPN = 5
+FT_MAX = 5                              # 2026-27: free transfers bank up to 5
 
 TRANSFER_SET_PIECE_WEIGHTS = {
     "penalties": {1: 3.1, 2: 1.2, 3: 0.35},
@@ -144,6 +148,14 @@ TRANSFER_GUARDRAIL_INJURY_OVERRIDE = 2.5
 TRANSFER_BEAM_WIDTH = 8
 TRANSFER_BEAM_SELLERS = 8
 TRANSFER_BEAM_BUYERS = 6
+
+# --- Horizon planner injury gate (src/transfer_planner.py) ---
+# A squad player in the likely first-GW XI with one of these statuses is
+# force-sold ahead of the normal greedy roll/spend decision, even if the
+# best replacement's gain is below TRANSFER's min_gain threshold.
+TRANSFER_PLANNER_RED_FLAG_STATUSES = ("i", "s", "u")
+# chance_of_playing_next_round at/below this also forces a sell (e.g. 0 == ruled out).
+TRANSFER_PLANNER_RED_FLAG_MAX_CHANCE = 0.0
 
 # -----------------------------
 # Strategy recommendation tuning
@@ -180,3 +192,119 @@ CHIP_WILDCARD_OWNERSHIP_BONUS_SCALE = 40.0
 CHIP_WILDCARD_MIN_PREMIUM_CAPTAINS = 1
 CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR = 10.5
 CHIP_WILDCARD_PREMIUM_CAPTAIN_POSITIONS = ["MID", "FWD"]
+
+# ---------------------------------------------------------------------------
+# xG expected-points model (fixture_difficulty / minutes_model / output_model)
+# These feed src/expected_points.py, which produces a parallel `xpts_model_*`
+# column that project_elements_next_gws blends in via PROJ_MODEL_BLEND_WEIGHT.
+# ---------------------------------------------------------------------------
+
+# --- fixture_difficulty.py: xG-based team strength ---
+FDR_XG_HALFLIFE_DAYS = 60.0          # exponential time-decay half-life on team-match xG samples
+FDR_XG_SHRINKAGE_MATCHES = 6.0       # pseudo-matches of league-average prior (shrinks thin samples)
+FDR_HOME_XG_MULT = 1.10              # home attacking boost when projecting a fixture's xG
+FDR_AWAY_XG_MULT = 0.92              # away attacking penalty
+FDR_RATING_MIN = 0.50                # clamp on attack/defense rating multipliers
+FDR_RATING_MAX = 1.80
+FDR_LEAGUE_AVG_XG_FALLBACK = 1.40    # per-team per-match league-average xG when data is thin
+FDR_KNOWLEDGE_DISCOUNT_PATH = "data/models/knowledge_discount.json"
+# Player-level knowledge (news/injury) for the squad picker.
+PLAYER_KNOWLEDGE_PATH = "data/models/player_knowledge.json"
+PLAYER_KNOWLEDGE_STALE_DAYS = 10
+
+# News corpus (Approach B: RSS refresh routine -> news_digest reads this dir).
+NEWS_KB_DIR = "kb/auto/news"
+NEWS_MAX_AGE_DAYS = 14   # digest only items this fresh; prune older md
+NEWS_FEEDS = [           # RSS sources (verified live 2026-07-26)
+    {"source": "sportsmole.co.uk", "url": "https://www.sportsmole.co.uk/football/rss.xml"},
+    {"source": "football-talk.co.uk", "url": "https://football-talk.co.uk/feed/"},
+    {"source": "betting.betfair.com", "url": "https://betting.betfair.com/football/rss.xml"},
+]
+
+# Cross-season carryover (season-start cold start). At a new season's launch there
+# is no current-season xG, so ratings start from the prior season's frozen seed
+# (regressed toward the mean) and the live signal takes over as matches accrue.
+FDR_RATINGS_SEED_PATH = "data/models/team_ratings_seed.json"
+MINUTES_INSEASON_SHRINK_PSEUDO = 1.0 # pseudo-matches of 0.5 starts mixed into in-season p_start (small-sample damping)
+FDR_CS_PRIOR_WEIGHT = 0.35           # blend of clean-sheet-implied defense into the carryover rating (0 = off)
+FDR_CS_PRIOR_MIN_MATCHES = 6.0       # GK starts needed before the CS record counts as signal (guards season-reset stats)
+FDR_CARRYOVER_PRIOR_MATCHES = 8.0    # pseudo-matches of weight given to the prior-season seed
+FDR_CARRYOVER_REGRESSION = 0.30      # regress the prior-season rating this far toward 1.0 (mean)
+# Promoted teams have no top-flight xG and no seed: assume a weak default until games arrive.
+FDR_PROMOTED_DEFAULT_ATTACK = 0.82
+FDR_PROMOTED_DEFAULT_DEFENSE = 1.20  # >1 => concedes more xG than average (weaker defense)
+# Difficulty bands for the fixture ticker: (max_score, label, color). Score is the
+# attacking-difficulty a team faces (higher = harder), centered near 3.0 like FPL's FDR.
+FDR_TICKER_BANDS = [
+    [2.2, "very_easy", "#1a9850"],
+    [2.7, "easy", "#66bd63"],
+    [3.3, "medium", "#fee08b"],
+    [3.8, "hard", "#f46d43"],
+    [9.9, "very_hard", "#d73027"],
+]
+
+# --- minutes_model.py: P(start) + expected minutes ---
+MINUTES_HALFLIFE_GWS = 5.0           # decay half-life (in GWs) on start/minutes history
+MINUTES_START_PRIOR = 0.55           # prior P(start) for players with no history
+MINUTES_PRIOR_WEIGHT = 2.0           # pseudo-GWs of prior weight (shrinks thin samples)
+MINUTES_E_MIN_GIVEN_START = 82.0     # assumed E[minutes | started] with no history
+MINUTES_CAMEO_MINUTES = 22.0         # assumed E[minutes | sub appearance]
+MINUTES_SUB_APP_PROB = 0.45          # P(appear | did not start) baseline
+MINUTES_P60_GIVEN_START = 0.86       # P(>=60 min | started) baseline
+MINUTES_STATUS_AVAILABILITY = {      # hard availability cap by FPL status code
+    "a": 1.0, "d": 0.5, "i": 0.0, "s": 0.0, "u": 0.0, "n": 0.0,
+}
+
+# --- output_model.py: xG-based structural points ---
+OUTPUT_XG_HALFLIFE_DAYS = 75.0       # decay half-life on player per-90 xG/xA samples
+OUTPUT_MIN_MINUTES_TRUST = 270.0     # minutes before a player's own rates are trusted over position prior
+OUTPUT_GOAL_POINTS = {"GKP": 6, "DEF": 6, "MID": 5, "FWD": 4}
+OUTPUT_ASSIST_POINTS = 3.0
+OUTPUT_CS_POINTS = {"GKP": 4, "DEF": 4, "MID": 1, "FWD": 0}
+OUTPUT_GOALS_CONCEDED_PENALTY_PER_2 = {"GKP": -1.0, "DEF": -1.0, "MID": 0.0, "FWD": 0.0}
+OUTPUT_SAVES_PER_XGA = 2.0           # rough expected saves per unit opponent xG (GKP)
+OUTPUT_SAVE_POINTS_PER_SAVE = 1.0 / 3.0
+OUTPUT_BONUS_PER_XGI = 0.9           # rough bonus points per expected goal involvement
+# Defensive bonus: BPS from clean sheets, clearances, blocks, recoveries earns
+# defenders/keepers bonus that attacking xGI misses. Bonus points per expected
+# clean sheet, by position (0 for FWD).
+OUTPUT_CS_BONUS_PER_CS = {"GKP": 1.0, "DEF": 1.2, "MID": 0.3, "FWD": 0.0}
+OUTPUT_POSITION_BASE_XG90 = {"GKP": 0.01, "DEF": 0.06, "MID": 0.12, "FWD": 0.30}
+OUTPUT_POSITION_BASE_XA90 = {"GKP": 0.01, "DEF": 0.06, "MID": 0.14, "FWD": 0.16}
+OUTPUT_MAX_GOALS_PER_GAME = 2.5      # sanity clamp on a single player's expected goals
+OUTPUT_MAX_ASSISTS_PER_GAME = 2.0
+
+# Defensive-contribution points (2025-26 rule): a player banks +2 for reaching a
+# per-match action threshold (DEF/GKP 10, MID/FWD 12). output_model was blind to
+# this scoring category, which is a chunk of why the xG model under-predicts.
+# The feature is a shrunk, time-decayed per-player rate of clearing the
+# threshold in 60+ minute games — backtest showed that rate is highly stable
+# (H1-vs-H2 rank corr 0.88) and predicts next-game clearance better than form.
+OUTPUT_APPLY_DC = True                # off restores exact pre-DC output_model behaviour
+OUTPUT_DC_POINTS = 2.0                # points banked for clearing the threshold
+OUTPUT_DC_HALFLIFE_DAYS = 75.0        # decay half-life on the clearance-rate samples
+OUTPUT_DC_MIN_GAMES_TRUST = 6.0       # 60'+ games before own rate is trusted over the prior
+OUTPUT_DC_THRESHOLD = {"GKP": 10, "DEF": 10, "MID": 12, "FWD": 12}
+OUTPUT_DC_BASE_RATE = {"GKP": 0.0, "DEF": 0.12, "MID": 0.06, "FWD": 0.0}  # shrink prior (GKP/FWD ~never clear)
+
+# --- blend of the xG model into the baseline projection ---
+# Set from the Task 8 sweep (docs/superpowers/plans/2026-08-25-transfer-planner-v2.md
+# ## Results): scripts.backtest_blend_sweep over 2025-26 GW6-29 (24 GWs), DC=True,
+# weight 0.5 beat weight 0.0 on every metric (MAE -0.202/-9.47%, captain hit +0.042,
+# top10 +0.029, regret -0.334), with MAE improving monotonically across the whole
+# grid and no regression at any weight. 0.5 is the top of the script's default grid,
+# not a confirmed interior optimum -- see the Task 8 caveats in the plan doc.
+PROJ_MODEL_BLEND_WEIGHT = 0.5
+
+# --- minutes/rotation-risk multiplier (surgical, applied in projections.py) ---
+# Master flag: when True, project_elements_next_gws replaces the crude
+# chance_of_playing discount with a rotation-risk multiplier. Default off so
+# committed behavior is unchanged; flip True after scripts/spotcheck_minutes.py.
+PROJ_APPLY_MINUTES_MODEL = False
+MINUTES_NAILED_START_REF = 0.85   # prob_start at/above which a player is "nailed" (mult caps at 1.0)
+MINUTES_CAMEO_POINT_VALUE = 0.30  # value of a likely cameo relative to a start
+
+# --- mini-league ownership-adjusted EV (src/ownership_ev.py + league_strategy.py) ---
+LEAGUE_EV_RANKING = True                      # rank candidates by differential EV (False = legacy raw-xPts sort)
+LEAGUE_EV_CAPTAIN_PREMIUM_FLOOR = 85          # now_cost (tenths) floor for a "premium" captain (£8.5m)
+LEAGUE_EV_CAPTAIN_DIFF_MAX_OWNERSHIP = 0.10   # alternative must be under this league ownership to flag

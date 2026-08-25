@@ -205,7 +205,7 @@ def load_latest_player_gw_history(path=None, base_dir="data/processed/fpl"):
     return df.copy()
 
 
-def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/processed/fpl", fixtures=None):
+def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/processed/fpl", fixtures=None, finished_gw_max=None):
     """
     Build recent player-by-GW averages before `gw_start`.
     Uses recent calendar GWs before `gw_start`.
@@ -219,8 +219,18 @@ def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/
     gw_start = int(gw_start)
     window = max(1, int(window or getattr(config, "PROJ_PLAYER_RECENT_GW_WINDOW", 5) or 5))
     window_start = max(1, int(gw_start) - int(window))
+    # Exclusive upper bound for "prior" GWs. Normally gw_start itself (only GWs
+    # strictly before the planning GW count). When finished_gw_max is set, also
+    # cap it there so the blank-GW fixture backfill below (which spans
+    # [window_start, gw_end_exclusive)) can't resurrect a cutoff-excluded GW as
+    # a fabricated zero-point row just because its fixture is scheduled.
+    gw_end_exclusive = int(gw_start)
+    if finished_gw_max is not None:
+        gw_end_exclusive = min(int(gw_start), int(finished_gw_max) + 1)
 
     prior_hist = hist[hist["gw"] < gw_start].copy()
+    if finished_gw_max is not None:
+        prior_hist = prior_hist[prior_hist["gw"] <= int(finished_gw_max)].copy()
     if prior_hist.empty:
         return pd.DataFrame()
 
@@ -236,7 +246,7 @@ def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/
             fx["event"] = pd.to_numeric(fx["event"], errors="coerce")
             fx = fx[fx["event"].notna()].copy()
             fx["event"] = fx["event"].astype(int)
-            fx = fx[(fx["event"] >= int(window_start)) & (fx["event"] < int(gw_start))].copy()
+            fx = fx[(fx["event"] >= int(window_start)) & (fx["event"] < int(gw_end_exclusive))].copy()
             if not fx.empty:
                 home = fx[["event", "team_h"]].rename(columns={"team_h": "team_id"}).copy() if "team_h" in fx.columns else pd.DataFrame()
                 away = fx[["event", "team_a"]].rename(columns={"team_a": "team_id"}).copy() if "team_a" in fx.columns else pd.DataFrame()
@@ -260,7 +270,7 @@ def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/
         if not latest_team.empty:
             latest_team["player_id"] = pd.to_numeric(latest_team["player_id"], errors="coerce").astype(int)
             latest_team["gw_team_id_end"] = pd.to_numeric(latest_team["gw_team_id_end"], errors="coerce").astype(int)
-            gws_df = pd.DataFrame({"gw": list(range(int(window_start), int(gw_start)))})
+            gws_df = pd.DataFrame({"gw": list(range(int(window_start), int(gw_end_exclusive)))})
             latest_team["__tmp"] = 1
             gws_df["__tmp"] = 1
             grid = latest_team.merge(gws_df, on="__tmp", how="inner").drop(columns=["__tmp"])
@@ -366,6 +376,9 @@ def project_elements_next_gws(
     ppg_weight=config.PROJ_DEFAULT_PPG_WEIGHT,
     form_weight=config.PROJ_DEFAULT_FORM_WEIGHT,
     latest_n_matches=config.PROJ_DEFAULT_LATEST_N_MATCHES,
+    fdr_strength=1.0,
+    home_away_strength=1.0,
+    finished_gw_max=None,
 ):
     """
     Lightweight next-N gameweeks projection table (FPL-only baseline).
@@ -374,10 +387,14 @@ def project_elements_next_gws(
     - Falls back to a simple `ppg+form` baseline when no recent history is available.
     - Adjusts for fixture difficulty and doubles/blanks.
     - Applies playing probability (chance_of_playing_next_round) for the immediate GW only.
+    - `fdr_strength` scales how hard the fixture-difficulty multiplier swings away from
+      1.0 (1.0 = unchanged, 0.0 = fixtures ignored, >1 = amplified). It does NOT touch
+      the home/away or team-form multipliers.
     """
     gw_start = int(gw_start)
     horizon_gws = int(horizon_gws)
     gws = [gw_start + i for i in range(horizon_gws)]
+    fdr_strength = float(fdr_strength if fdr_strength is not None else 1.0)
 
     df = elements.copy()
     df = df.loc[:, ~df.columns.duplicated()]
@@ -397,7 +414,7 @@ def project_elements_next_gws(
     recent_blend_weight = clamp(getattr(config, "PROJ_PLAYER_RECENT_BLEND_WEIGHT", 0.65), 0.0, 1.0)
     ep_next_blend_weight = clamp(getattr(config, "PROJ_EP_NEXT_BLEND_WEIGHT", 0.45), 0.0, 1.0)
 
-    recent_gw = player_recent_gw_map(gw_start=gw_start, window=recent_window, fixtures=fixtures)
+    recent_gw = player_recent_gw_map(gw_start=gw_start, window=recent_window, fixtures=fixtures, finished_gw_max=finished_gw_max)
     recent_history_max_gw = None
     if recent_gw is not None and not recent_gw.empty:
         if "recent_history_max_gw" in recent_gw.columns:
@@ -450,6 +467,15 @@ def project_elements_next_gws(
     else:
         play_prob = pd.Series(1.0, index=df.index)
 
+    apply_minutes = bool(getattr(config, "PROJ_APPLY_MINUTES_MODEL", False))
+    minutes_hist = None
+    if apply_minutes:
+        try:
+            from . import minutes_model as _minutes
+            minutes_hist = _minutes.load_minutes_history()
+        except Exception:
+            apply_minutes = False
+
     team_recent_ppg = team_recent_ppg_map(fixtures, gw_start=gw_start, latest_n_matches=latest_n_matches)
 
     horizon_total = pd.Series(0.0, index=df.index, dtype="float64")
@@ -459,6 +485,10 @@ def project_elements_next_gws(
         fixture_count = pd.to_numeric(ann["gw_fixture_count"], errors="coerce").fillna(0.0)
         diff_avg = pd.to_numeric(ann["gw_diff_avg"], errors="coerce").fillna(0.0)
         diff_mult = diff_avg.apply(difficulty_multiplier)
+        if fdr_strength != 1.0:
+            # Scale only the fixture-difficulty multiplier's deviation from 1.0 —
+            # home/away and team-form multipliers below are untouched.
+            diff_mult = 1.0 + (diff_mult - 1.0) * fdr_strength
 
         team_ctx = team_gw_context_multipliers(fixtures, int(gw), team_recent_ppg)
         home_away_mult = ann["team"].apply(
@@ -466,6 +496,10 @@ def project_elements_next_gws(
             if pd.notna(t)
             else 1.0
         )
+        if home_away_strength != 1.0:
+            # Scale only the home/away multiplier's deviation from 1.0 (home 1.06
+            # / away 0.94 by default). >1 amplifies the home-advantage swing.
+            home_away_mult = 1.0 + (home_away_mult - 1.0) * home_away_strength
         opp_form_mult = ann["team"].apply(
             lambda t: float(team_ctx.get(int(t), {}).get("opp_form_mult", 1.0))
             if pd.notna(t)
@@ -476,6 +510,25 @@ def project_elements_next_gws(
             if pd.notna(t)
             else 1.0
         )
+
+        minutes_mult = None
+        if apply_minutes:
+            try:
+                mins_gw = _minutes.minutes_projection(df, minutes_hist, int(gw))
+                mult_vals = _minutes.compute_gw_minutes_multiplier(
+                    mins_gw, df["id"], i
+                ).values
+                prob_start_vals = None
+                if i == 0:
+                    prob_start_vals = df["id"].map(mins_gw["prob_start"]).astype("float64").values
+                # Only mutate df after every computation above has succeeded, so a
+                # failure never leaves a half-written column inconsistent with xpts.
+                minutes_mult = pd.Series(mult_vals, index=df.index)
+                df[f"minutes_mult_gw{gw}"] = minutes_mult.values
+                if prob_start_vals is not None:
+                    df["prob_start"] = prob_start_vals
+            except Exception:
+                minutes_mult = None
 
         dgw_discount = float(getattr(config, "PROJ_DGW_EXTRA_FIXTURE_DISCOUNT", 0.65))
         extra_fixtures = (fixture_count - 1.0).clip(lower=0.0)
@@ -492,11 +545,16 @@ def project_elements_next_gws(
             xpts = xpts_with_ep.where(has_ep, xpts_no_ep)
             # Zero out blanks for non-ep players
             xpts = xpts.where(has_ep | (fixture_count > 0), 0.0)
-            xpts = xpts * play_prob
+            if minutes_mult is not None:
+                xpts = xpts * minutes_mult
+            else:
+                xpts = xpts * play_prob
         else:
             base = blended_base
             xpts = base * effective_fixtures * diff_mult * home_away_mult * opp_form_mult * team_form_mult
-            if i <= 2:
+            if minutes_mult is not None:
+                xpts = xpts * minutes_mult
+            elif i <= 2:
                 # Partial injury discount for next 2 GWs (availability often resolves).
                 injury_fade = float(getattr(config, "PROJ_INJURY_FUTURE_GW_FADE", 0.5))
                 future_play_prob = 1.0 - (1.0 - play_prob) * injury_fade
@@ -514,6 +572,21 @@ def project_elements_next_gws(
 
     df["xpts_horizon"] = horizon_total
 
+    # Optional: blend in the xG-based structural model (fixture_difficulty +
+    # minutes_model + output_model). Default weight 0.0 leaves baseline untouched
+    # and preserves backtest parity; never let a model error break projections.
+    blend_weight = clamp(getattr(config, "PROJ_MODEL_BLEND_WEIGHT", 0.0), 0.0, 1.0)
+    if blend_weight > 0.0:
+        try:
+            from . import expected_points as _xg_model
+
+            model_df = _xg_model.build_expected_points(
+                df, fixtures, teams_short_map, gw_start, horizon_gws
+            )
+            df = _xg_model.blend_into_projections(df, model_df, blend_weight, gws)
+        except Exception:
+            pass
+
     keep_base = [
         "id",
         "web_name",
@@ -525,6 +598,7 @@ def project_elements_next_gws(
         "now_cost",
         "status",
         "chance_of_playing_next_round",
+        "prob_start",
         "form",
         "points_per_game",
         "total_points",
@@ -555,6 +629,9 @@ def project_elements_next_gws(
         keep.extend(
             [
                 f"xpts_gw{gw}",
+                f"xpts_baseline_gw{gw}",
+                f"minutes_mult_gw{gw}",
+                f"xpts_model_gw{gw}",
                 f"fixtures_gw{gw}",
                 f"fixture_count_gw{gw}",
                 f"diff_avg_gw{gw}",
@@ -564,6 +641,8 @@ def project_elements_next_gws(
             ]
         )
     keep.append("xpts_horizon")
+    if "xpts_model_horizon" in df.columns:
+        keep.append("xpts_model_horizon")
 
     out = df[[c for c in keep if c in df.columns]].copy()
     out = out.sort_values("xpts_horizon", ascending=False)

@@ -16,3 +16,7 @@ kb
 
 .env
 .streamlit
+# Legacy Streamlit app — handles FPL_PASSWORD and is never run by the API
+# container (Dockerfile starts api.main:app), so keep it out of the image.
+fpl_app_v1.py
+notebooks

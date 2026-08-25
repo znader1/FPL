@@ -193,6 +193,22 @@ def get_entry(entry_id, session=None):
     return r.json()
 
 
+def get_entry_history(entry_id, session=None):
+    """
+    Returns the entry's history including 'chips' (list of chips played) and
+    'current' (per-GW summary). Used to derive remaining chip availability.
+    """
+    s = session or new_session()
+    r = s.get(
+        f"https://fantasy.premierleague.com/api/entry/{int(entry_id)}/history/",
+        verify=_verify(), timeout=20,
+    )
+    if r.status_code == 403:
+        raise RuntimeError("403 /api/entry/.../history (blocked).")
+    r.raise_for_status()
+    return r.json()
+
+
 def get_classic_league_standings(league_id, page=1, session=None):
     s = session or new_session()
     r = s.get(
@@ -224,3 +240,103 @@ def session_from_browser_cookie(pl_profile_value):
     for domain in [".premierleague.com", "fantasy.premierleague.com"]:
         s.cookies.set("pl_profile", pl_profile_value, domain=domain, path="/")
     return s
+
+
+def session_from_cookie_header(cookie_header):
+    """
+    Build a session from a full `Cookie:` header string copied verbatim from a
+    logged-in browser (DevTools → Network → the request → Request Headers → Cookie).
+
+    Copying the whole header avoids guessing which of FPL's cookies (pl_profile,
+    sessionid, csrftoken, datadome, ...) the endpoint actually needs — they're all
+    sent as-is.
+    """
+    s = new_session()
+    if cookie_header and str(cookie_header).strip():
+        s.headers["Cookie"] = str(cookie_header).strip()
+    return s
+
+
+def get_entry_my_team(entry_id, cookie_header=None, bearer=None, session=None):
+    """
+    Fetch the authenticated "my team" view: GET /api/my-team/{entry_id}/.
+
+    Unlike the public /event/{gw}/picks/ endpoint, this works BEFORE a gameweek
+    locks — so it's the only way to read your squad pre-first-deadline / pre-season
+    (the public endpoint 404s until picks are locked in). Only works for the
+    logged-in manager's own entry_id.
+
+    Authentication (supply at least one; both if unsure — FPL's 2024+ auth may need
+    the bearer header in addition to cookies):
+      - `cookie_header`: the full browser `Cookie:` header string.
+      - `bearer`: the `X-Api-Authorization` bearer token (with or without a
+        leading "Bearer ").
+    """
+    s = session or session_from_cookie_header(cookie_header)
+    headers = {
+        "Accept": "application/json",
+        "X-Requested-With": "XMLHttpRequest",
+        "Referer": "https://fantasy.premierleague.com/my-team",
+    }
+    if cookie_header and str(cookie_header).strip():
+        headers["Cookie"] = str(cookie_header).strip()
+    if bearer and str(bearer).strip():
+        b = str(bearer).strip()
+        if b.lower().startswith("bearer "):
+            b = b.split(" ", 1)[1].strip()
+        headers["X-Api-Authorization"] = f"Bearer {b}"
+    r = s.get(
+        f"https://fantasy.premierleague.com/api/my-team/{int(entry_id)}/",
+        headers=headers,
+        verify=_verify(),
+        timeout=20,
+    )
+    if r.status_code != 200:
+        snip = (r.text or "")[:200].replace("\n", " ")
+        if r.status_code in (401, 403):
+            raise RuntimeError(
+                f"{r.status_code} /api/my-team — not authenticated or blocked "
+                f"(cookie/bearer missing/expired, wrong manager, or bot-protection on "
+                f"the server IP). Body: {snip}"
+            )
+        raise RuntimeError(f"/api/my-team HTTP {r.status_code}. Body: {snip}")
+    try:
+        data = r.json()
+    except ValueError:
+        snip = (r.text or "")[:200].replace("\n", " ")
+        raise RuntimeError(
+            f"/api/my-team returned non-JSON (likely a bot-protection challenge "
+            f"page served to the server). Body: {snip}"
+        )
+    if not isinstance(data, dict):
+        raise RuntimeError("/api/my-team returned a non-object payload.")
+    return data
+
+
+def normalize_my_team(my_team_json, planning_event_id):
+    """
+    Reshape /api/my-team/{entry}/ JSON into the same shape as the public
+    /event/{gw}/picks/ payload, so downstream code consumes either uniformly.
+
+    my-team carries a `transfers` block (bank/value/limit/made) instead of the
+    public `entry_history`, and has no `active_chip` pre-deadline. `_free_transfers`
+    (from `transfers.limit`) is FPL's authoritative free-transfer count for the next
+    GW — prefer it over the event_transfers heuristic.
+    """
+    my_team_json = my_team_json or {}
+    transfers = my_team_json.get("transfers") or {}
+    made = transfers.get("made")
+    limit = transfers.get("limit")
+    return {
+        "picks": my_team_json.get("picks", []),
+        "entry_history": {
+            "event": int(planning_event_id),
+            "bank": transfers.get("bank"),
+            "value": transfers.get("value"),
+            "event_transfers": made if isinstance(made, (int, float)) else 0,
+        },
+        "active_chip": None,
+        "chips": my_team_json.get("chips", []),
+        "_source": "my-team",
+        "_free_transfers": int(limit) if isinstance(limit, (int, float)) else None,
+    }

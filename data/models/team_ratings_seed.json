@@ -1,0 +1,146 @@
+{
+  "season": "2025-26",
+  "league_avg_xg": 1.3983,
+  "teams": {
+    "ARS": {
+      "attack": 1.2149,
+      "defense": 0.6185,
+      "xg_for": 1.6987,
+      "xg_against": 0.8648,
+      "samples": 32.0
+    },
+    "AVL": {
+      "attack": 0.9186,
+      "defense": 1.0178,
+      "xg_for": 1.2844,
+      "xg_against": 1.4231,
+      "samples": 32.0
+    },
+    "BUR": {
+      "attack": 0.689,
+      "defense": 1.3891,
+      "xg_for": 0.9635,
+      "xg_against": 1.9423,
+      "samples": 32.0
+    },
+    "BOU": {
+      "attack": 1.1281,
+      "defense": 1.0751,
+      "xg_for": 1.5774,
+      "xg_against": 1.5032,
+      "samples": 32.0
+    },
+    "BRE": {
+      "attack": 1.1357,
+      "defense": 0.9826,
+      "xg_for": 1.5881,
+      "xg_against": 1.374,
+      "samples": 32.0
+    },
+    "BHA": {
+      "attack": 1.0598,
+      "defense": 0.9549,
+      "xg_for": 1.4819,
+      "xg_against": 1.3353,
+      "samples": 32.0
+    },
+    "CHE": {
+      "attack": 1.2722,
+      "defense": 0.9662,
+      "xg_for": 1.7789,
+      "xg_against": 1.351,
+      "samples": 33.0
+    },
+    "CRY": {
+      "attack": 1.0934,
+      "defense": 0.9759,
+      "xg_for": 1.5288,
+      "xg_against": 1.3646,
+      "samples": 31.0
+    },
+    "EVE": {
+      "attack": 0.8788,
+      "defense": 1.06,
+      "xg_for": 1.2287,
+      "xg_against": 1.4822,
+      "samples": 32.0
+    },
+    "FUL": {
+      "attack": 0.9395,
+      "defense": 1.0037,
+      "xg_for": 1.3136,
+      "xg_against": 1.4035,
+      "samples": 32.0
+    },
+    "LEE": {
+      "attack": 1.0163,
+      "defense": 1.0165,
+      "xg_for": 1.421,
+      "xg_against": 1.4214,
+      "samples": 32.0
+    },
+    "LIV": {
+      "attack": 1.1378,
+      "defense": 0.8831,
+      "xg_for": 1.5909,
+      "xg_against": 1.2348,
+      "samples": 32.0
+    },
+    "MCI": {
+      "attack": 1.2784,
+      "defense": 0.8364,
+      "xg_for": 1.7876,
+      "xg_against": 1.1695,
+      "samples": 31.0
+    },
+    "MUN": {
+      "attack": 1.1471,
+      "defense": 0.9071,
+      "xg_for": 1.6039,
+      "xg_against": 1.2684,
+      "samples": 33.0
+    },
+    "NEW": {
+      "attack": 1.0732,
+      "defense": 0.971,
+      "xg_for": 1.5006,
+      "xg_against": 1.3578,
+      "samples": 32.0
+    },
+    "NFO": {
+      "attack": 0.8571,
+      "defense": 1.024,
+      "xg_for": 1.1984,
+      "xg_against": 1.4319,
+      "samples": 32.0
+    },
+    "SUN": {
+      "attack": 0.7519,
+      "defense": 1.0289,
+      "xg_for": 1.0514,
+      "xg_against": 1.4387,
+      "samples": 32.0
+    },
+    "TOT": {
+      "attack": 0.803,
+      "defense": 1.0551,
+      "xg_for": 1.1228,
+      "xg_against": 1.4753,
+      "samples": 32.0
+    },
+    "WHU": {
+      "attack": 0.8958,
+      "defense": 1.1224,
+      "xg_for": 1.2525,
+      "xg_against": 1.5694,
+      "samples": 32.0
+    },
+    "WOL": {
+      "attack": 0.7082,
+      "defense": 1.1099,
+      "xg_for": 0.9903,
+      "xg_against": 1.552,
+      "samples": 32.0
+    }
+  }
+}
