@@ -1423,6 +1423,87 @@ def admin_refresh(
     }))
 
 
+def _season_label(bootstrap):
+    events = bootstrap.get("events", [])
+    first_deadline = str((events[0] if events else {}).get("deadline_time") or "")
+    try:
+        start_year = int(first_deadline[:4])
+    except ValueError:
+        start_year = datetime.now(timezone.utc).year
+    return f"{start_year}-{str(start_year + 1)[-2:]}"
+
+
+def build_model_snapshot():
+    bootstrap = get_bootstrap_cached()
+    fixtures = get_fixtures_cached()
+    teams_short = {int(t["id"]): t.get("short_name") for t in bootstrap.get("teams", [])}
+    next_ev = next((e for e in bootstrap.get("events", []) if e.get("is_next")), None)
+    if next_ev is None:
+        raise HTTPException(status_code=409, detail="No upcoming gameweek in bootstrap.")
+    gw = int(next_ev["id"])
+
+    finished = [safe_int(e.get("id")) for e in bootstrap.get("events", []) if e.get("finished")]
+    finished_gw_max = max([e for e in finished if e], default=None)
+
+    elements_df = pd.DataFrame(bootstrap.get("elements", []))
+    proj = projections.project_elements_next_gws(
+        elements=elements_df,
+        fixtures=fixtures,
+        teams_short_map=teams_short,
+        gw_start=gw,
+        horizon_gws=1,
+        latest_n_matches=getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3),
+        finished_gw_max=finished_gw_max,
+    )
+    xpts_col = f"xpts_gw{gw}"
+    xpts_by_id = {}
+    if proj is not None and not proj.empty and xpts_col in proj.columns:
+        xpts_by_id = dict(zip(
+            pd.to_numeric(proj["id"], errors="coerce").astype("Int64"),
+            pd.to_numeric(proj[xpts_col], errors="coerce"),
+        ))
+
+    pos_map = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
+    players = []
+    for e in bootstrap.get("elements", []):
+        pid = safe_int(e.get("id"))
+        if not pid:
+            continue
+        xpts = xpts_by_id.get(pid)
+        players.append({
+            "player_id": pid,
+            "web_name": e.get("web_name"),
+            "pos": pos_map.get(safe_int(e.get("element_type"))),
+            "team_short": teams_short.get(safe_int(e.get("team"))),
+            "price_m": (safe_int(e.get("now_cost")) or 0) / 10.0,
+            "ownership_pct": safe_float(e.get("selected_by_percent"), default=0.0),
+            "status": e.get("status"),
+            "chance": safe_int(e.get("chance_of_playing_next_round")),
+            "fpl_ep_next": safe_float(e.get("ep_next"), default=None),
+            "model_xpts": round(float(xpts), 3) if xpts is not None and pd.notna(xpts) else None,
+        })
+
+    return {
+        "season": _season_label(bootstrap),
+        "next_gw": gw,
+        "deadline_utc": next_ev.get("deadline_time"),
+        "blend_weight": float(getattr(config, "PROJ_MODEL_BLEND_WEIGHT", 0.0)),
+        "players": players,
+    }
+
+
+@app.get("/admin/model-snapshot")
+def admin_model_snapshot(
+    api_key=None,
+    x_api_key=Header(None),
+    authorization=Header(None),
+):
+    err = check_admin_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
+    if err:
+        return err
+    return build_model_snapshot()
+
+
 @app.get("/squad")
 def squad_get(
     entry_id=None, event_id=None,
