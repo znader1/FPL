@@ -1,0 +1,23 @@
+name: Weekly DB snapshot
+on:
+  schedule:
+    - cron: "0 9,16 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests
+      - name: Run snapshot job
+        env:
+          FPL_API_BASE_URL: ${{ secrets.FPL_API_BASE_URL }}
+          FPL_ADMIN_KEY: ${{ secrets.FPL_ADMIN_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/snapshot_to_db.py
