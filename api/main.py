@@ -299,6 +299,52 @@ def build_next_event_summary(bootstrap=None, fixtures=None):
     }
 
 
+def next_fixture_labels_by_team(fixtures, teams_short, event_id):
+    """{team_id: "BOU (H)"} for one GW; DGW teams get comma-joined labels."""
+    labels = {}
+    if fixtures is None or getattr(fixtures, "empty", True) or "event" not in fixtures.columns:
+        return labels
+    fx = fixtures[pd.to_numeric(fixtures["event"], errors="coerce") == int(event_id)]
+    for _, r in fx.iterrows():
+        h, a = safe_int(r.get("team_h")), safe_int(r.get("team_a"))
+        if not h or not a:
+            continue
+        labels.setdefault(h, []).append(f"{teams_short.get(a, '?')} (H)")
+        labels.setdefault(a, []).append(f"{teams_short.get(h, '?')} (A)")
+    return {t: ", ".join(v) for t, v in labels.items()}
+
+
+def annotate_moves_next_fixture(preview, elements, fixtures, teams_short, event_id):
+    """Attach next_fixture to each transfer move's sell/buy and to hot targets.
+
+    Cosmetic enrichment: players whose team has no fixture that GW (blank)
+    simply get no label. Mutates `preview` in place.
+    """
+    if not isinstance(preview, dict):
+        return
+    by_team = next_fixture_labels_by_team(fixtures, teams_short, event_id)
+    if not by_team:
+        return
+    team_by_player = {}
+    for e in elements.to_dict("records") if hasattr(elements, "to_dict") else (elements or []):
+        pid, tid = safe_int(e.get("id")), safe_int(e.get("team"))
+        if pid and tid:
+            team_by_player[pid] = tid
+    def _label(side):
+        pid = safe_int(side.get("id")) if isinstance(side, dict) else None
+        fixture = by_team.get(team_by_player.get(pid)) if pid else None
+        if fixture:
+            side["next_fixture"] = fixture
+    for move in preview.get("moves") or []:
+        if isinstance(move, dict):
+            _label(move.get("sell") or {})
+            _label(move.get("buy") or {})
+    for players in (preview.get("hot_by_position") or {}).values():
+        for p in players or []:
+            if isinstance(p, dict):
+                _label(p)
+
+
 def _event_id(bootstrap, flag):
     for ev in bootstrap.get("events", []):
         if ev.get(flag):
@@ -1164,6 +1210,12 @@ def build_recommendations(payload):
         )
     timings["transfer_preview_ms"] = elapsed_ms(ts)
     if include_transfers:
+        try:
+            annotate_moves_next_fixture(
+                transfer_preview, elements, fixtures, teams_short, int(optimize_event_id)
+            )
+        except Exception:
+            pass  # fixture labels are cosmetic — never block the response
         out["transfers"] = transfer_preview
 
     # Additive: a multi-GW roll/bank plan across the horizon (the single-GW
