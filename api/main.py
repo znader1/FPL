@@ -503,8 +503,9 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
         )
     except Exception:
         # History unavailable (pre-season wipe, 403): fall back to the old
-        # single-GW heuristic rather than fail the request.
-        if last_active_chip not in ("wildcard", "freehit"):
+        # single-GW heuristic rather than fail the request. GW1 is squad
+        # creation — no FT banks from it, so entering GW2 is always 1 FT.
+        if last_active_chip not in ("wildcard", "freehit") and int(used_event_id) >= 2:
             try:
                 cur_transfers = int(eh.get("event_transfers") or 0)
                 derived_free_transfers = 2 if cur_transfers == 0 else 1
