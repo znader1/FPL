@@ -100,16 +100,20 @@ def main():
     upsert(sb_url, sb_key, rows)
     print(f"snapshot: gw={payload['next_gw']} rows={len(rows)}")
 
-    bootstrap = requests.get(
+    r = requests.get(
         "https://fantasy.premierleague.com/api/bootstrap-static/", timeout=60,
-    ).json()
+    )
+    r.raise_for_status()
+    bootstrap = r.json()
     finished_gws = {int(e["id"]) for e in bootstrap.get("events", []) if e.get("finished")}
     for gw in gws_missing_actuals(sb_url, sb_key, season):
         if gw not in finished_gws:
             continue
-        live = requests.get(
+        r = requests.get(
             f"https://fantasy.premierleague.com/api/event/{gw}/live/", timeout=60,
-        ).json()
+        )
+        r.raise_for_status()
+        live = r.json()
         rows = actuals_rows(live.get("elements"), season, gw, now.isoformat())
         upsert(sb_url, sb_key, rows)
         print(f"actuals: gw={gw} rows={len(rows)}")
