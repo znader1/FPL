@@ -74,7 +74,9 @@ def upsert(supabase_url, service_key, rows):
 def gws_missing_actuals(supabase_url, service_key, season):
     r = requests.get(
         f"{supabase_url.rstrip('/')}/rest/v1/player_gw_snapshots"
-        f"?select=gw&season=eq.{season}&actual_points=is.null",
+        # limit lifts PostgREST's default 1000-row cap; a backlog of 3+ GWs
+        # (~700 rows each) would otherwise silently drop tail GWs from the set
+        f"?select=gw&season=eq.{season}&actual_points=is.null&limit=100000",
         headers=_supabase_headers(service_key), timeout=60,
     )
     r.raise_for_status()
@@ -100,12 +102,16 @@ def main():
     upsert(sb_url, sb_key, rows)
     print(f"snapshot: gw={payload['next_gw']} rows={len(rows)}")
 
-    r = requests.get(
-        "https://fantasy.premierleague.com/api/bootstrap-static/", timeout=60,
-    )
-    r.raise_for_status()
-    bootstrap = r.json()
-    finished_gws = {int(e["id"]) for e in bootstrap.get("events", []) if e.get("finished")}
+    if "finished_gws" in payload:
+        finished_gws = {int(g) for g in payload["finished_gws"] or []}
+    else:
+        # deployed API predates the finished_gws field — fall back to a raw fetch
+        r = requests.get(
+            "https://fantasy.premierleague.com/api/bootstrap-static/", timeout=60,
+        )
+        r.raise_for_status()
+        bootstrap = r.json()
+        finished_gws = {int(e["id"]) for e in bootstrap.get("events", []) if e.get("finished")}
     for gw in gws_missing_actuals(sb_url, sb_key, season):
         if gw not in finished_gws:
             continue

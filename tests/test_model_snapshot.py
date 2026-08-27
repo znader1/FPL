@@ -38,6 +38,7 @@ def test_model_snapshot_payload_shape(monkeypatch):
              "chance_of_playing_next_round": 75, "ep_next": "4.5"},
         ],
         "teams": [{"id": 16, "short_name": "NFO"}],
+        "element_types": [{"id": 3, "singular_name_short": "MID"}],
     }
     monkeypatch.setattr(m, "get_bootstrap_cached", lambda: bootstrap)
     monkeypatch.setattr(m, "get_fixtures_cached", lambda: pd.DataFrame(
@@ -54,6 +55,7 @@ def test_model_snapshot_payload_shape(monkeypatch):
     assert body["season"] == "2026-27"
     assert body["deadline_utc"].startswith("2026-08-28")
     assert isinstance(body["blend_weight"], float)
+    assert body["finished_gws"] == [1]
     p = body["players"][0]
     assert p["player_id"] == 480
     assert p["model_xpts"] == 5.1
