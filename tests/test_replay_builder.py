@@ -1,5 +1,16 @@
+from pathlib import Path
+
 import pandas as pd
+import pytest
+
 from src import replay_builder
+
+# These integration tests replay real GW7 data from the local Vaastav mirror,
+# which is gitignored (data/*) and therefore absent in CI.
+requires_vaastav = pytest.mark.skipif(
+    not Path("data/vaastav/2025-26/gws/gw7.csv").exists(),
+    reason="local Vaastav 2025-26 data not present",
+)
 
 
 def test_optimal_captain_picks_max_actual_in_squad():
@@ -13,6 +24,7 @@ def test_optimal_captain_empty():
     assert replay_builder.optimal_captain([], pd.DataFrame({"player_id": [], "total_points": []})) is None
 
 
+@requires_vaastav
 def test_build_gw_record_gw7_real_data():
     snap = {"season": "2025-26", "gws": {7: {"picks": [351, 233, 99], "captain": 351}}}
     rec = replay_builder.build_gw_record(7, "2025-26", snap, horizon=3)
@@ -30,6 +42,7 @@ def test_build_gw_record_gw1_is_setup():
     assert rec["setup_gw"] is True and rec["players"] == []
 
 
+@requires_vaastav
 def test_gw_global_ownership_normalized():
     own = replay_builder._gw_global_ownership(7, "2025-26")
     assert own                              # non-empty
@@ -37,6 +50,7 @@ def test_gw_global_ownership_normalized():
     assert all(0.0 <= v <= 1.0 for v in own.values())
 
 
+@requires_vaastav
 def test_build_gw_record_dedupes_duplicated_vaastav_player():
     # element 100 has duplicated rows in real GW7 Vaastav data
     snap = {"season": "2025-26", "gws": {7: {"picks": [351, 233, 100]}}}
@@ -46,6 +60,7 @@ def test_build_gw_record_dedupes_duplicated_vaastav_player():
     assert len(ids) == len(set(ids))   # no duplicate players
 
 
+@requires_vaastav
 def test_sp2_candidates_present_and_labeled():
     snap = {"season": "2025-26", "gws": {7: {"picks": [351, 233, 99], "captain": 351}}}
     rec = replay_builder.build_gw_record(7, "2025-26", snap, horizon=3)
