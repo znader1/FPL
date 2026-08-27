@@ -2,9 +2,9 @@ name: API CI
 
 on:
   push:
-    branches: ["main", "codex/**"]
+    branches: ["master", "main", "codex/**", "feature/**"]
   pull_request:
-    branches: ["main"]
+    branches: ["master", "main"]
 
 jobs:
   check:
