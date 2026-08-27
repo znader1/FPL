@@ -32,6 +32,7 @@ from src.insights import (
 )
 from src.lineup_builder import build_position_panels, pack_lineup_records
 from src.media import attach_media
+from src.season_history import season_label_from_bootstrap
 from src.squad_builder import apply_transfer_moves_to_squad, build_transfer_step, estimate_squad_budget_m
 from src.utils import (
     df_records,
@@ -1421,6 +1422,78 @@ def admin_refresh(
         "snapshot_info": snapshot_info,
         "snapshot_error": snapshot_error,
     }))
+
+
+def build_model_snapshot():
+    bootstrap = get_bootstrap_cached()
+    fixtures = get_fixtures_cached()
+    teams_short = {int(t["id"]): t.get("short_name") for t in bootstrap.get("teams", [])}
+    next_ev = next((e for e in bootstrap.get("events", []) if e.get("is_next")), None)
+    if next_ev is None:
+        raise HTTPException(status_code=409, detail="No upcoming gameweek in bootstrap.")
+    gw = int(next_ev["id"])
+
+    finished = [safe_int(e.get("id")) for e in bootstrap.get("events", []) if e.get("finished")]
+    finished_gw_max = max([e for e in finished if e], default=None)
+
+    elements_df = pd.DataFrame(bootstrap.get("elements", []))
+    proj = projections.project_elements_next_gws(
+        elements=elements_df,
+        fixtures=fixtures,
+        teams_short_map=teams_short,
+        gw_start=gw,
+        horizon_gws=1,
+        latest_n_matches=getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3),
+        finished_gw_max=finished_gw_max,
+    )
+    xpts_col = f"xpts_gw{gw}"
+    xpts_by_id = {}
+    if proj is not None and not proj.empty and xpts_col in proj.columns:
+        xpts_by_id = dict(zip(
+            pd.to_numeric(proj["id"], errors="coerce").astype("Int64"),
+            pd.to_numeric(proj[xpts_col], errors="coerce"),
+        ))
+
+    pos_map = {safe_int(t.get("id")): t.get("singular_name_short") for t in bootstrap.get("element_types", [])}
+    players = []
+    for e in bootstrap.get("elements", []):
+        pid = safe_int(e.get("id"))
+        if not pid:
+            continue
+        xpts = xpts_by_id.get(pid)
+        players.append({
+            "player_id": pid,
+            "web_name": e.get("web_name"),
+            "pos": pos_map.get(safe_int(e.get("element_type"))),
+            "team_short": teams_short.get(safe_int(e.get("team"))),
+            "price_m": (safe_int(e.get("now_cost")) or 0) / 10.0,
+            "ownership_pct": safe_float(e.get("selected_by_percent"), default=0.0),
+            "status": e.get("status"),
+            "chance": safe_int(e.get("chance_of_playing_next_round")),
+            "fpl_ep_next": safe_float(e.get("ep_next"), default=None),
+            "model_xpts": round(float(xpts), 3) if xpts is not None and pd.notna(xpts) else None,
+        })
+
+    return {
+        "season": season_label_from_bootstrap(bootstrap),
+        "next_gw": gw,
+        "deadline_utc": next_ev.get("deadline_time"),
+        "blend_weight": float(getattr(config, "PROJ_MODEL_BLEND_WEIGHT", 0.0)),
+        "finished_gws": sorted({e for e in finished if e}),
+        "players": players,
+    }
+
+
+@app.get("/admin/model-snapshot")
+def admin_model_snapshot(
+    api_key=None,
+    x_api_key=Header(None),
+    authorization=Header(None),
+):
+    err = check_admin_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
+    if err:
+        return err
+    return build_model_snapshot()
 
 
 @app.get("/squad")
