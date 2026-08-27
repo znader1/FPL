@@ -32,6 +32,7 @@ from src.insights import (
 )
 from src.lineup_builder import build_position_panels, pack_lineup_records
 from src.media import attach_media
+from src.season_history import season_label_from_bootstrap
 from src.squad_builder import apply_transfer_moves_to_squad, build_transfer_step, estimate_squad_budget_m
 from src.utils import (
     df_records,
@@ -1423,16 +1424,6 @@ def admin_refresh(
     }))
 
 
-def _season_label(bootstrap):
-    events = bootstrap.get("events", [])
-    first_deadline = str((events[0] if events else {}).get("deadline_time") or "")
-    try:
-        start_year = int(first_deadline[:4])
-    except ValueError:
-        start_year = datetime.now(timezone.utc).year
-    return f"{start_year}-{str(start_year + 1)[-2:]}"
-
-
 def build_model_snapshot():
     bootstrap = get_bootstrap_cached()
     fixtures = get_fixtures_cached()
@@ -1463,7 +1454,7 @@ def build_model_snapshot():
             pd.to_numeric(proj[xpts_col], errors="coerce"),
         ))
 
-    pos_map = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
+    pos_map = {safe_int(t.get("id")): t.get("singular_name_short") for t in bootstrap.get("element_types", [])}
     players = []
     for e in bootstrap.get("elements", []):
         pid = safe_int(e.get("id"))
@@ -1484,10 +1475,11 @@ def build_model_snapshot():
         })
 
     return {
-        "season": _season_label(bootstrap),
+        "season": season_label_from_bootstrap(bootstrap),
         "next_gw": gw,
         "deadline_utc": next_ev.get("deadline_time"),
         "blend_weight": float(getattr(config, "PROJ_MODEL_BLEND_WEIGHT", 0.0)),
+        "finished_gws": sorted({e for e in finished if e}),
         "players": players,
     }
 
