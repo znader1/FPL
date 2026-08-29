@@ -1490,6 +1490,9 @@ def admin_refresh(
     _fixtures_cache["data"] = None
     _team_ratings_cache["ts"] = 0.0
     _team_ratings_cache["data"] = None
+    # Live GW scores are cached per event id; a manual refresh should drop them
+    # too, otherwise /squad keeps serving scores up to EVENT_LIVE_TTL old.
+    _event_live_cache.clear()
 
     bootstrap = get_bootstrap_cached()
     fixtures = get_fixtures_cached()
