@@ -156,6 +156,26 @@ def get_fixtures():
     r.raise_for_status()
     return r.json()
 
+def get_event_live_elements(event_id, session=None):
+    """
+    Raw element list from /api/event/{gw}/live/, keeping the `explain` block.
+
+    `get_event_live` drops everything but `stats`, which is all the squad view
+    needs. Building match history needs `explain` too — it carries the fixture
+    id (or ids, in a double gameweek) the player's return came from.
+    """
+    s = session or new_session()
+    r = s.get(
+        f"https://fantasy.premierleague.com/api/event/{int(event_id)}/live/",
+        headers={"Accept": "application/json"},
+        verify=_verify(), timeout=30,
+    )
+    if r.status_code == 403:
+        raise RuntimeError("403 /api/event/.../live (blocked by network/bot protection).")
+    r.raise_for_status()
+    return (r.json() or {}).get("elements") or []
+
+
 def get_event_live(event_id, session=None):
     """
     Live per-player stats for a gameweek: GET /api/event/{gw}/live/.

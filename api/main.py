@@ -9,6 +9,8 @@ try:
 except ImportError:
     pass
 
+from pathlib import Path
+
 import pandas as pd
 from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.encoders import jsonable_encoder
@@ -21,7 +23,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, manual_squad, optimizer, projections, recommender, transfer_planner, transforms
+from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, projections, recommender, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key, require_user
 from src.insights import (
     build_chip_profile,
@@ -1506,13 +1508,75 @@ def admin_refresh(
         except Exception as exc:
             snapshot_error = str(exc)
 
+    # Keep the xG model's input current. Without this the file only ever came
+    # from a CLI run on a developer's machine, so a deployed server started with
+    # an empty volume and the whole xG stack silently disabled.
+    match_history_info = None
+    match_history_error = None
+    if run_snapshot:
+        try:
+            match_history_info = refresh_match_history(bootstrap, fixtures)
+        except Exception as exc:
+            match_history_error = str(exc)
+            logger.warning("Match-history refresh failed: %s", exc)
+
     return JSONResponse(content=jsonable_encoder({
         "ok": True,
         "next_event": next_ev,
         "cache_refreshed_at_utc": datetime.utcnow().isoformat() + "Z",
         "snapshot_info": snapshot_info,
         "snapshot_error": snapshot_error,
+        "match_history": match_history_info,
+        "match_history_error": match_history_error,
     }))
+
+
+def refresh_match_history(bootstrap, fixtures):
+    """
+    Append any finished gameweek missing from the xG model's history file.
+
+    One upstream call per missing gameweek and none once caught up, so this is
+    cheap enough to run on every refresh. Returns a summary for the response so
+    an empty model is visible rather than silent.
+    """
+    season = season_label_from_bootstrap(bootstrap)
+    out_dir = Path("data/processed/fpl") / str(season)
+    out_path = out_dir / f"player_match_history_{season}.csv"
+
+    existing = None
+    if out_path.exists():
+        try:
+            existing = pd.read_csv(out_path)
+        except Exception:
+            existing = None
+
+    missing = live_history.missing_event_ids(existing, bootstrap)
+    if not missing:
+        return {
+            "path": str(out_path),
+            "appended_events": [],
+            "rows": int(len(existing)) if existing is not None else 0,
+            "note": "already current",
+        }
+
+    updated, added = live_history.append_events(existing, bootstrap, fixtures, missing)
+    if updated.empty:
+        return {"path": str(out_path), "appended_events": [], "rows": 0,
+                "note": "no rows returned for the missing gameweeks"}
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    updated.to_csv(out_path, index=False)
+    # The model reads the newest file by mtime; drop the caches that derive from it.
+    _team_ratings_cache["ts"] = 0.0
+    _team_ratings_cache["data"] = None
+    return {
+        "path": str(out_path),
+        "appended_events": added,
+        "rows": int(len(updated)),
+        "events_on_file": sorted(
+            pd.to_numeric(updated["event"], errors="coerce").dropna().astype(int).unique().tolist()
+        ),
+    }
 
 
 def build_model_snapshot():
