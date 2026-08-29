@@ -97,3 +97,36 @@ def test_distribution_reproduces_the_models_discrete_mean():
         pmf_mean = float((np.arange(pmf.size) * pmf).sum())
         continuous = row["ep_bonus"] + row["ep_conceded"] + row["ep_saves"]
         assert pmf_mean + continuous == pytest.approx(row["exp_points"], abs=0.01)
+
+
+def test_projection_output_carries_every_component_column():
+    """
+    projections.project_elements_next_gws filters its output to an allowlist.
+    A component added upstream that is missing here is silently dropped and the
+    payload falls back to a bare mean — the exact failure this work removes.
+    """
+    from src import expected_points, projections
+
+    produced = list(expected_points._COMPONENT_COLS) + [
+        "model_exp_points", "modal_points", "p_return_6",
+        "p_haul_10", "p80_low", "p80_high",
+    ]
+    carried = set(projections._MODEL_COMPONENT_COLS)
+    missing = [c for c in produced if c not in carried]
+    assert missing == [], f"dropped before reaching the payload: {missing}"
+
+
+def test_score_breakdown_reads_only_columns_projections_carries():
+    """The reverse direction: the breakdown must not read a column that is filtered out."""
+    from src import projections
+
+    carried = set(projections._MODEL_COMPONENT_COLS)
+    read_by_breakdown = [
+        "p_goal", "p_assist", "p_clean_sheet", "p_appear", "p_60", "p_dc",
+        "exp_goals", "exp_assists", "exp_minutes", "model_exp_points",
+        "ep_appearance", "ep_goals", "ep_assists", "ep_clean_sheet",
+        "ep_bonus", "ep_dc",
+        "modal_points", "p_return_6", "p_haul_10", "p80_low", "p80_high",
+    ]
+    missing = [c for c in read_by_breakdown if c not in carried]
+    assert missing == [], f"breakdown reads columns that never arrive: {missing}"

@@ -643,10 +643,26 @@ def project_elements_next_gws(
     keep.append("xpts_horizon")
     if "xpts_model_horizon" in df.columns:
         keep.append("xpts_model_horizon")
+    # Component probabilities and the points distribution from the xG model, for
+    # the first GW only. Without these the payload can show a mean and nothing
+    # else -- the whole point of the component model is that it can explain the
+    # number it produces. Absent when the blend is off or xG history is missing.
+    keep.extend([c for c in _MODEL_COMPONENT_COLS if c in df.columns])
 
     out = df[[c for c in keep if c in df.columns]].copy()
     out = out.sort_values("xpts_horizon", ascending=False)
     return out
+
+
+# Carried through from expected_points/_attach_components. Kept in one place so
+# adding a component there does not silently get filtered out here.
+_MODEL_COMPONENT_COLS = [
+    "p_goal", "p_assist", "p_clean_sheet", "p_appear", "p_60", "p_dc",
+    "exp_goals", "exp_assists", "exp_minutes", "exp_clean_sheets", "n_fixtures",
+    "ep_appearance", "ep_goals", "ep_assists", "ep_clean_sheet",
+    "ep_conceded", "ep_saves", "ep_bonus", "ep_dc", "model_exp_points",
+    "modal_points", "p_return_6", "p_haul_10", "p80_low", "p80_high",
+]
 
 
 def add_wildcard_scores(projections_df, gw_start, horizon_gws):
