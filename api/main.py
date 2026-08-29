@@ -279,6 +279,7 @@ def build_next_event_summary(bootstrap=None, fixtures=None):
     if events.empty or "id" not in events.columns:
         return {
             "event_id": None,
+            "current_event_id": None,
             "deadline_time_utc": None,
             "first_fixture_time_utc": None,
             "hours_to_deadline": None,
@@ -317,6 +318,11 @@ def build_next_event_summary(bootstrap=None, fixtures=None):
 
     return {
         "event_id": int(event_id),
+        # The GW currently in progress, straight from bootstrap's `is_current`.
+        # Clients previously derived this as `event_id - 1`, which misreports a
+        # finished GW as live in the window before the next one is flagged
+        # `is_next`, and is wrong at season boundaries.
+        "current_event_id": _event_id(bootstrap, "is_current"),
         "deadline_time_utc": to_iso_utc(deadline_value),
         "first_fixture_time_utc": to_iso_utc(first_fixture),
         "hours_to_deadline": hours_until_utc(deadline_value),
