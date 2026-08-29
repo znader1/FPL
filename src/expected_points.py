@@ -23,12 +23,14 @@ from __future__ import annotations
 import pandas as pd
 
 try:
-    from . import config, fixture_difficulty, minutes_model, output_model
+    from . import (config, fixture_difficulty, minutes_model, output_model,
+                   points_distribution)
 except Exception:  # pragma: no cover - flat script usage
     import config  # type: ignore
     import fixture_difficulty  # type: ignore
     import minutes_model  # type: ignore
     import output_model  # type: ignore
+    import points_distribution  # type: ignore
 
 
 def build_ratings(asof=None, match_df=None, teams_short_map=None,
@@ -104,9 +106,75 @@ def build_expected_points(
         else:
             mapped = out["id"].map(ep["exp_points"]).fillna(0.0)
             out[col] = mapped.values
+            # Components and the points distribution are carried for the first GW
+            # only -- that is the one a player card shows, and repeating them
+            # across the horizon would bloat every payload for nothing.
+            if gw == gw_start:
+                out = _attach_components(out, ep)
         horizon_total = horizon_total + out[col].fillna(0.0)
 
     out["xpts_model_horizon"] = horizon_total.values
+    return out
+
+
+# Component columns carried from output_model onto the first-GW row.
+_COMPONENT_COLS = [
+    "p_goal", "p_assist", "p_clean_sheet", "p_appear", "p_60", "p_dc",
+    "exp_goals", "exp_assists", "exp_minutes", "exp_clean_sheets", "n_fixtures",
+    "ep_appearance", "ep_goals", "ep_assists", "ep_clean_sheet",
+    "ep_conceded", "ep_saves", "ep_bonus", "ep_dc",
+]
+
+
+def _attach_components(out, ep):
+    """
+    Carry the model's component probabilities and a points distribution onto the
+    per-player row.
+
+    The blended ``xpts`` is half ppg-baseline (``PROJ_MODEL_BLEND_WEIGHT``), so
+    these components explain the model half only. ``model_exp_points`` is exposed
+    alongside them so the UI can show a breakdown that actually adds up, instead
+    of decomposing a number the components do not fully describe.
+    """
+    for c in _COMPONENT_COLS:
+        if c in ep.columns:
+            out[c] = out["id"].map(ep[c]).values
+    out["model_exp_points"] = out["id"].map(ep["exp_points"]).values
+
+    if "pos" not in ep.columns:
+        return out
+
+    pos_by_id = out["id"].map(ep["pos"])
+    modal, p_return, p_haul, p80_low, p80_high = [], [], [], [], []
+    for i, pid in enumerate(out["id"].values):
+        pos = pos_by_id.iloc[i]
+        if pid not in ep.index or not isinstance(pos, str):
+            modal.append(None); p_return.append(None); p_haul.append(None)
+            p80_low.append(None); p80_high.append(None)
+            continue
+        row = ep.loc[pid]
+        pmf = points_distribution.player_points_pmf(
+            pos=pos,
+            prob_appear=float(row.get("p_appear", 0.0) or 0.0),
+            prob_60=float(row.get("p_60", 0.0) or 0.0),
+            exp_goals=float(row.get("exp_goals", 0.0) or 0.0),
+            exp_assists=float(row.get("exp_assists", 0.0) or 0.0),
+            exp_clean_sheets=float(row.get("exp_clean_sheets", 0.0) or 0.0),
+            n_fixtures=int(row.get("n_fixtures", 1) or 1),
+            p_dc=float(row.get("p_dc", 0.0) or 0.0),
+        )
+        summary = points_distribution.summarize(pmf)
+        modal.append(summary["modal_points"])
+        p_return.append(summary["p_return_6"])
+        p_haul.append(summary["p_haul_10"])
+        p80_low.append(summary["p80_low"])
+        p80_high.append(summary["p80_high"])
+
+    out["modal_points"] = modal
+    out["p_return_6"] = p_return
+    out["p_haul_10"] = p_haul
+    out["p80_low"] = p80_low
+    out["p80_high"] = p80_high
     return out
 
 

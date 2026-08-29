@@ -156,6 +156,36 @@ def get_fixtures():
     r.raise_for_status()
     return r.json()
 
+def get_event_live(event_id, session=None):
+    """
+    Live per-player stats for a gameweek: GET /api/event/{gw}/live/.
+
+    Public, and correct for finished gameweeks as well as in-progress ones —
+    unlike bootstrap's `event_points`, which always reports the *current* GW and
+    would mislabel a historical squad's scores.
+
+    Returns {player_id: stats_dict}, where stats carries `total_points`,
+    `minutes`, `bonus`, `bps` and the per-category counts.
+    """
+    s = session or new_session()
+    r = s.get(
+        f"https://fantasy.premierleague.com/api/event/{int(event_id)}/live/",
+        headers={"Accept": "application/json"},
+        verify=_verify(), timeout=20,
+    )
+    if r.status_code == 403:
+        raise RuntimeError("403 /api/event/.../live (blocked by network/bot protection).")
+    r.raise_for_status()
+    data = r.json() or {}
+    out = {}
+    for el in data.get("elements") or []:
+        pid = el.get("id")
+        if pid is None:
+            continue
+        out[int(pid)] = el.get("stats") or {}
+    return out
+
+
 def get_entry_picks(
     entry_id,
     event_id,

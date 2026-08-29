@@ -7,6 +7,7 @@ REQUESTS_CA_BUNDLE_ENV = "REQUESTS_CA_BUNDLE"
 
 # Caching / API
 BOOTSTRAP_TTL = 300  # seconds
+EVENT_LIVE_TTL = 60  # live GW scores move during matches, so cache far shorter
 FIXTURES_TTL  = 300
 
 # Elements features you care about
@@ -263,6 +264,11 @@ OUTPUT_ASSIST_POINTS = 3.0
 OUTPUT_CS_POINTS = {"GKP": 4, "DEF": 4, "MID": 1, "FWD": 0}
 OUTPUT_GOALS_CONCEDED_PENALTY_PER_2 = {"GKP": -1.0, "DEF": -1.0, "MID": 0.0, "FWD": 0.0}
 OUTPUT_SAVES_PER_XGA = 2.0           # rough expected saves per unit opponent xG (GKP)
+# Keeper-specific shot-stopping volume. The flat OUTPUT_SAVES_PER_XGA gives every
+# keeper the same save rate; this scales it by the keeper's own saves_per_90
+# relative to the league median, shrunk toward 1.0 by minutes played.
+OUTPUT_APPLY_KEEPER_SAVE_RATE = True
+OUTPUT_SAVE_RATIO_CLAMP = (0.6, 1.6)  # a keeper cannot be 3x the league at stopping shots
 OUTPUT_SAVE_POINTS_PER_SAVE = 1.0 / 3.0
 OUTPUT_BONUS_PER_XGI = 0.9           # rough bonus points per expected goal involvement
 # Defensive bonus: BPS from clean sheets, clearances, blocks, recoveries earns
@@ -280,6 +286,15 @@ OUTPUT_MAX_ASSISTS_PER_GAME = 2.0
 # The feature is a shrunk, time-decayed per-player rate of clearing the
 # threshold in 60+ minute games — backtest showed that rate is highly stable
 # (H1-vs-H2 rank corr 0.88) and predicts next-game clearance better than form.
+# Set-piece duty uplift. The xG model reads only per-90 history, which cannot
+# know that a player has just been handed penalties. Applied to the position
+# PRIOR and tapered away as a player's own minutes sample grows, since their own
+# expected_goals already contains the penalties they have taken.
+OUTPUT_APPLY_SETPIECE = True          # off restores exact pre-set-piece behaviour
+OUTPUT_SETPIECE_PEN_XG90 = 0.11       # league-average penalty xG per 90 for a first-choice taker
+OUTPUT_SETPIECE_FK_XG90 = 0.03        # direct free-kick xG per 90 for the designated taker
+OUTPUT_SETPIECE_CORNER_XA90 = 0.05    # xA per 90 uplift for the primary corner taker
+
 OUTPUT_APPLY_DC = True                # off restores exact pre-DC output_model behaviour
 OUTPUT_DC_POINTS = 2.0                # points banked for clearing the threshold
 OUTPUT_DC_HALFLIFE_DAYS = 75.0        # decay half-life on the clearance-rate samples

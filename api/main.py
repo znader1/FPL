@@ -161,6 +161,8 @@ async def _scrub_server_errors(request, exc):
 
 _bootstrap_cache = {"ts": 0.0, "data": None}
 _fixtures_cache = {"ts": 0.0, "data": None}
+# Keyed by event id: live scores move during matches, so each GW caches separately.
+_event_live_cache = {}
 
 
 def _cache_get(cache, ttl_s):
@@ -191,6 +193,29 @@ def get_fixtures_cached():
         return hit
     fx = transforms.fixtures_df(fpl_client.get_fixtures())
     return _cache_set(_fixtures_cache, fx)
+
+
+def get_event_live_cached(event_id):
+    """
+    Live per-player stats for a GW, on a short TTL — scores move during matches,
+    so this cannot ride the 5-minute bootstrap TTL.
+
+    Never raises: live scores are additive detail, and a squad must still render
+    when the upstream call fails.
+    """
+    if event_id is None:
+        return {}
+    key = int(event_id)
+    ttl = int(getattr(config, "EVENT_LIVE_TTL", 60) or 60)
+    cache = _event_live_cache.setdefault(key, {"ts": 0.0, "data": None})
+    hit = _cache_get(cache, ttl)
+    if hit is not None:
+        return hit
+    try:
+        return _cache_set(cache, fpl_client.get_event_live(key))
+    except Exception as e:
+        logger.warning("Live stats fetch failed for GW %s: %s", key, e)
+        return cache.get("data") or {}
 
 
 _team_ratings_cache = {"ts": 0.0, "data": None}
@@ -611,6 +636,20 @@ def build_squad(payload):
         picks = picks.sort_values("position")
 
     records = attach_media(df_records(picks), teams_code)
+
+    # Live/actual scores for the GW being rendered. Sourced from
+    # /api/event/{gw}/live/ rather than bootstrap's `event_points`, which always
+    # reports the *current* GW and would show GW-N scores on a GW-1 squad.
+    # `event_points` is the raw player score: the captain multiplier lives in
+    # `multiplier` on the pick, so the client applies it and the number under a
+    # player still matches the official app.
+    live_stats = get_event_live_cached(ctx["squad_event_id"])
+    for r in records:
+        st = live_stats.get(safe_int(r.get("player_id"))) or {}
+        r["event_points"] = safe_int(st.get("total_points"))
+        r["live_minutes"] = safe_int(st.get("minutes"))
+        r["live_bonus"] = safe_int(st.get("bonus"))
+        r["live_bps"] = safe_int(st.get("bps"))
 
     starting = []
     bench = []
