@@ -39,7 +39,9 @@ def build_ratings(asof=None, match_df=None, teams_short_map=None,
     if match_df is None:
         match_df = fixture_difficulty.load_match_history(base_dir=base_dir)
     team_match_xg = fixture_difficulty.build_team_match_xg(match_df)
-    ratings = fixture_difficulty.compute_team_ratings(team_match_xg, asof=asof)
+    ratings = fixture_difficulty.resolve_team_ratings(
+        team_match_xg, teams_short_map=teams_short_map, asof=asof
+    )
     ratings = fixture_difficulty.apply_knowledge_discount(
         ratings, teams_short_map=teams_short_map, path=knowledge_path
     )
@@ -83,7 +85,18 @@ def build_expected_points(
     if team_match_xg.empty:
         return pd.DataFrame({"id": pd.to_numeric(elements["id"], errors="coerce").dropna().astype(int)})
 
-    ratings = fixture_difficulty.compute_team_ratings(team_match_xg, asof=asof)
+    # Carryover-seeded ratings, not live-only. With one gameweek played, raw
+    # current-season ratings come off a single match per team: one 4-0 win makes
+    # a side look world-beating and inflates every player on it. resolve_* blends
+    # in the regressed prior-season seed with FDR_CARRYOVER_PRIOR_MATCHES worth of
+    # weight, so the live signal only takes over as matches accrue.
+    #
+    # This also made the projections disagree with /fixtures/difficulty, which has
+    # always used resolve_team_ratings — the same team rated two different ways in
+    # the same app.
+    ratings = fixture_difficulty.resolve_team_ratings(
+        team_match_xg, teams_short_map=teams_short_map, asof=asof
+    )
     ratings = fixture_difficulty.apply_knowledge_discount(
         ratings, teams_short_map=teams_short_map, path=knowledge_path
     )
