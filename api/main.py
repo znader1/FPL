@@ -331,6 +331,39 @@ def build_next_event_summary(bootstrap=None, fixtures=None):
     }
 
 
+def build_entry_identity(entry_id):
+    """
+    Public identity of an FPL entry: who this team belongs to right now.
+
+    FPL reissues entry IDs each season, so a stored id silently resolves to a
+    different manager after the August rollover. `joined_time` is the strongest
+    tell -- it changes when the id is handed to someone new -- with the manager
+    name and `years_active` as corroboration.
+    """
+    eid = safe_int(entry_id)
+    if not eid or eid <= 0:
+        raise HTTPException(status_code=400, detail="A positive entry_id is required.")
+    try:
+        data = fpl_client.get_entry(eid) or {}
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Entry {eid} not found: {e}")
+
+    first = (data.get("player_first_name") or "").strip()
+    last = (data.get("player_last_name") or "").strip()
+    return {
+        "entry_id": eid,
+        "manager_name": (f"{first} {last}").strip() or None,
+        "team_name": data.get("name"),
+        "joined_time": data.get("joined_time"),
+        "started_event": safe_int(data.get("started_event")),
+        "years_active": safe_int(data.get("years_active")),
+        "region_name": data.get("player_region_name"),
+        "overall_rank": safe_int(data.get("summary_overall_rank")),
+        "overall_points": safe_int(data.get("summary_overall_points")),
+        "current_event": safe_int(data.get("current_event")),
+    }
+
+
 def next_fixture_labels_by_team(fixtures, teams_short, event_id):
     """{team_id: "BOU (H)"} for one GW; DGW teams get comma-joined labels."""
     labels = {}
@@ -675,9 +708,19 @@ def build_squad(payload):
         if r.get("is_vice_captain") is True:
             vice_id = safe_int(r.get("player_id"))
 
+    # Identity of the entry these picks belong to. Without it the client cannot
+    # tell that a stored entry_id has rolled over to a different manager -- the
+    # fetch succeeds and a stranger's squad renders cleanly.
+    try:
+        entry_identity = build_entry_identity(ctx["entry_id"])
+    except Exception as e:
+        logger.warning("Entry identity lookup failed for %s: %s", ctx["entry_id"], e)
+        entry_identity = None
+
     return {
         "entry_id": ctx["entry_id"],
         "event_id": ctx["squad_event_id"],
+        "entry": entry_identity,
         "notes": ctx.get("notes") or [],
         "captain_player_id": captain_id,
         "vice_player_id": vice_id,
@@ -1551,6 +1594,23 @@ def squad_get(
         return err
     out = build_squad({"entry_id": entry_id, "event_id": event_id})
     return JSONResponse(content=jsonable_encoder(out))
+
+
+@app.get("/entry/identity")
+def entry_identity_get(
+    entry_id=None,
+    api_key=None, x_api_key=Header(None), authorization=Header(None),
+):
+    """
+    Confirm who an entry id belongs to before linking it.
+
+    A browser cannot ask FPL directly -- fantasy.premierleague.com sends no CORS
+    header for our origin -- so the lookup is proxied here.
+    """
+    err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
+    if err:
+        return err
+    return JSONResponse(content=jsonable_encoder(build_entry_identity(entry_id)))
 
 
 @app.post("/squad")
