@@ -54,15 +54,36 @@ def find_latest_match_history(base_dir="data/processed/fpl"):
     return str(max(paths, key=lambda p: p.stat().st_mtime))
 
 
+_match_history_cache = {"key": None, "df": None}
+
+
 def load_match_history(path=None, base_dir="data/processed/fpl"):
-    """Load the player-match history CSV, or return an empty frame if missing."""
+    """
+    Load the player-match history CSV, or return an empty frame if missing.
+
+    Cached on (path, mtime, size): the squad view and the recommendation view
+    both trigger a model build, and re-reading the same file for each one was
+    costing ~80ms of every request for nothing. A refresh rewrites the file,
+    which changes the key, so the cache cannot serve stale history.
+    """
     selected = str(path or find_latest_match_history(base_dir=base_dir) or "")
     if not selected or not Path(selected).exists():
         return pd.DataFrame()
     try:
-        return pd.read_csv(selected)
+        stat = Path(selected).stat()
+        key = (selected, stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        key = None
+    if key is not None and _match_history_cache["key"] == key:
+        return _match_history_cache["df"]
+    try:
+        df = pd.read_csv(selected)
     except Exception:
         return pd.DataFrame()
+    if key is not None:
+        _match_history_cache["key"] = key
+        _match_history_cache["df"] = df
+    return df
 
 
 def build_team_match_xg(match_df):

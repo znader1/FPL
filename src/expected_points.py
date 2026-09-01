@@ -105,10 +105,33 @@ def build_expected_points(
     out = out[out["id"].notna()].copy()
     out["id"] = out["id"].astype(int)
 
+    # Both rate builders filter history to `event < gw`, so every gameweek at or
+    # beyond the last one on file sees identical input and returns an identical
+    # frame. Over a 3-GW horizon that was the same ~245ms of work three times.
+    # Minutes are NOT memoised: their decay is measured relative to the gameweek
+    # being projected, so each one genuinely differs.
+    max_event_on_file = None
+    if match_df is not None and not match_df.empty:
+        gw_col = "event" if "event" in match_df.columns else (
+            "round" if "round" in match_df.columns else None)
+        if gw_col:
+            events = pd.to_numeric(match_df[gw_col], errors="coerce").dropna()
+            if not events.empty:
+                max_event_on_file = int(events.max())
+
+    def _effective_gw(gw):
+        return gw if max_event_on_file is None else min(int(gw), max_event_on_file + 1)
+
+    rates_memo, dc_memo = {}, {}
+
     horizon_total = pd.Series(0.0, index=out.index, dtype="float64")
     for gw in gws:
-        player_rates = output_model.compute_player_rates(match_df, gw)
-        dc_rates = output_model.compute_dc_rates(match_df, gw)
+        key = _effective_gw(gw)
+        if key not in rates_memo:
+            rates_memo[key] = output_model.compute_player_rates(match_df, key)
+            dc_memo[key] = output_model.compute_dc_rates(match_df, key)
+        player_rates = rates_memo[key]
+        dc_rates = dc_memo[key]
         mins = minutes_model.minutes_projection(elements, minutes_history, gw)
         ep = output_model.expected_points(
             elements, fixtures, ratings, player_rates, mins, gw, dc_rates=dc_rates)
@@ -129,6 +152,10 @@ def build_expected_points(
     out["xpts_model_horizon"] = horizon_total.values
     return out
 
+
+# Below this appearance probability a player's points distribution is a spike at
+# zero, so the convolution is skipped and the answer written directly.
+MIN_APPEAR_FOR_PMF = 0.02
 
 # Component columns carried from output_model onto the first-GW row.
 _COMPONENT_COLS = [
@@ -166,6 +193,12 @@ def _attach_components(out, ep):
             p80_low.append(None); p80_high.append(None)
             continue
         row = ep.loc[pid]
+        # Someone who will not appear scores 0 with near-certainty. Say so
+        # directly rather than convolving five distributions to find it out.
+        if float(row.get("p_appear", 0.0) or 0.0) < MIN_APPEAR_FOR_PMF:
+            modal.append(0); p_return.append(0.0); p_haul.append(0.0)
+            p80_low.append(0); p80_high.append(0)
+            continue
         pmf = points_distribution.player_points_pmf(
             pos=pos,
             prob_appear=float(row.get("p_appear", 0.0) or 0.0),

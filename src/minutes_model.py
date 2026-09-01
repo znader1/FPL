@@ -51,6 +51,9 @@ def find_latest_gw_history(base_dir="data/processed/fpl"):
     return str(max(paths, key=lambda p: p.stat().st_mtime))
 
 
+_minutes_history_cache = {"key": None, "df": None}
+
+
 def load_minutes_history(path=None, base_dir="data/processed/fpl"):
     """
     Load player-by-GW minutes history. Returns columns
@@ -59,6 +62,16 @@ def load_minutes_history(path=None, base_dir="data/processed/fpl"):
     selected = str(path or find_latest_gw_history(base_dir=base_dir) or "")
     if not selected or not Path(selected).exists():
         return pd.DataFrame()
+    # Cached on (path, mtime, size) — same reasoning as the match history: this
+    # file is re-read on every model build, and a refresh rewrites it, which
+    # changes the key.
+    try:
+        stat = Path(selected).stat()
+        key = (selected, stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        key = None
+    if key is not None and _minutes_history_cache["key"] == key:
+        return _minutes_history_cache["df"]
     try:
         df = pd.read_csv(selected)
     except Exception:
@@ -78,7 +91,11 @@ def load_minutes_history(path=None, base_dir="data/processed/fpl"):
     out = out[out["player_id"].notna() & out["gw"].notna()].copy()
     out["player_id"] = out["player_id"].astype(int)
     out["gw"] = out["gw"].astype(int)
-    return out.reset_index(drop=True)
+    out = out.reset_index(drop=True)
+    if key is not None:
+        _minutes_history_cache["key"] = key
+        _minutes_history_cache["df"] = out
+    return out
 
 
 # ---------------------------------------------------------------------------
