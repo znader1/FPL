@@ -10,7 +10,12 @@ primary_region = 'lhr'
 
 [env]
   PORT = '8000'
-  WEB_CONCURRENCY = '2'
+  # One worker, same as fly.dev.toml. Measured on the dev machine: a single
+  # worker sits at 246MB of the 459MB available after a full model build, so two
+  # would be ~490MB and swap. The box also has one shared vCPU (nproc = 1), so a
+  # second worker only contends for it on a CPU-bound build — and every cache is
+  # per-process, so two workers halve the cache hit rate as well.
+  WEB_CONCURRENCY = '1'
 
 [[mounts]]
   source = 'fpl_data'
