@@ -8,6 +8,11 @@ REQUESTS_CA_BUNDLE_ENV = "REQUESTS_CA_BUNDLE"
 # Caching / API
 BOOTSTRAP_TTL = 300  # seconds
 EVENT_LIVE_TTL = 60  # live GW scores move during matches, so cache far shorter
+# Projections only change when the history is refreshed or bootstrap moves
+# (prices, injuries), so they can outlive the fixtures cache by a long way. On a
+# shared-cpu Fly machine a cold build is seconds, and this is what keeps a squad
+# load off that path.
+PROJECTIONS_TTL = 1800
 FIXTURES_TTL  = 300
 
 # Elements features you care about
