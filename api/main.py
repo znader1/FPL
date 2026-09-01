@@ -220,6 +220,41 @@ def get_event_live_cached(event_id):
         return cache.get("data") or {}
 
 
+# Keyed by (gw_start, horizon): the squad view and the recommendation view ask
+# for different horizons and must not evict each other.
+_projections_cache = {}
+
+
+def get_projections_cached(gw_start, horizon_gws, finished_gw_max=None):
+    """
+    Projections for one gameweek window, cached on the fixtures TTL.
+
+    The squad view needs xPts so a gameweek that hasn't happened shows a
+    projection rather than a dash, but it must not pay the full model cost on
+    every squad load.
+    """
+    key = (int(gw_start), int(horizon_gws))
+    ttl = int(getattr(config, "FIXTURES_TTL", 300) or 300)
+    cache = _projections_cache.setdefault(key, {"ts": 0.0, "data": None})
+    hit = _cache_get(cache, ttl)
+    if hit is not None:
+        return hit
+
+    bootstrap = get_bootstrap_cached()
+    fixtures = get_fixtures_cached()
+    elements, teams, _ = transforms.tables_from_bootstrap(bootstrap)
+    proj = projections.project_elements_next_gws(
+        elements=elements,
+        fixtures=fixtures,
+        teams_short_map=teams.set_index("id")["short_name"].to_dict(),
+        gw_start=int(gw_start),
+        horizon_gws=int(horizon_gws),
+        latest_n_matches=getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3),
+        finished_gw_max=finished_gw_max,
+    )
+    return _cache_set(cache, proj)
+
+
 _team_ratings_cache = {"ts": 0.0, "data": None}
 
 
@@ -691,6 +726,35 @@ def build_squad(payload):
         r["live_minutes"] = safe_int(st.get("minutes"))
         r["live_bonus"] = safe_int(st.get("bonus"))
         r["live_bps"] = safe_int(st.get("bps"))
+
+    # Projected points for the gameweek the manager asked for. Without this the
+    # squad view has nothing to show for a gameweek that hasn't happened -- the
+    # picks endpoint substitutes the latest squad, its actual points belong to an
+    # earlier gameweek, and every shirt renders a dash.
+    #
+    # Projected for the REQUESTED event, not the substituted one: asking about
+    # GW3 and being shown GW2's projection would be the same lie in a new place.
+    requested_ev = safe_int(payload.get("event_id")) or ctx["squad_event_id"]
+    projection_event_id = int(min(38, max(1, int(requested_ev))))
+    try:
+        proj = get_projections_cached(projection_event_id, 1, ctx.get("finished_gw_max"))
+        xpts_col = f"xpts_gw{projection_event_id}"
+        if proj is not None and not proj.empty and xpts_col in proj.columns:
+            xpts_by_id = dict(zip(
+                pd.to_numeric(proj["id"], errors="coerce"),
+                pd.to_numeric(proj[xpts_col], errors="coerce"),
+            ))
+            for r in records:
+                value = xpts_by_id.get(safe_int(r.get("player_id")))
+                r["xpts"] = round(float(value), 2) if value is not None and pd.notna(value) else None
+            if projection_event_id != ctx["squad_event_id"]:
+                # The squad is a substitution; say which GW the numbers describe.
+                ctx.setdefault("notes", []).append(
+                    f"Projected points shown for GW{projection_event_id}."
+                )
+    except Exception as e:
+        # Projections are additive; a squad must still render without them.
+        logger.warning("Squad projections unavailable for GW %s: %s", projection_event_id, e)
 
     starting = []
     bench = []
