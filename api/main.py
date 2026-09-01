@@ -234,7 +234,7 @@ def get_projections_cached(gw_start, horizon_gws, finished_gw_max=None):
     every squad load.
     """
     key = (int(gw_start), int(horizon_gws))
-    ttl = int(getattr(config, "FIXTURES_TTL", 300) or 300)
+    ttl = int(getattr(config, "PROJECTIONS_TTL", 1800) or 1800)
     cache = _projections_cache.setdefault(key, {"ts": 0.0, "data": None})
     hit = _cache_get(cache, ttl)
     if hit is not None:
@@ -1584,6 +1584,23 @@ def admin_refresh(
             match_history_error = str(exc)
             logger.warning("Match-history refresh failed: %s", exc)
 
+    # New history invalidates every projection, and rebuilding one costs seconds
+    # on a shared-cpu machine. Pay that here, on a scheduled job, rather than
+    # making the next person to open the app wait for it.
+    _projections_cache.clear()
+    warmed = []
+    next_gw = safe_int((next_ev or {}).get("event_id"))
+    if next_gw:
+        finished_max = max(
+            [safe_int(e.get("id")) for e in bootstrap.get("events", []) if e.get("finished")] or [0]
+        ) or None
+        for horizon in (1, int(getattr(config, "PROJ_DEFAULT_HORIZON_GWS", 3) or 3)):
+            try:
+                get_projections_cached(next_gw, horizon, finished_max)
+                warmed.append({"gw": next_gw, "horizon": horizon})
+            except Exception as exc:
+                logger.warning("Projection warm failed for GW%s h%s: %s", next_gw, horizon, exc)
+
     return JSONResponse(content=jsonable_encoder({
         "ok": True,
         "next_event": next_ev,
@@ -1592,6 +1609,7 @@ def admin_refresh(
         "snapshot_error": snapshot_error,
         "match_history": match_history_info,
         "match_history_error": match_history_error,
+        "projections_warmed": warmed,
     }))
 
 
@@ -1655,16 +1673,9 @@ def build_model_snapshot():
     finished = [safe_int(e.get("id")) for e in bootstrap.get("events", []) if e.get("finished")]
     finished_gw_max = max([e for e in finished if e], default=None)
 
-    elements_df = pd.DataFrame(bootstrap.get("elements", []))
-    proj = projections.project_elements_next_gws(
-        elements=elements_df,
-        fixtures=fixtures,
-        teams_short_map=teams_short,
-        gw_start=gw,
-        horizon_gws=1,
-        latest_n_matches=getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3),
-        finished_gw_max=finished_gw_max,
-    )
+    # Share the cache with the squad view rather than forcing a cold build: this
+    # is a diagnostic endpoint and has no business costing seconds of CPU.
+    proj = get_projections_cached(gw, 1, finished_gw_max)
     xpts_col = f"xpts_gw{gw}"
     xpts_by_id = {}
     if proj is not None and not proj.empty and xpts_col in proj.columns:

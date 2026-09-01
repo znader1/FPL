@@ -25,6 +25,7 @@ def test_model_snapshot_requires_admin_key(monkeypatch):
 
 def test_model_snapshot_payload_shape(monkeypatch):
     monkeypatch.setenv("FPL_ADMIN_KEY", "test-admin-key")
+    m._projections_cache.clear()  # a leaked entry would mask the mock below
 
     bootstrap = {
         "events": [
@@ -37,7 +38,10 @@ def test_model_snapshot_payload_shape(monkeypatch):
              "now_cost": 80, "selected_by_percent": "12.4", "status": "d",
              "chance_of_playing_next_round": 75, "ep_next": "4.5"},
         ],
-        "teams": [{"id": 16, "short_name": "NFO"}],
+        # `name` is required now that the endpoint shares the squad view's cached
+        # projection helper, which builds the teams table properly rather than
+        # reaching into bootstrap inline.
+        "teams": [{"id": 16, "short_name": "NFO", "name": "Nott'm Forest"}],
         "element_types": [{"id": 3, "singular_name_short": "MID"}],
     }
     monkeypatch.setattr(m, "get_bootstrap_cached", lambda: bootstrap)
