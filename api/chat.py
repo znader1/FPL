@@ -292,11 +292,18 @@ def chat_chip(req: SpecialistRequest = Body(...)):
             latency_ms=int((time.perf_counter() - t0) * 1000),
         )
 
+    from src import fpl_client
+    try:
+        chips_played = fpl_client.get_entry_history(req.entry_id).get("chips") or []
+    except Exception:
+        chips_played = []
+
     try:
         answer = run_chip_agent(
             squad=ctx["squad"], current_gw=current_gw,
             gw_projections=ctx["gw_projections"], chips_remaining=chips_remaining,
             extra_context=_load_rules_text(),
+            chips_played=chips_played,
         )
     except Exception as e:
         logger.exception("chip agent failed")

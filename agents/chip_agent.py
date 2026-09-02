@@ -19,7 +19,7 @@ from pathlib import Path
 import pandas as pd
 from anthropic import Anthropic
 
-from src.chip_advisor import recommend_chips
+from src.chip_advisor import build_chip_plan
 
 
 MODEL = "claude-haiku-4-5-20251001"  # fast specialist; Sonnet is overkill here
@@ -30,9 +30,12 @@ TOOLS = [
     {
         "name": "get_chip_recommendations",
         "description": (
-            "Returns the top-ranked chip recommendations from the deterministic "
-            "engine. Each item has: chip name, target gameweek, expected_value "
-            "(extra pts vs not playing), confidence (0-1), reasoning facts."
+            "Returns the full chip plan from the deterministic engine: model-zone "
+            "EV recommendations (chip, target gameweek, ev_gain, reasons, ev_curve), "
+            "structural provisional windows for chips beyond the model horizon "
+            "(e.g. a known double gameweek), each chip's expiry deadline (phase 1 "
+            "vs phase 2), a nudge flagging if a chip should be played THIS gameweek, "
+            "and transfer_context. Grounds chip advice in the same plan the UI shows."
         ),
         "input_schema": {
             "type": "object",
@@ -59,17 +62,17 @@ def _handle_tool_call(
     squad: pd.DataFrame,
     gw_projections: dict,
     chips_remaining: list[str],
-) -> list[dict]:
+    chips_played: list | None = None,
+) -> dict:
     """Route tool calls to the deterministic advisor."""
     if name == "get_chip_recommendations":
-        recs = recommend_chips(
+        return build_chip_plan(
             squad=squad,
             current_gw=int(args["current_gw"]),
             gw_projections=gw_projections,
-            chips_remaining=chips_remaining,
-            gws_ahead=int(args.get("gws_ahead", 5)),
+            chips_played=chips_played or [],
+            horizon_gws=int(args.get("gws_ahead", 5)) + 1,
         )
-        return [r.to_dict() for r in recs[:10]]
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -80,6 +83,7 @@ def run_chip_agent(
     chips_remaining: list[str],
     verbose: bool = False,
     extra_context: str | None = None,
+    chips_played: list | None = None,
 ) -> str:
     """
     Entry point. Returns a natural-language recommendation string.
@@ -87,6 +91,10 @@ def run_chip_agent(
     squad: DataFrame with player_id, name, pos, team, price_m
     gw_projections: dict {gw: market_df}
     chips_remaining: list like ["wildcard", "free_hit", "bench_boost", "triple_captain"]
+        (still used for the user-message text below)
+    chips_played: raw chip-play records (as returned by the FPL entry-history
+        endpoint's "chips" key) — threaded to the tool so it can derive
+        per-chip availability/expiry windows via build_chip_plan.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -126,6 +134,7 @@ def run_chip_agent(
                 result = _handle_tool_call(
                     tu.name, dict(tu.input),
                     squad, gw_projections, chips_remaining,
+                    chips_played,
                 )
                 tool_results.append({
                     "type": "tool_result",

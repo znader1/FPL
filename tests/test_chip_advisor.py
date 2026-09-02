@@ -232,3 +232,18 @@ def test_normalize_chip_strategy_existing_unchanged():
     assert normalize_chip_strategy("fh") == "free_hit"
     assert normalize_chip_strategy("") == "none"
     assert normalize_chip_strategy("garbage") == "none"
+
+
+def test_chip_agent_tool_returns_full_plan(monkeypatch):
+    from agents import chip_agent
+
+    sentinel = {"recommendations": [], "nudge": None, "chips_remaining": [],
+                "current_gw": 5, "horizon_model_gws": 8, "transfer_context": {}}
+    monkeypatch.setattr(chip_agent, "build_chip_plan", lambda **kw: sentinel)
+
+    squad = _squad_15()[["player_id", "name", "pos", "team", "price_m"]]
+    result = chip_agent._handle_tool_call(
+        "get_chip_recommendations", {"current_gw": 5},
+        squad, {5: _squad_15()}, ["wildcard"],
+    )
+    assert result == sentinel
