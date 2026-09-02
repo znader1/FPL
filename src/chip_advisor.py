@@ -442,6 +442,116 @@ def recommend_chips(
     )
 
 
+def build_chip_plan(
+    squad: pd.DataFrame,
+    current_gw: int,
+    gw_projections: dict[int, pd.DataFrame],
+    chips_played: list[dict],
+    itb_m: float = 0.0,
+    fixtures: pd.DataFrame | None = None,
+    transfer_plan: dict | None = None,
+    horizon_gws: int | None = None,
+) -> dict:
+    """Assemble the full chip plan payload: model-zone EV recommendations,
+    structural provisional windows, next-GW nudge, and transfer context."""
+    current_gw = int(current_gw)
+    horizon = int(horizon_gws or getattr(config, "CHIP_PLAN_HORIZON_GWS", 8))
+    windows = chip_windows(chips_played, current_gw)
+    remaining = [c for c, w in windows.items() if w["available"]]
+    plan_net_gain = float((transfer_plan or {}).get("total_net_gain", 0.0) or 0.0)
+
+    squad_value = float(pd.to_numeric(squad.get("price_m"), errors="coerce").fillna(0).sum())
+    budget_m = squad_value + float(itb_m or 0.0)
+
+    all_recs = recommend_chips(
+        squad=squad,
+        current_gw=current_gw,
+        gw_projections=gw_projections,
+        chips_remaining=remaining,
+        gws_ahead=horizon - 1,
+        bank_m=budget_m,
+        transfer_plan_net_gain=plan_net_gain,
+    )
+
+    recommendations = []
+    nudge = None
+    nudge_floor = float(getattr(config, "CHIP_PLAN_NUDGE_MIN_EV", 4.0))
+
+    for chip in remaining:
+        chip_recs = [r for r in all_recs if r.chip == chip]
+        if not chip_recs:
+            continue
+        expires_gw = windows[chip]["expires_gw"]
+        # Model-zone candidates only run to the chip's expiry.
+        in_window = [r for r in chip_recs if r.gw <= expires_gw]
+        if not in_window:
+            continue
+        best = max(in_window, key=lambda r: r.expected_value)
+        curve = [{"gw": r.gw, "ev": round(float(r.expected_value), 2)}
+                 for r in sorted(in_window, key=lambda r: r.gw)]
+        if best.expected_value < effective_min_ev(chip, best.gw, expires_gw):
+            continue  # hold — nothing in the model zone clears the bar
+        rec = {
+            "chip": chip,
+            "event_id": int(best.gw),
+            "ev_gain": round(float(best.expected_value), 2),
+            "provisional": False,
+            "reasons": list(best.reasoning) + [f"Risk: {r}" for r in best.risks],
+            "ev_curve": curve,
+        }
+        recommendations.append(rec)
+        if rec["event_id"] == current_gw and rec["ev_gain"] >= nudge_floor:
+            if nudge is None or rec["ev_gain"] > nudge["ev_gain"]:
+                nudge = {"chip": chip, "event_id": current_gw, "ev_gain": rec["ev_gain"]}
+
+    # Structural zone: announced DGWs/BGWs beyond the model horizon, up to expiry.
+    if fixtures is not None and not fixtures.empty:
+        model_end = current_gw + horizon - 1
+        season_end = int(getattr(config, "CHIP_PLAN_SEASON_END_GW", 38))
+        recommended_chips = {r["chip"] for r in recommendations}
+        for g in range(model_end + 1, season_end + 1):
+            counts = team_fixture_counts(fixtures, g)
+            if not counts:
+                continue
+            n_teams = len(counts)
+            has_dgw = any(v >= 2 for v in counts.values())
+            is_blank_heavy = n_teams <= 14  # several teams missing → blank GW
+            for chip, wants, label in (
+                ("bench_boost", has_dgw, "double gameweek"),
+                ("triple_captain", has_dgw, "double gameweek"),
+                ("free_hit", is_blank_heavy, "blank-heavy gameweek"),
+            ):
+                if not wants or chip not in remaining or chip in recommended_chips:
+                    continue
+                if g > windows[chip]["expires_gw"]:
+                    continue
+                recommendations.append({
+                    "chip": chip,
+                    "event_id": g,
+                    "ev_gain": None,
+                    "provisional": True,
+                    "reasons": [f"GW{g} is a {label} (from announced fixtures) — "
+                                f"candidate window, EV computable once in the model horizon"],
+                    "ev_curve": [],
+                })
+                recommended_chips.add(chip)
+
+    return {
+        "current_gw": current_gw,
+        "chips_remaining": [
+            {"name": c, **windows[c]} for c in ALL_CHIPS
+        ],
+        "horizon_model_gws": horizon,
+        "recommendations": recommendations,
+        "nudge": nudge,
+        "transfer_context": {
+            "planned_transfers_net_gain": round(plan_net_gain, 2),
+            "wc_alternative_gw": next(
+                (r["event_id"] for r in recommendations if r["chip"] == "wildcard"), None),
+        },
+    }
+
+
 def plan_chips_smart(
     squad_at_start: pd.DataFrame,
     start_gw: int,

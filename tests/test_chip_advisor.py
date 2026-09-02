@@ -137,3 +137,79 @@ def test_score_free_hit_respects_budget():
                           gw_projections, [5], budget_m=80.0)
     # With an 80m budget nothing beats the (identical) cheap pool → no uplift
     assert recs == [] or recs[0].expected_value < 1.0
+
+
+from src.chip_advisor import build_chip_plan
+
+
+def _gw_projections_with_dgw(gws, dgw_gw, dgw_team="T1"):
+    """Own squad (cheap) + a market; on dgw_gw players of dgw_team get fixture_count 2 and 2x xpts."""
+    out = {}
+    for g in gws:
+        m = _squad_15(xpts=3.0)
+        if g == dgw_gw:
+            mask = m["team"] == dgw_team
+            m.loc[mask, "fixture_count"] = 2
+            m.loc[mask, "xpts"] = 6.0
+        out[g] = m
+    return out
+
+
+def test_build_chip_plan_shape_and_keys():
+    gws = [5, 6, 7, 8]
+    plan = build_chip_plan(
+        squad=_squad_15()[["player_id", "name", "pos", "team", "price_m"]],
+        current_gw=5,
+        gw_projections=_gw_projections_with_dgw(gws, dgw_gw=6),
+        chips_played=[],
+        horizon_gws=4,
+    )
+    assert set(plan) >= {"current_gw", "chips_remaining", "horizon_model_gws",
+                         "recommendations", "nudge", "transfer_context"}
+    assert plan["current_gw"] == 5
+    names = {c["name"] for c in plan["chips_remaining"]}
+    assert names == {"wildcard", "free_hit", "bench_boost", "triple_captain"}
+    for rec in plan["recommendations"]:
+        assert set(rec) >= {"chip", "event_id", "ev_gain", "provisional", "reasons", "ev_curve"}
+
+
+def test_build_chip_plan_played_chip_absent_from_recommendations():
+    gws = [5, 6, 7, 8]
+    plan = build_chip_plan(
+        squad=_squad_15()[["player_id", "name", "pos", "team", "price_m"]],
+        current_gw=5,
+        gw_projections=_gw_projections_with_dgw(gws, dgw_gw=6),
+        chips_played=[{"name": "bboost", "event": 3}],
+        horizon_gws=4,
+    )
+    assert all(r["chip"] != "bench_boost" for r in plan["recommendations"])
+    bb = next(c for c in plan["chips_remaining"] if c["name"] == "bench_boost")
+    assert bb["available"] is False
+
+
+def test_build_chip_plan_structural_dgw_beyond_horizon_is_provisional():
+    fx = _fixtures([(30, 1, 2), (30, 1, 3)])  # team 1 doubles in GW30, far beyond model zone
+    plan = build_chip_plan(
+        squad=_squad_15()[["player_id", "name", "pos", "team", "price_m"]],
+        current_gw=25,
+        gw_projections=_gw_projections_with_dgw([25, 26, 27, 28], dgw_gw=None),
+        chips_played=[],
+        fixtures=fx,
+        horizon_gws=4,
+    )
+    provisional = [r for r in plan["recommendations"] if r["provisional"]]
+    assert any(r["event_id"] == 30 for r in provisional)
+    assert all(r["ev_gain"] is None for r in provisional)
+
+
+def test_build_chip_plan_nudge_only_for_current_gw_above_floor():
+    gws = [5, 6, 7, 8]
+    plan = build_chip_plan(
+        squad=_squad_15()[["player_id", "name", "pos", "team", "price_m"]],
+        current_gw=5,
+        gw_projections=_gw_projections_with_dgw(gws, dgw_gw=7),
+        chips_played=[],
+        horizon_gws=4,
+    )
+    if plan["nudge"] is not None:
+        assert plan["nudge"]["event_id"] == 5
