@@ -118,6 +118,20 @@ def _pick_captain_xpts(starting_xi: pd.DataFrame) -> float:
     return float(s.sort_values("_score", ascending=False).iloc[0]["xpts"])
 
 
+def team_fixture_counts(fixtures, gw):
+    """Team id → fixture count in `gw`. Missing id means a blank GW for that team."""
+    if fixtures is None or fixtures.empty or "event" not in fixtures.columns:
+        return {}
+    f = fixtures[fixtures["event"] == int(gw)]
+    counts: dict[int, int] = {}
+    for col in ("team_h", "team_a"):
+        if col not in f.columns:
+            continue
+        for t in f[col].dropna().tolist():
+            counts[int(t)] = counts.get(int(t), 0) + 1
+    return counts
+
+
 # ---------- chip scorers ----------
 
 def score_triple_captain(

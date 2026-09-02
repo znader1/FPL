@@ -126,11 +126,15 @@ def _build_context_for_entry(entry_id: int, current_gw: int):
     )
 
     # Reshape into the simulator's market schema, one DataFrame per GW
+    from src.chip_advisor import team_fixture_counts
+
     gw_projections = {}
     for g in range(current_gw, current_gw + horizon):
         col = f"xpts_gw{g}"
         if col not in proj.columns:
             continue
+        counts = team_fixture_counts(fixtures, g)
+        team_ids = pd.to_numeric(proj["team"], errors="coerce")
         market_g = pd.DataFrame({
             "player_id": proj["id"].astype(int).values,
             "name": proj["web_name"].values,
@@ -139,7 +143,7 @@ def _build_context_for_entry(entry_id: int, current_gw: int):
             "team": proj["team"].map(team_name_map).values,
             "price_m": (pd.to_numeric(proj["now_cost"], errors="coerce") / 10.0).values,
             "xpts": pd.to_numeric(proj[col], errors="coerce").fillna(0).values,
-            "fixture_count": 1,
+            "fixture_count": team_ids.map(lambda t: counts.get(int(t), 0) if pd.notna(t) else 0).values,
         })
         gw_projections[g] = market_g
 

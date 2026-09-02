@@ -1,4 +1,6 @@
-from src.chip_advisor import chip_windows
+import pandas as pd
+
+from src.chip_advisor import chip_windows, team_fixture_counts
 
 
 def test_chip_windows_all_available_when_none_played():
@@ -36,3 +38,28 @@ def test_chip_windows_normalizes_fpl_names():
     w = chip_windows(played, current_gw=8)
     assert w["free_hit"]["available"] is False
     assert w["bench_boost"]["available"] is False
+
+
+def _fixtures(rows):
+    return pd.DataFrame(rows, columns=["event", "team_h", "team_a"])
+
+
+def test_team_fixture_counts_single_and_double():
+    fx = _fixtures([
+        (12, 1, 2),
+        (12, 1, 3),   # team 1 doubles in GW12
+        (13, 2, 3),
+    ])
+    counts = team_fixture_counts(fx, 12)
+    assert counts == {1: 2, 2: 1, 3: 1}
+
+
+def test_team_fixture_counts_blank_gw_team_absent():
+    fx = _fixtures([(12, 1, 2)])
+    counts = team_fixture_counts(fx, 12)
+    assert 3 not in counts
+    assert counts.get(3, 0) == 0
+
+
+def test_team_fixture_counts_empty_fixtures():
+    assert team_fixture_counts(pd.DataFrame(columns=["event", "team_h", "team_a"]), 5) == {}
