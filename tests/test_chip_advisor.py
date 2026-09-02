@@ -69,14 +69,14 @@ from src.chip_advisor import effective_min_ev
 
 
 def test_effective_min_ev_full_far_from_expiry():
-    # bench_boost base threshold is 5.0; GW5 vs expiry GW19 is outside the ramp
-    assert effective_min_ev("bench_boost", target_gw=5, expires_gw=19) == 5.0
+    # bench_boost base threshold is 10.0; GW5 vs expiry GW19 is outside the ramp
+    assert effective_min_ev("bench_boost", target_gw=5, expires_gw=19) == 10.0
 
 
 def test_effective_min_ev_decays_inside_ramp():
     # ramp is 5 GWs: at 2 GWs left the threshold is base * 2/5
     v = effective_min_ev("bench_boost", target_gw=17, expires_gw=19)
-    assert abs(v - 5.0 * 2 / 5) < 1e-9
+    assert abs(v - 10.0 * 2 / 5) < 1e-9
 
 
 def test_effective_min_ev_zero_at_expiry_gw():

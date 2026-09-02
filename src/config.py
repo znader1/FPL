@@ -179,8 +179,14 @@ CHIP_PLAN_PHASE_SPLIT_GW = 19   # last GW of the first-half chip set
 CHIP_PLAN_SEASON_END_GW = 38
 CHIP_PLAN_HORIZON_GWS = 8       # model zone: full EV math over this many GWs
 CHIP_PLAN_MIN_EV = {            # below this, "hold" beats playing the chip
-    "triple_captain": 3.0,
-    "bench_boost": 5.0,
+    # Live spot-check (2026-09-02, entry 107342, GW3-10, no DGWs announced):
+    # captain xPts clustered 9.9-13.5 and bench xPts clustered 5.2-6.4 every
+    # single week with no DGW in sight — the old 3.0/5.0 floors cleared on
+    # nearly every candidate GW, which isn't "hold absent a DGW." Raised both
+    # well above the observed no-DGW ceiling so a flat threshold does the
+    # DGW-detection job the scoring functions don't do themselves.
+    "triple_captain": 15.0,
+    "bench_boost": 10.0,
     "free_hit": 8.0,
     "wildcard": 6.0,
 }
