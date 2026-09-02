@@ -24,6 +24,21 @@ FPL_CHIP_NAME_MAP = {
 }
 
 
+def effective_min_ev(chip, target_gw, expires_gw):
+    """Play/hold threshold for `chip` at `target_gw`, with use-it-or-lose-it decay.
+
+    Outside the ramp the base threshold applies; inside the last
+    CHIP_PLAN_EXPIRY_RAMP_GWS gameweeks before expiry it decays linearly to 0,
+    so a modest-EV chip gets recommended rather than expiring unused.
+    """
+    base = float(getattr(config, "CHIP_PLAN_MIN_EV", {}).get(chip, 0.0))
+    ramp = int(getattr(config, "CHIP_PLAN_EXPIRY_RAMP_GWS", 5))
+    gws_left = max(0, int(expires_gw) - int(target_gw))
+    if ramp <= 0 or gws_left >= ramp:
+        return base
+    return base * gws_left / ramp
+
+
 def chip_windows(chips_played, current_gw, phase_split_gw=None, season_end_gw=None):
     """Availability + expiry per chip, honoring the two-per-season phase rule.
 

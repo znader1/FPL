@@ -177,6 +177,15 @@ STRATEGY_MAX_BENCH_MOVES = 6
 # -----------------------------
 CHIP_PLAN_PHASE_SPLIT_GW = 19   # last GW of the first-half chip set
 CHIP_PLAN_SEASON_END_GW = 38
+CHIP_PLAN_HORIZON_GWS = 8       # model zone: full EV math over this many GWs
+CHIP_PLAN_MIN_EV = {            # below this, "hold" beats playing the chip
+    "triple_captain": 3.0,
+    "bench_boost": 5.0,
+    "free_hit": 8.0,
+    "wildcard": 6.0,
+}
+CHIP_PLAN_EXPIRY_RAMP_GWS = 5   # threshold decays linearly to 0 over the last N GWs
+CHIP_PLAN_NUDGE_MIN_EV = 4.0    # floor for the next-GW nudge surface
 
 # -----------------------------
 # Chip strategy tuning

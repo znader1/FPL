@@ -63,3 +63,26 @@ def test_team_fixture_counts_blank_gw_team_absent():
 
 def test_team_fixture_counts_empty_fixtures():
     assert team_fixture_counts(pd.DataFrame(columns=["event", "team_h", "team_a"]), 5) == {}
+
+
+from src.chip_advisor import effective_min_ev
+
+
+def test_effective_min_ev_full_far_from_expiry():
+    # bench_boost base threshold is 5.0; GW5 vs expiry GW19 is outside the ramp
+    assert effective_min_ev("bench_boost", target_gw=5, expires_gw=19) == 5.0
+
+
+def test_effective_min_ev_decays_inside_ramp():
+    # ramp is 5 GWs: at 2 GWs left the threshold is base * 2/5
+    v = effective_min_ev("bench_boost", target_gw=17, expires_gw=19)
+    assert abs(v - 5.0 * 2 / 5) < 1e-9
+
+
+def test_effective_min_ev_zero_at_expiry_gw():
+    assert effective_min_ev("triple_captain", target_gw=19, expires_gw=19) == 0.0
+
+
+def test_effective_min_ev_monotonic_toward_expiry():
+    vals = [effective_min_ev("wildcard", target_gw=g, expires_gw=19) for g in range(13, 20)]
+    assert all(a >= b for a, b in zip(vals, vals[1:]))
