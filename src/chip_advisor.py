@@ -11,6 +11,47 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 import pandas as pd
 import numpy as np
+from src import config
+
+ALL_CHIPS = ["wildcard", "free_hit", "bench_boost", "triple_captain"]
+
+# FPL API chip identifiers → canonical names used throughout this repo.
+FPL_CHIP_NAME_MAP = {
+    "wildcard": "wildcard",
+    "freehit": "free_hit",
+    "bboost": "bench_boost",
+    "3xc": "triple_captain",
+}
+
+
+def chip_windows(chips_played, current_gw, phase_split_gw=None, season_end_gw=None):
+    """Availability + expiry per chip, honoring the two-per-season phase rule.
+
+    chips_played: raw `history["chips"]` list from the FPL entry history API.
+    A chip logged in current_gw itself still counts as available — we advise
+    FOR current_gw, so only strictly-earlier plays consume the chip.
+    """
+    split = int(phase_split_gw or getattr(config, "CHIP_PLAN_PHASE_SPLIT_GW", 19))
+    end = int(season_end_gw or getattr(config, "CHIP_PLAN_SEASON_END_GW", 38))
+    current_gw = int(current_gw)
+    in_phase_1 = current_gw <= split
+    lo, hi = (1, split) if in_phase_1 else (split + 1, end)
+
+    used = set()
+    for c in chips_played or []:
+        gw = int(c.get("event", 0) or 0)
+        name = FPL_CHIP_NAME_MAP.get(str(c.get("name", "")).lower())
+        if name and lo <= gw <= hi and gw < current_gw:
+            used.add(name)
+
+    return {
+        chip: {
+            "available": chip not in used,
+            "half": 1 if in_phase_1 else 2,
+            "expires_gw": hi,
+        }
+        for chip in ALL_CHIPS
+    }
 
 
 # Default formation bounds (matches backtest_season.py)

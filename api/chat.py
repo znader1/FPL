@@ -48,40 +48,16 @@ def _derive_chips_remaining(entry_id: int, current_gw: int) -> list[str]:
     2025/26: 2 of each chip — Phase 1 (GW1-19), Phase 2 (GW20-38).
     """
     from src import fpl_client
-
-    all_chips = {"wildcard", "free_hit", "bench_boost", "triple_captain"}
-    # FPL chip names → our canonical names
-    chip_name_map = {
-        "wildcard": "wildcard",
-        "freehit": "free_hit",
-        "bboost": "bench_boost",
-        "3xc": "triple_captain",
-    }
+    from src.chip_advisor import chip_windows, ALL_CHIPS
 
     try:
         history = fpl_client.get_entry_history(entry_id)
     except Exception:
         # On failure, assume all chips remaining (safe default)
-        return sorted(all_chips)
+        return sorted(ALL_CHIPS)
 
-    chips_played = history.get("chips") or []
-    # Figure out current phase
-    in_phase_1 = current_gw <= 19
-    phase_gw_range = (1, 19) if in_phase_1 else (20, 38)
-
-    # Count chips used in the current phase AND played strictly before current_gw
-    # (we're advising for current_gw, so chips already played in past GWs are gone)
-    used_in_phase = set()
-    for c in chips_played:
-        played_gw = int(c.get("event", 0))
-        canonical = chip_name_map.get(c.get("name", "").lower())
-        if not canonical:
-            continue
-        if phase_gw_range[0] <= played_gw <= phase_gw_range[1] and played_gw < current_gw:
-            used_in_phase.add(canonical)
-
-    remaining = all_chips - used_in_phase
-    return sorted(remaining)
+    windows = chip_windows(history.get("chips"), current_gw)
+    return sorted(c for c, w in windows.items() if w["available"])
 
 
 def _build_context_for_entry(entry_id: int, current_gw: int):

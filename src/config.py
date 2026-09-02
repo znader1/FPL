@@ -173,6 +173,12 @@ STRATEGY_CHIP_TRIPLE_CAPTAIN_MIN_XPTS = 10.0
 STRATEGY_MAX_BENCH_MOVES = 6
 
 # -----------------------------
+# Chip plan tuning (src/chip_advisor.py — chip timing planner)
+# -----------------------------
+CHIP_PLAN_PHASE_SPLIT_GW = 19   # last GW of the first-half chip set
+CHIP_PLAN_SEASON_END_GW = 38
+
+# -----------------------------
 # Chip strategy tuning
 # -----------------------------
 CHIP_WILDCARD_DEFAULT_HORIZON_GWS = 5
