@@ -80,6 +80,13 @@ try:
 except Exception as e:
     logger.warning(f"Chat router not loaded: {e}")
 
+# Mount /chips/plan endpoint (chip timing recommendations) — login required.
+try:
+    from api.chips import router as chips_router
+    app.include_router(chips_router, dependencies=[Depends(require_user)])
+except Exception as e:
+    logger.warning(f"Chips router not loaded: {e}")
+
 
 def _csv_env(name):
     raw = (os.environ.get(name) or "").strip()

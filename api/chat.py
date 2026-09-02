@@ -60,7 +60,7 @@ def _derive_chips_remaining(entry_id: int, current_gw: int) -> list[str]:
     return sorted(c for c, w in windows.items() if w["available"])
 
 
-def _build_context_for_entry(entry_id: int, current_gw: int):
+def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
     """
     Build the data context needed by the orchestrator:
     squad, market, starting_xi, gw_projections, bank, FT, captain_id.
@@ -118,8 +118,8 @@ def _build_context_for_entry(entry_id: int, current_gw: int):
         "price_m": (squad_rows["now_cost"] / 10.0).values,
     })
 
-    # Project next 5 GWs
-    horizon = 5
+    # Project next N GWs
+    horizon = int(horizon)
     proj = projections.project_elements_next_gws(
         elements=elements, fixtures=fixtures, teams_short_map=teams_short_map,
         gw_start=current_gw, horizon_gws=horizon,
@@ -170,6 +170,9 @@ def _build_context_for_entry(entry_id: int, current_gw: int):
         "bank_m": bank_m,
         "free_transfers": derived_ft,
         "captain_id": captain_id,
+        "proj": proj,
+        "fixtures": fixtures,
+        "teams_short_map": teams_short_map,
     }
 
 
