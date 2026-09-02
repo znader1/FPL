@@ -247,3 +247,31 @@ def test_chip_agent_tool_returns_full_plan(monkeypatch):
         squad, {5: _squad_15()}, ["wildcard"],
     )
     assert result == sentinel
+
+
+def test_orchestrator_threads_chips_played_to_chip_agent(monkeypatch):
+    """The orchestrator must not silently treat every chip as available: it
+    has to forward the context's chips_played through to run_chip_agent so
+    build_chip_plan can derive real availability/expiry."""
+    from agents import orchestrator
+
+    captured = {}
+
+    def fake_run_chip_agent(**kwargs):
+        captured.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(orchestrator, "run_chip_agent", fake_run_chip_agent)
+
+    squad = _squad_15()[["player_id", "name", "pos", "team", "price_m"]]
+    already_played = [{"name": "3xc", "event": 2}]
+    context = {
+        "squad": squad,
+        "gw_projections": {5: _squad_15()},
+        "chips_remaining": ["wildcard"],
+        "chips_played": already_played,
+    }
+    result = orchestrator._handle_tool_call("ask_chip_agent", {"current_gw": 5}, context)
+
+    assert result == "ok"
+    assert captured["chips_played"] == already_played

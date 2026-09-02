@@ -42,21 +42,30 @@ class ChatResponse(BaseModel):
     latency_ms: int
 
 
-def _derive_chips_remaining(entry_id: int, current_gw: int) -> list[str]:
-    """
-    Returns the list of chip types still available, taking Phase 1/2 into account.
-    2025/26: 2 of each chip — Phase 1 (GW1-19), Phase 2 (GW20-38).
-    """
+def _get_entry_chips(entry_id: int) -> list[dict]:
+    """Fetch the raw chip-play records once. Feeds both chips_remaining
+    (via _derive_chips_remaining below) and the chip agent's tool call
+    (chips_played), so callers only hit the entry-history endpoint once."""
     from src import fpl_client
-    from src.chip_advisor import chip_windows, ALL_CHIPS
 
     try:
         history = fpl_client.get_entry_history(entry_id)
-    except Exception:
-        # On failure, assume all chips remaining (safe default)
-        return sorted(ALL_CHIPS)
+        return history.get("chips") or []
+    except Exception as e:  # noqa: BLE001 - degrade to "all chips available"
+        logger.warning(f"entry history fetch failed for {entry_id}: {e}")
+        return []
 
-    windows = chip_windows(history.get("chips"), current_gw)
+
+def _derive_chips_remaining(chips_played: list[dict], current_gw: int) -> list[str]:
+    """
+    Returns the list of chip types still available, taking Phase 1/2 into account.
+    2025/26: 2 of each chip — Phase 1 (GW1-19), Phase 2 (GW20-38).
+    chips_played=[] (e.g. on an upstream fetch failure) yields every chip
+    available — the same safe default as before.
+    """
+    from src.chip_advisor import chip_windows
+
+    windows = chip_windows(chips_played, current_gw)
     return sorted(c for c, w in windows.items() if w["available"])
 
 
@@ -193,11 +202,11 @@ def _resolve_current_gw(req_gw: Optional[int]) -> int:
     return int(summary.get("event_id") or 1)
 
 
-def _resolve_chips(req: SpecialistRequest, current_gw: int) -> list[str]:
+def _resolve_chips(req: SpecialistRequest, current_gw: int, chips_played: list[dict]) -> list[str]:
     if req.chips_remaining is not None:
         return req.chips_remaining
     try:
-        return _derive_chips_remaining(req.entry_id, current_gw)
+        return _derive_chips_remaining(chips_played, current_gw)
     except Exception as e:
         logger.warning(f"chip derivation failed: {e}")
         return ["wildcard", "free_hit", "bench_boost", "triple_captain"]
@@ -283,7 +292,8 @@ def chat_chip(req: SpecialistRequest = Body(...)):
     t0 = time.perf_counter()
     current_gw = _resolve_current_gw(req.current_gw)
     ctx = _build_context_for_entry(req.entry_id, current_gw)
-    chips_remaining = _resolve_chips(req, current_gw)
+    chips_played = _get_entry_chips(req.entry_id)
+    chips_remaining = _resolve_chips(req, current_gw, chips_played)
 
     if not chips_remaining:
         return ChatResponse(
@@ -291,12 +301,6 @@ def chat_chip(req: SpecialistRequest = Body(...)):
             current_gw=current_gw,
             latency_ms=int((time.perf_counter() - t0) * 1000),
         )
-
-    from src import fpl_client
-    try:
-        chips_played = fpl_client.get_entry_history(req.entry_id).get("chips") or []
-    except Exception:
-        chips_played = []
 
     try:
         answer = run_chip_agent(
@@ -339,11 +343,14 @@ def chat(req: ChatRequest = Body(...)):
         logger.exception("Failed to build chat context")
         raise HTTPException(status_code=500, detail=f"Context build failed: {e}")
 
-    # Derive chips_remaining from live FPL state if not supplied
+    # Single entry-history fetch feeds both chips_remaining (if not supplied)
+    # and chips_played (threaded to the chip agent's tool call).
+    chips_played = _get_entry_chips(req.entry_id)
+
     chips_remaining = req.chips_remaining
     if chips_remaining is None:
         try:
-            chips_remaining = _derive_chips_remaining(req.entry_id, current_gw)
+            chips_remaining = _derive_chips_remaining(chips_played, current_gw)
         except Exception as e:
             logger.warning(f"Failed to derive chips_remaining: {e}")
             chips_remaining = ["wildcard", "free_hit", "bench_boost", "triple_captain"]
@@ -360,6 +367,7 @@ def chat(req: ChatRequest = Body(...)):
             free_transfers=ctx["free_transfers"],
             captain_id=ctx["captain_id"],
             chips_remaining=chips_remaining,
+            chips_played=chips_played,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
