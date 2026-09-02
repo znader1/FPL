@@ -213,3 +213,22 @@ def test_build_chip_plan_nudge_only_for_current_gw_above_floor():
     )
     if plan["nudge"] is not None:
         assert plan["nudge"]["event_id"] == 5
+
+
+from src.utils import normalize_chip_strategy
+
+
+def test_normalize_chip_strategy_new_chips():
+    assert normalize_chip_strategy("bench_boost") == "bench_boost"
+    assert normalize_chip_strategy("bboost") == "bench_boost"
+    assert normalize_chip_strategy("bb") == "bench_boost"
+    assert normalize_chip_strategy("triple_captain") == "triple_captain"
+    assert normalize_chip_strategy("3xc") == "triple_captain"
+    assert normalize_chip_strategy("tc") == "triple_captain"
+
+
+def test_normalize_chip_strategy_existing_unchanged():
+    assert normalize_chip_strategy("wildcard") == "wildcard"
+    assert normalize_chip_strategy("fh") == "free_hit"
+    assert normalize_chip_strategy("") == "none"
+    assert normalize_chip_strategy("garbage") == "none"
