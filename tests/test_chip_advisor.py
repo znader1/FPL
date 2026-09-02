@@ -86,3 +86,54 @@ def test_effective_min_ev_zero_at_expiry_gw():
 def test_effective_min_ev_monotonic_toward_expiry():
     vals = [effective_min_ev("wildcard", target_gw=g, expires_gw=19) for g in range(13, 20)]
     assert all(a >= b for a, b in zip(vals, vals[1:]))
+
+
+from src.chip_advisor import score_free_hit, score_wildcard
+
+
+def _market(players):
+    """players: list of (player_id, name, pos, team, price_m, xpts, fixture_count)."""
+    return pd.DataFrame(
+        players,
+        columns=["player_id", "name", "pos", "team", "price_m", "xpts", "fixture_count"],
+    )
+
+
+def _squad_15(prefix="own", xpts=2.0):
+    rows, pid = [], 1
+    for pos, n in (("GKP", 2), ("DEF", 5), ("MID", 5), ("FWD", 3)):
+        for i in range(n):
+            rows.append((pid, f"{prefix}{pid}", pos, f"T{pid % 10}", 5.0, xpts, 1))
+            pid += 1
+    return _market(rows)
+
+
+def test_score_wildcard_net_of_transfer_plan_gain():
+    squad = _squad_15(xpts=2.0)
+    # Market of stars the squad doesn't own: big raw uplift
+    stars = _squad_15(prefix="star", xpts=6.0)
+    stars["player_id"] = stars["player_id"] + 100
+    market = pd.concat([squad[["player_id", "name", "pos", "team", "price_m", "xpts", "fixture_count"]], stars])
+    gw_projections = {5: market, 6: market, 7: market, 8: market}
+
+    raw = score_wildcard(squad[["player_id", "name", "pos", "team", "price_m"]],
+                         gw_projections, [5], horizon=4)
+    net = score_wildcard(squad[["player_id", "name", "pos", "team", "price_m"]],
+                         gw_projections, [5], horizon=4, transfer_plan_net_gain=10.0)
+    assert raw and net
+    assert abs(raw[0].expected_value - net[0].expected_value - 10.0) < 1e-6
+
+
+def test_score_free_hit_respects_budget():
+    squad = _squad_15(xpts=2.0)
+    # Unaffordable stars: price 15.0m each, budget only allows the cheap pool
+    stars = _squad_15(prefix="star", xpts=9.0)
+    stars["player_id"] = stars["player_id"] + 100
+    stars["price_m"] = 15.0
+    market = pd.concat([squad[["player_id", "name", "pos", "team", "price_m", "xpts", "fixture_count"]], stars])
+    gw_projections = {5: market}
+
+    recs = score_free_hit(squad[["player_id", "name", "pos", "team", "price_m"]],
+                          gw_projections, [5], budget_m=80.0)
+    # With an 80m budget nothing beats the (identical) cheap pool → no uplift
+    assert recs == [] or recs[0].expected_value < 1.0

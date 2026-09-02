@@ -276,11 +276,28 @@ def score_free_hit(
         normal_xi = _pick_best_xi(squad_with_xpts)
         normal_xi_xpts = float(normal_xi["xpts"].sum())
 
-        # Best possible FH XI (within budget = current squad value + bank)
-        # Simple proxy: top players by xPts respecting formation, ignoring real budget
-        # constraints since FH is a one-week reset
-        market_with_xi = _pick_best_xi(market)
-        fh_xi_xpts = float(market_with_xi["xpts"].sum())
+        # Best FH squad within budget (squad value + bank). Falls back to the
+        # unbudgeted proxy only if the optimizer can't build a legal squad.
+        from src import optimizer as _optimizer
+        fh_xi_xpts = None
+        try:
+            # build_chip_squad expects the raw elements_all schema (id, numeric
+            # team) — the gw_projections market uses player_id + team labels.
+            # Bridge the two: rename the id column and encode team labels as
+            # integers (team caps only need a stable grouping key, not the
+            # real FPL team id).
+            market_for_optimizer = market.rename(columns={"player_id": "id"}).copy()
+            if "team" in market_for_optimizer.columns:
+                market_for_optimizer["team"] = pd.factorize(market_for_optimizer["team"])[0]
+            built = _optimizer.build_chip_squad(market_for_optimizer, score_col="xpts", budget_m=budget_m)
+            if built.get("ok") and built.get("squad_df") is not None:
+                fh_xi = _pick_best_xi(built["squad_df"])
+                fh_xi_xpts = float(fh_xi["xpts"].sum())
+        except Exception:
+            fh_xi_xpts = None
+        if fh_xi_xpts is None:
+            market_with_xi = _pick_best_xi(market)
+            fh_xi_xpts = float(market_with_xi["xpts"].sum())
 
         uplift = max(0, fh_xi_xpts - normal_xi_xpts)
 
@@ -315,6 +332,7 @@ def score_wildcard(
     gw_projections: dict[int, pd.DataFrame],
     candidate_gws: list[int],
     horizon: int = 4,
+    transfer_plan_net_gain: float = 0.0,
 ) -> list[ChipRecommendation]:
     """
     WC value = cumulative xPts gain over next `horizon` GWs from replacing the
@@ -348,11 +366,20 @@ def score_wildcard(
 
         uplift = max(0, wc_total - normal_total)
 
+        # The no-chip baseline isn't a frozen squad — the horizon transfer plan
+        # already improves it. Wildcard EV is net of that improvement.
+        plan_gain = max(0.0, float(transfer_plan_net_gain))
+        uplift = max(0.0, uplift - plan_gain)
+
         reasoning = [
             f"Your squad projected over next {valid_count} GWs: {normal_total:.0f} xPts",
             f"Optimal WC squad over next {valid_count} GWs: {wc_total:.0f} xPts",
             f"WC uplift: +{uplift:.0f} xPts over horizon",
         ]
+        if plan_gain > 0:
+            reasoning.append(
+                f"Net of +{plan_gain:.0f} xPts the normal transfer plan already captures"
+            )
         if uplift > 30:
             reasoning.append("Large gap to optimal — squad needs reset")
 
@@ -380,6 +407,7 @@ def recommend_chips(
     chips_remaining: list[str],
     gws_ahead: int = 10,
     bank_m: float = 0.0,
+    transfer_plan_net_gain: float = 0.0,
 ) -> list[ChipRecommendation]:
     """
     Main entry point. Returns ranked list of (chip, gw, value, reasoning) for
@@ -400,7 +428,11 @@ def recommend_chips(
     if "free_hit" in chips_remaining:
         all_recs.extend(score_free_hit(squad, gw_projections, candidate_gws, bank_m))
     if "wildcard" in chips_remaining:
-        all_recs.extend(score_wildcard(squad, gw_projections, candidate_gws, horizon=4))
+        all_recs.extend(score_wildcard(
+            squad, gw_projections, candidate_gws,
+            horizon=int(getattr(config, "CHIP_WILDCARD_DEFAULT_HORIZON_GWS", 4)),
+            transfer_plan_net_gain=transfer_plan_net_gain,
+        ))
 
     # Sort by expected value (descending), filter out zero-value
     return sorted(
