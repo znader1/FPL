@@ -124,6 +124,25 @@ def test_score_wildcard_net_of_transfer_plan_gain():
     assert abs(raw[0].expected_value - net[0].expected_value - 10.0) < 1e-6
 
 
+def test_score_wildcard_respects_budget():
+    """Mirrors test_score_free_hit_respects_budget: the WC dream-squad build
+    must be budget-constrained via the same optimizer bridge FH already uses,
+    not the old unbudgeted top-15-in-market proxy (which could draft e.g. a
+    whole cluster of one cheap team regardless of price)."""
+    squad = _squad_15(xpts=2.0)
+    # Unaffordable stars: price 15.0m each, budget only allows the cheap pool
+    stars = _squad_15(prefix="star", xpts=9.0)
+    stars["player_id"] = stars["player_id"] + 100
+    stars["price_m"] = 15.0
+    market = pd.concat([squad[["player_id", "name", "pos", "team", "price_m", "xpts", "fixture_count"]], stars])
+    gw_projections = {5: market, 6: market, 7: market, 8: market}
+
+    recs = score_wildcard(squad[["player_id", "name", "pos", "team", "price_m"]],
+                          gw_projections, [5], horizon=4, budget_m=80.0)
+    # With an 80m budget nothing beats the (identical-cost) squad already owns → no uplift
+    assert recs == [] or recs[0].expected_value < 1.0
+
+
 def test_score_free_hit_respects_budget():
     squad = _squad_15(xpts=2.0)
     # Unaffordable stars: price 15.0m each, budget only allows the cheap pool
@@ -137,6 +156,36 @@ def test_score_free_hit_respects_budget():
                           gw_projections, [5], budget_m=80.0)
     # With an 80m budget nothing beats the (identical) cheap pool → no uplift
     assert recs == [] or recs[0].expected_value < 1.0
+
+
+def test_score_free_hit_blank_gate_suppresses_normal_week():
+    """FH is a blank-GW tool, not a weekly upgrade button: an ordinary week
+    (no squad players blanking) must not clear the bar even with a big raw
+    uplift available in the market."""
+    squad = _squad_15(xpts=2.0)  # fixture_count=1 for every row -> 0 blanks
+    stars = _squad_15(prefix="star", xpts=20.0)
+    stars["player_id"] = stars["player_id"] + 100
+    market = pd.concat([squad[["player_id", "name", "pos", "team", "price_m", "xpts", "fixture_count"]], stars])
+    gw_projections = {5: market}
+
+    recs = score_free_hit(squad[["player_id", "name", "pos", "team", "price_m"]],
+                          gw_projections, [5], budget_m=200.0)
+    assert recs == []
+
+
+def test_score_free_hit_blank_gate_allows_blank_gw():
+    """Once >= CHIP_PLAN_FH_MIN_BLANKING squad players blank, the same big
+    uplift is allowed through."""
+    squad = _squad_15(xpts=2.0)
+    squad.loc[squad.index[:3], "fixture_count"] = 0  # 3 squad players blanking
+    stars = _squad_15(prefix="star", xpts=20.0)
+    stars["player_id"] = stars["player_id"] + 100
+    market = pd.concat([squad[["player_id", "name", "pos", "team", "price_m", "xpts", "fixture_count"]], stars])
+    gw_projections = {5: market}
+
+    recs = score_free_hit(squad[["player_id", "name", "pos", "team", "price_m"]],
+                          gw_projections, [5], budget_m=200.0)
+    assert recs and recs[0].expected_value > 0
 
 
 from src.chip_advisor import build_chip_plan

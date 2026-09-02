@@ -80,6 +80,8 @@ def _handle_tool_call(name: str, args: dict, context: dict) -> str:
             gw_projections=context["gw_projections"],
             chips_remaining=context["chips_remaining"],
             chips_played=context.get("chips_played"),
+            bank_m=context.get("bank_m", 0.0),
+            fixtures=context.get("fixtures"),
         )
     if name == "ask_transfer_agent":
         return run_transfer_agent(
@@ -113,6 +115,7 @@ def run_orchestrator(
     captain_id: int | None = None,
     chips_remaining: list[str] | None = None,
     chips_played: list | None = None,
+    fixtures: pd.DataFrame | None = None,
     verbose: bool = False,
 ) -> str:
     """
@@ -122,6 +125,9 @@ def run_orchestrator(
         "chips" key) — threaded to ask_chip_agent so the chip specialist's
         build_chip_plan tool call derives real availability/expiry instead
         of assuming every chip is still available.
+    fixtures: fixtures DataFrame — threaded to ask_chip_agent so the
+        structural DGW/BGW zone beyond the model horizon is available there
+        too (bank_m is already threaded via the existing `bank_m` param).
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -140,6 +146,7 @@ def run_orchestrator(
         "captain_id": captain_id,
         "chips_remaining": chips_remaining or ["wildcard", "free_hit", "bench_boost", "triple_captain"],
         "chips_played": chips_played or [],
+        "fixtures": fixtures,
     }
 
     framed = (

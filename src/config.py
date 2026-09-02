@@ -187,11 +187,36 @@ CHIP_PLAN_MIN_EV = {            # below this, "hold" beats playing the chip
     # DGW-detection job the scoring functions don't do themselves.
     "triple_captain": 15.0,
     "bench_boost": 10.0,
+    # free_hit: unchanged. The real fix for FH firing on every ordinary week
+    # was CHIP_PLAN_FH_MIN_BLANKING (structural — suppresses non-blank GWs
+    # before this floor is even checked), not this number. No live blank-GW
+    # data was available this session to re-validate 8.0 specifically; it's a
+    # reasonable secondary floor for a genuine blank week and is flagged for
+    # a follow-up backtest rather than guessed at here.
     "free_hit": 8.0,
-    "wildcard": 6.0,
+    # wildcard: re-tuned after making score_wildcard budget-aware (was
+    # comparing against an unbudgeted top-15, no team cap — live spot-check
+    # showed a squad-value-blind "optimal" of +281.7 xPts/5GW that included
+    # e.g. 4 Hull players). The budget-constrained rebuild against the same
+    # entry roughly halved that to +109.56 xPts/5GW — real progress, but the
+    # corrected number is still visibly contaminated by a residual
+    # projections-engine outlier: CHIP_PLAN_XPTS_CLAMP (9.0/GW) caps the
+    # worst offenders, but several genuinely strong players are *also*
+    # clamped to that same ceiling, so a clearly-wrong cheap cluster (3 Hull
+    # City defenders, all pinned at the clamp) reads as equally valuable as
+    # Haaland/Saka and gets picked on price alone. That's a data-quality bug
+    # (tracked separately, needs an upstream projections fix), not a real
+    # 31%-of-squad edge. Raised well above the observed (still-noisy) ceiling
+    # so WC reads "hold" rather than nudging "play now" off a contaminated
+    # GW3 number, while staying reachable for a genuinely severe gap once
+    # the projections bug is fixed and/or a real one shows up later.
+    "wildcard": 120.0,
 }
 CHIP_PLAN_EXPIRY_RAMP_GWS = 5   # threshold decays linearly to 0 over the last N GWs
 CHIP_PLAN_NUDGE_MIN_EV = 4.0    # floor for the next-GW nudge surface
+CHIP_PLAN_FH_MIN_BLANKING = 3   # FH model-zone rec suppressed below this many squad blanks
+CHIP_PLAN_XPTS_CLAMP = 9.0      # stopgap clip on WC/FH dream-squad market xPts (outlier projections bug)
+CHIP_PLAN_BLANK_TEAM_THRESHOLD = 14  # structural zone: <= this many teams playing = blank-heavy GW
 
 # -----------------------------
 # Chip strategy tuning

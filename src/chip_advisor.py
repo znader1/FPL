@@ -7,11 +7,14 @@ Returns structured recommendations with reasoning facts attached.
 The LLM explainer (Layer 3) can later wrap this output into natural language.
 """
 from __future__ import annotations
+import logging
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 import pandas as pd
 import numpy as np
 from src import config
+
+logger = logging.getLogger(__name__)
 
 ALL_CHIPS = ["wildcard", "free_hit", "bench_boost", "triple_captain"]
 
@@ -133,6 +136,29 @@ def _pick_captain_xpts(starting_xi: pd.DataFrame) -> float:
     return float(s.sort_values("_score", ascending=False).iloc[0]["xpts"])
 
 
+def _clip_market_xpts(market: pd.DataFrame, col: str = "xpts") -> pd.DataFrame:
+    """Clamp an absurd single-GW xPts outlier before it feeds a dream-squad
+    (WC/FH) optimizer build or comparison total.
+
+    Upstream projections have an outlier bug (tracked separately) where a
+    handful of cheap players spike into double digits for one GW — a live
+    spot-check surfaced a cluster of Hull players like this, including a
+    4.5m GKP projecting ~13.5. Left unclamped, a single such row can dominate
+    an optimizer's shape/budget search and inflate the whole comparison.
+
+    This is a stopgap on the MARKET side of a chip comparison only — the
+    user's own squad valuation (`normal_total` / `normal_xi_xpts`) is never
+    clamped, since that's a real read of what the user's squad is worth, not
+    a dream-squad search over noisy candidates.
+    """
+    if market is None or col not in market.columns:
+        return market
+    clamp = float(getattr(config, "CHIP_PLAN_XPTS_CLAMP", 9.0))
+    out = market.copy()
+    out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0).clip(upper=clamp)
+    return out
+
+
 def team_fixture_counts(fixtures, gw):
     """Team id → fixture count in `gw`. Missing id means a blank GW for that team."""
     if fixtures is None or fixtures.empty or "event" not in fixtures.columns:
@@ -231,7 +257,7 @@ def score_bench_boost(
 
         reasoning = [
             f"Bench projected total: {bench_value:.1f} xPts",
-            f"{n_doubling}/15 squad players have a fixture this GW",
+            f"{n_doubling}/15 squad players have a double fixture this GW",
         ]
         if n_doubling >= 13:
             reasoning.append(f"{n_doubling} squad players doubling — strong BB candidate")
@@ -261,6 +287,11 @@ def score_free_hit(
     """
     FH value = (best possible XI for that GW within budget) - (your normal XI for that GW)
     Bigger when many of your players are blanking (BGW) or you can upgrade significantly.
+
+    Gated behind CHIP_PLAN_FH_MIN_BLANKING: FH is a blank-GW tool in real play,
+    not a weekly "upgrade my squad" button — an ordinary week (few/no blanks)
+    is suppressed here even when the raw uplift looks large, since a single-week
+    optimal XI will beat almost any real squad built for multi-week value.
     """
     recs = []
     for gw in candidate_gws:
@@ -268,7 +299,8 @@ def score_free_hit(
         if market is None or market.empty:
             continue
 
-        # Your normal XI value this GW
+        # Your normal XI value this GW — never clamped, this is a real read of
+        # the user's own squad, not a dream-squad search.
         squad_with_xpts = squad.merge(
             market[["player_id", "xpts", "fixture_count"]], on="player_id", how="left"
         )
@@ -276,27 +308,40 @@ def score_free_hit(
         normal_xi = _pick_best_xi(squad_with_xpts)
         normal_xi_xpts = float(normal_xi["xpts"].sum())
 
+        # Dream-squad side: clamp an absurd single-GW projection outlier before
+        # it can feed the optimizer build or the final comparison total.
+        clamped_market = _clip_market_xpts(market, "xpts")
+
         # Best FH squad within budget (squad value + bank). Falls back to the
         # unbudgeted proxy only if the optimizer can't build a legal squad.
         from src import optimizer as _optimizer
         fh_xi_xpts = None
+        fallback_reason = None
         try:
             # build_chip_squad expects the raw elements_all schema (id, numeric
             # team) — the gw_projections market uses player_id + team labels.
             # Bridge the two: rename the id column and encode team labels as
             # integers (team caps only need a stable grouping key, not the
             # real FPL team id).
-            market_for_optimizer = market.rename(columns={"player_id": "id"}).copy()
+            market_for_optimizer = clamped_market.rename(columns={"player_id": "id"}).copy()
             if "team" in market_for_optimizer.columns:
                 market_for_optimizer["team"] = pd.factorize(market_for_optimizer["team"])[0]
             built = _optimizer.build_chip_squad(market_for_optimizer, score_col="xpts", budget_m=budget_m)
             if built.get("ok") and built.get("squad_df") is not None:
                 fh_xi = _pick_best_xi(built["squad_df"])
                 fh_xi_xpts = float(fh_xi["xpts"].sum())
-        except Exception:
-            fh_xi_xpts = None
-        if fh_xi_xpts is None:
-            market_with_xi = _pick_best_xi(market)
+            else:
+                fallback_reason = built.get("reason", "optimizer returned not-ok")
+        except Exception as e:  # noqa: BLE001 - degrade to unbudgeted proxy
+            fallback_reason = str(e)
+
+        fallback_used = fh_xi_xpts is None
+        if fallback_used:
+            logger.warning(
+                "score_free_hit: budget-aware build failed for GW%s (%s) — "
+                "falling back to unbudgeted top-11 proxy", gw, fallback_reason,
+            )
+            market_with_xi = _pick_best_xi(clamped_market)
             fh_xi_xpts = float(market_with_xi["xpts"].sum())
 
         uplift = max(0, fh_xi_xpts - normal_xi_xpts)
@@ -304,13 +349,17 @@ def score_free_hit(
         # Detect BGW: many squad players with no fixture
         n_blanking = int((squad_with_xpts["fixture_count"] == 0).sum())
 
+        min_blanking = int(getattr(config, "CHIP_PLAN_FH_MIN_BLANKING", 3))
+        if n_blanking < min_blanking:
+            continue  # ordinary week — hold FH for a genuine blank-heavy GW
+
         reasoning = [
             f"Your normal XI projected: {normal_xi_xpts:.1f} xPts",
-            f"Best FH XI projected: {fh_xi_xpts:.1f} xPts",
+            f"Best FH XI projected: {fh_xi_xpts:.1f} xPts"
+            + (" [unbudgeted proxy — optimizer fallback]" if fallback_used else " (budget-constrained)"),
             f"FH uplift: +{uplift:.1f} xPts",
+            f"{n_blanking} squad players blanking — strong FH candidate",
         ]
-        if n_blanking >= 3:
-            reasoning.append(f"{n_blanking} squad players blanking — strong FH candidate")
 
         risks = []
         if uplift < 5:
@@ -333,23 +382,38 @@ def score_wildcard(
     candidate_gws: list[int],
     horizon: int = 4,
     transfer_plan_net_gain: float = 0.0,
+    budget_m: float | None = None,
 ) -> list[ChipRecommendation]:
     """
     WC value = cumulative xPts gain over next `horizon` GWs from replacing the
-    current squad with the optimal market squad (no transfer cost).
+    current squad with the optimal squad, respecting budget + team caps.
+
+    Builds one draft squad per candidate GW: an `xpts_horizon` score (each
+    future GW's xPts, clamp-protected, summed per player_id) feeds
+    `optimizer.build_chip_squad` via the same schema bridge `score_free_hit`
+    uses (rename player_id->id, factorize team labels into a stable team-cap
+    grouping key). The built 15 is then re-scored week-by-week — best XI
+    against each future GW's own market — exactly like the "your squad" side,
+    so the two totals are apples-to-apples.
+
+    Falls back to the old unbudgeted top-15-in-market proxy (with a warning
+    and a distinguishable reason string in `reasoning`) only if the optimizer
+    can't build a legal squad.
     """
+    from src import optimizer as _optimizer
     recs = []
     for gw in candidate_gws:
-        normal_total = 0.0
-        wc_total = 0.0
-        future_gws = list(range(gw, gw + horizon))
-        valid_count = 0
+        future_gws = [
+            g for g in range(gw, gw + horizon)
+            if gw_projections.get(g) is not None and not gw_projections[g].empty
+        ]
+        if not future_gws:
+            continue
 
+        # Your squad's own total across the horizon — never clamped.
+        normal_total = 0.0
         for fgw in future_gws:
-            market = gw_projections.get(fgw)
-            if market is None or market.empty:
-                continue
-            valid_count += 1
+            market = gw_projections[fgw]
             squad_with_xpts = squad.merge(
                 market[["player_id", "xpts"]], on="player_id", how="left"
             )
@@ -357,13 +421,62 @@ def score_wildcard(
             normal_xi = _pick_best_xi(squad_with_xpts)
             normal_total += float(normal_xi["xpts"].sum())
 
-            # WC squad: top 15 in market (very rough — ignores budget for now)
-            wc_xi = _pick_best_xi(market)
-            wc_total += float(wc_xi["xpts"].sum())
+        # Build xpts_horizon: each candidate player's clamp-protected xPts
+        # summed across the horizon window, keyed on player_id.
+        base_cols = [c for c in ["player_id", "name", "pos", "team", "price_m"]
+                     if c in gw_projections[future_gws[0]].columns]
+        base_market = gw_projections[future_gws[0]][base_cols].copy().reset_index(drop=True)
+        horizon_total = pd.Series(0.0, index=base_market.index)
+        for fgw in future_gws:
+            clipped = _clip_market_xpts(gw_projections[fgw], "xpts")
+            merged = base_market[["player_id"]].merge(
+                clipped[["player_id", "xpts"]], on="player_id", how="left"
+            )["xpts"].fillna(0.0).reset_index(drop=True)
+            horizon_total = horizon_total + merged
+        base_market["xpts_horizon"] = horizon_total
 
-        if valid_count == 0:
-            continue
+        wc_total = None
+        fallback_reason = None
+        try:
+            # Same schema bridge as score_free_hit: rename id, factorize team
+            # labels for a stable team-cap grouping key (not the real FPL id).
+            market_for_optimizer = base_market.rename(columns={"player_id": "id"}).copy()
+            if "team" in market_for_optimizer.columns:
+                market_for_optimizer["team"] = pd.factorize(market_for_optimizer["team"])[0]
+            built = _optimizer.build_chip_squad(
+                market_for_optimizer, score_col="xpts_horizon", budget_m=budget_m
+            )
+            if built.get("ok") and built.get("squad_df") is not None:
+                wc_squad_ids = set(
+                    pd.to_numeric(built["squad_df"]["player_id"], errors="coerce")
+                    .dropna().astype(int).tolist()
+                )
+                wc_total = 0.0
+                for fgw in future_gws:
+                    clipped = _clip_market_xpts(gw_projections[fgw], "xpts")
+                    week_squad = clipped[clipped["player_id"].isin(wc_squad_ids)]
+                    if week_squad.empty:
+                        continue
+                    wc_xi = _pick_best_xi(week_squad)
+                    wc_total += float(wc_xi["xpts"].sum())
+            else:
+                fallback_reason = built.get("reason", "optimizer returned not-ok")
+        except Exception as e:  # noqa: BLE001 - degrade to unbudgeted proxy
+            fallback_reason = str(e)
 
+        fallback_used = wc_total is None
+        if fallback_used:
+            logger.warning(
+                "score_wildcard: budget-aware build failed for GW%s (%s) — "
+                "falling back to unbudgeted top-15 proxy", gw, fallback_reason,
+            )
+            wc_total = 0.0
+            for fgw in future_gws:
+                clipped = _clip_market_xpts(gw_projections[fgw], "xpts")
+                wc_xi = _pick_best_xi(clipped)
+                wc_total += float(wc_xi["xpts"].sum())
+
+        valid_count = len(future_gws)
         uplift = max(0, wc_total - normal_total)
 
         # The no-chip baseline isn't a frozen squad — the horizon transfer plan
@@ -373,7 +486,8 @@ def score_wildcard(
 
         reasoning = [
             f"Your squad projected over next {valid_count} GWs: {normal_total:.0f} xPts",
-            f"Optimal WC squad over next {valid_count} GWs: {wc_total:.0f} xPts",
+            f"Optimal WC squad over next {valid_count} GWs: {wc_total:.0f} xPts"
+            + (" [unbudgeted proxy — optimizer fallback]" if fallback_used else " (budget-constrained)"),
             f"WC uplift: +{uplift:.0f} xPts over horizon",
         ]
         if plan_gain > 0:
@@ -432,6 +546,7 @@ def recommend_chips(
             squad, gw_projections, candidate_gws,
             horizon=int(getattr(config, "CHIP_WILDCARD_DEFAULT_HORIZON_GWS", 4)),
             transfer_plan_net_gain=transfer_plan_net_gain,
+            budget_m=bank_m,
         ))
 
     # Sort by expected value (descending), filter out zero-value
@@ -515,7 +630,8 @@ def build_chip_plan(
                 continue
             n_teams = len(counts)
             has_dgw = any(v >= 2 for v in counts.values())
-            is_blank_heavy = n_teams <= 14  # several teams missing → blank GW
+            blank_team_threshold = int(getattr(config, "CHIP_PLAN_BLANK_TEAM_THRESHOLD", 14))
+            is_blank_heavy = n_teams <= blank_team_threshold  # several teams missing → blank GW
             for chip, wants, label in (
                 ("bench_boost", has_dgw, "double gameweek"),
                 ("triple_captain", has_dgw, "double gameweek"),

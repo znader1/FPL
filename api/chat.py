@@ -308,6 +308,8 @@ def chat_chip(req: SpecialistRequest = Body(...)):
             gw_projections=ctx["gw_projections"], chips_remaining=chips_remaining,
             extra_context=_load_rules_text(),
             chips_played=chips_played,
+            bank_m=ctx["bank_m"],
+            fixtures=ctx["fixtures"],
         )
     except Exception as e:
         logger.exception("chip agent failed")
@@ -368,6 +370,7 @@ def chat(req: ChatRequest = Body(...)):
             captain_id=ctx["captain_id"],
             chips_remaining=chips_remaining,
             chips_played=chips_played,
+            fixtures=ctx["fixtures"],
         )
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))

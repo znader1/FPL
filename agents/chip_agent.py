@@ -63,14 +63,25 @@ def _handle_tool_call(
     gw_projections: dict,
     chips_remaining: list[str],
     chips_played: list | None = None,
+    bank_m: float = 0.0,
+    fixtures: pd.DataFrame | None = None,
 ) -> dict:
-    """Route tool calls to the deterministic advisor."""
+    """Route tool calls to the deterministic advisor.
+
+    bank_m / fixtures ground the tool call the same way the REST /chips/plan
+    route does (itb_m for wildcard/free-hit budget, fixtures for the
+    structural DGW/BGW zone) — without them the chat agent was silently
+    working off a bank_m=0 / no-fixtures plan that could disagree with what
+    the UI shows for the same entry.
+    """
     if name == "get_chip_recommendations":
         return build_chip_plan(
             squad=squad,
             current_gw=int(args["current_gw"]),
             gw_projections=gw_projections,
             chips_played=chips_played or [],
+            itb_m=float(bank_m or 0.0),
+            fixtures=fixtures,
             horizon_gws=int(args.get("gws_ahead", 5)) + 1,
         )
     raise ValueError(f"Unknown tool: {name}")
@@ -84,6 +95,8 @@ def run_chip_agent(
     verbose: bool = False,
     extra_context: str | None = None,
     chips_played: list | None = None,
+    bank_m: float = 0.0,
+    fixtures: pd.DataFrame | None = None,
 ) -> str:
     """
     Entry point. Returns a natural-language recommendation string.
@@ -95,6 +108,10 @@ def run_chip_agent(
     chips_played: raw chip-play records (as returned by the FPL entry-history
         endpoint's "chips" key) — threaded to the tool so it can derive
         per-chip availability/expiry windows via build_chip_plan.
+    bank_m: in-the-bank cash (itb_m) — threaded to the tool so WC/FH budget
+        matches the REST /chips/plan route instead of defaulting to 0.
+    fixtures: fixtures DataFrame — threaded to the tool so the structural
+        DGW/BGW zone beyond the model horizon is available to the agent too.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -135,6 +152,8 @@ def run_chip_agent(
                     tu.name, dict(tu.input),
                     squad, gw_projections, chips_remaining,
                     chips_played,
+                    bank_m=bank_m,
+                    fixtures=fixtures,
                 )
                 tool_results.append({
                     "type": "tool_result",
