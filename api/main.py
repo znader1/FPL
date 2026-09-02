@@ -1733,6 +1733,41 @@ def admin_model_snapshot(
     return build_model_snapshot()
 
 
+@app.get("/admin/chip-plan")
+def admin_chip_plan(
+    entry_id: int,
+    api_key=None,
+    x_api_key=Header(None),
+    authorization=Header(None),
+):
+    err = check_admin_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
+    if err:
+        return err
+    from api.chips import chips_plan, _resolve_current_gw
+    from src.season_history import season_label_from_bootstrap
+    from src import config as _config
+
+    bootstrap = fpl_client.get_bootstrap()
+    next_gw = _resolve_current_gw()
+    deadline = next(
+        (e.get("deadline_time") for e in bootstrap.get("events", []) if int(e["id"]) == next_gw),
+        None,
+    )
+    body = chips_plan(entry_id=entry_id, horizon=None)
+    return {
+        "season": season_label_from_bootstrap(bootstrap),
+        "next_gw": next_gw,
+        "deadline_utc": deadline,
+        "entry_id": entry_id,
+        "plan": {k: v for k, v in body.items() if k != "entry_id"},
+        "model_meta": {
+            "horizon": getattr(_config, "CHIP_PLAN_HORIZON_GWS", 8),
+            "min_ev": getattr(_config, "CHIP_PLAN_MIN_EV", {}),
+            "expiry_ramp_gws": getattr(_config, "CHIP_PLAN_EXPIRY_RAMP_GWS", 5),
+        },
+    }
+
+
 @app.get("/squad")
 def squad_get(
     entry_id=None, event_id=None,
