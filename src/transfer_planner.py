@@ -134,7 +134,8 @@ def _note(moves, ft_before, info):
 
 
 def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
-                   hit_penalty=4.0, allow_hits=True, min_gain=2.0, max_moves_per_gw=3):
+                   hit_penalty=4.0, allow_hits=True, min_gain=2.0, max_moves_per_gw=3,
+                   _skip_first_gw=False):
     info = _build_info(proj, gws)
     squad = set(int(x) for x in squad_ids if int(x) in info)
     bank = float(itb_m)
@@ -157,6 +158,24 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
         if gi > 0:
             ft = min(ft_cap, ft + 1)  # accrue a free transfer each new GW
         ft_before = ft
+        if gi == 0 and _skip_first_gw:
+            # Roll-alternative counterfactual: bank the FT this week, everything
+            # else plays out greedily from next week with one extra transfer.
+            plan.append({
+                "gw": g,
+                "action": "roll",
+                "free_transfers_before": ft_before,
+                "free_transfers_after": ft_before,
+                "hits": 0,
+                "hit_cost": 0.0,
+                "gw_gain": 0.0,
+                "net_gain": 0.0,
+                "bank_after": round(bank, 2),
+                "moves": [],
+                "note": "Roll (counterfactual) — banked the free transfer.",
+            })
+            continue
+
         remaining = gws[gi:]
         hz = {pid: _horizon(info, pid, remaining) for pid in info}
         xi = (_xi_floors(squad, info, hz)
@@ -242,7 +261,7 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
 
     verdict, reasoning = _verdict_and_reasoning(plan, min_gain, ft_cap)
 
-    return {
+    result = {
         "gws": list(gws),
         "horizon_gws": len(gws),
         "start_free_transfers": int(start_ft),
@@ -261,6 +280,35 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
             else plan[0]["free_transfers_after"] if plan else int(start_ft)
         ),
     }
+
+    # The user's decision framework, made explicit: a first-GW spend must beat
+    # the counterfactual of rolling and having an extra transfer next week.
+    # Injury-forced spends are urgency and skip the comparison.
+    if (not _skip_first_gw and len(gws) > 1 and plan
+            and plan[0]["action"] == "transfer" and verdict != "spend_forced_injury"):
+        alt = plan_transfers(
+            proj, squad_ids, gws, itb_m=itb_m, start_ft=start_ft, ft_cap=ft_cap,
+            hit_penalty=hit_penalty, allow_hits=allow_hits, min_gain=min_gain,
+            max_moves_per_gw=max_moves_per_gw, _skip_first_gw=True,
+        )
+        alt_net = round(float(alt["total_net_gain"]), 2)
+        result["roll_alternative_net_gain"] = float(alt_net)
+        if alt_net > float(result["total_net_gain"]) + 1e-9:
+            alt["roll_alternative_net_gain"] = float(alt_net)
+            alt["verdict"] = "roll"
+            alt["reasoning"] = (
+                f"Roll — banking for {min(int(ft_cap), int(start_ft) + 1)} transfers next "
+                f"week projects net +{alt_net} over the horizon vs "
+                f"+{result['total_net_gain']} moving now."
+            )
+            return alt
+        base_reasoning = result["reasoning"].rstrip(".")
+        result["reasoning"] = (
+            f"{base_reasoning} — beats rolling for a double next week "
+            f"(net +{result['total_net_gain']} vs +{alt_net})."
+        )
+
+    return result
 
 
 def _verdict_and_reasoning(plan, min_gain, ft_cap):

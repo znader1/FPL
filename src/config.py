@@ -184,6 +184,13 @@ TRANSFER_PLAN_POS_GAIN_MULT = {"GKP": 2.0, "DEF": 1.75, "MID": 1.0, "FWD": 1.0}
 # worth nothing, so the planner stops burning transfers (or hits) on subs.
 TRANSFER_PLAN_XI_AWARE = True
 
+# One clear recommendation (user product rule, 2026-09-04): the headline plan
+# names at most one move per GW and never funds moves with hits. The verdict
+# explicitly compares moving now vs rolling for an extra transfer next week;
+# injury urgency is the only bypass.
+TRANSFER_PLAN_ALLOW_HITS = False
+TRANSFER_PLAN_MAX_MOVES_PER_GW = 1
+
 # -----------------------------
 # Strategy recommendation tuning
 # -----------------------------
