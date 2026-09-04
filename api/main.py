@@ -1396,12 +1396,28 @@ def build_recommendations(payload):
                 if "chance_of_playing_next_round" in _elements_df.columns:
                     _status_cols.append("chance_of_playing_next_round")
                 _plan_proj = _plan_proj.merge(_elements_df[_status_cols], on="id", how="left")
+            # Opponent map per GW (team_short <-> team_short) for the
+            # head-to-head hedge nudge.
+            _opps_by_gw = {}
+            try:
+                for _g in gws:
+                    _m = {}
+                    for _, _fx in fixtures[fixtures["event"] == _g].iterrows():
+                        _th = teams_short.get(int(_fx["team_h"]))
+                        _ta = teams_short.get(int(_fx["team_a"]))
+                        if _th and _ta:
+                            _m.setdefault(_th, set()).add(_ta)
+                            _m.setdefault(_ta, set()).add(_th)
+                    _opps_by_gw[_g] = _m
+            except Exception:  # noqa: BLE001 - the nudge is optional context
+                _opps_by_gw = None
             out["transfer_plan_horizon"] = transfer_planner.plan_transfers(
                 _plan_proj, _squad_ids, gws,
                 itb_m=safe_float(itb_m, default=0.0) or 0.0,
                 start_ft=int(free_transfers_value), ft_cap=5,
                 allow_hits=bool(getattr(config, "TRANSFER_PLAN_ALLOW_HITS", False)),
-                max_moves_per_gw=int(getattr(config, "TRANSFER_PLAN_MAX_MOVES_PER_GW", 1)))
+                max_moves_per_gw=int(getattr(config, "TRANSFER_PLAN_MAX_MOVES_PER_GW", 1)),
+                opponents_by_gw=_opps_by_gw)
         except Exception as e:  # noqa: BLE001 - planning must never fail the recommendation
             logger.warning("horizon transfer plan failed: %s", e)
 

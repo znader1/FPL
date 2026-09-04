@@ -119,6 +119,15 @@ def shrink_toward_price_prior(blended_base, now_cost, element_type, gw_start):
     return (season_games * blended_base + shrink_k * prior) / (season_games + shrink_k)
 
 
+def penalty_taker_uplift(penalties_order, index=None):
+    """Additive xPts/GW for first-choice penalty takers (see config note)."""
+    uplift = float(getattr(config, "PROJ_PENALTY_TAKER_UPLIFT", 0.0) or 0.0)
+    order = pd.to_numeric(penalties_order, errors="coerce")
+    if not isinstance(order, pd.Series):
+        order = pd.Series(order, index=index)
+    return (order == 1.0).astype(float) * uplift
+
+
 def team_recent_ppg_map(fixtures, gw_start, latest_n_matches=config.PROJ_DEFAULT_LATEST_N_MATCHES):
     """
     Build team form from last N finished fixtures before gw_start.
@@ -474,6 +483,8 @@ def project_elements_next_gws(
     blended_base = shrink_toward_price_prior(
         blended_base, df.get("now_cost"), df.get("element_type"), gw_start
     )
+    if "penalties_order" in df.columns:
+        blended_base = blended_base + penalty_taker_uplift(df["penalties_order"])
 
     df["baseline_long_term_xpts"] = base_fallback.round(3)
     df["baseline_recent_gw_xpts"] = recent_avg_points.round(3)

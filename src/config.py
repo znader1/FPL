@@ -172,6 +172,13 @@ TRANSFER_PLANNER_RED_FLAG_MAX_CHANCE = 0.0
 PROJ_SHRINKAGE_GAMES = 5.0
 PROJ_PRICE_PRIOR_SLOPE = {1: 0.55, 2: 0.50, 3: 0.45, 4: 0.42}  # element_type -> prior ppg per £1m
 
+# First-choice penalty takers are worth ~a penalty every 3 games on top of
+# open play; ppg/form only sees that historically and shrinkage dilutes it
+# early season. Applied AFTER shrinkage so the duty survives a quiet sample.
+# The xG shadow model prices this properly — this is the baseline's stand-in
+# until that model earns its backtest win.
+PROJ_PENALTY_TAKER_UPLIFT = 0.45  # xPts/GW for penalties_order == 1; 0 disables
+
 # --- Positional bar for spending a free transfer (src/transfer_planner.py) ---
 # A GKP/DEF swap must clear a higher multiple of min_gain before it beats
 # rolling: back-line moves swing fewer real points, and a banked FT is worth
@@ -193,6 +200,13 @@ TRANSFER_PLAN_ALLOW_HITS = False
 # transfers actually banked that week (2 FT -> up to 2 moves, never hits).
 TRANSFER_PLAN_MAX_MOVES_PER_GW = 2
 TRANSFER_PLAN_MOVES_FOLLOW_FT = True
+
+# Head-to-head hedge nudge: buying a player who faces one of your own
+# GKP/DEF<->attacker pairs that gameweek caps the pair's joint ceiling (your
+# striker scoring kills your defender's clean sheet). Expected points don't
+# change — this is a variance preference, so the nudge is small: it breaks
+# ties toward the non-conflicting candidate, nothing more. 0 disables.
+TRANSFER_H2H_CONFLICT_PENALTY = 0.75  # xPts per directly-opposed own player
 
 # -----------------------------
 # Strategy recommendation tuning

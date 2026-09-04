@@ -79,7 +79,22 @@ def _xi_floors(squad, info, hz):
     return xi_ids, by_pos, (overall or 0.0)
 
 
-def _best_swap(squad, info, unowned, hz, bank, team_counts, xi=None):
+def _h2h_conflicts(buy_pos, buy_team, seller, squad_all, info, opps_gw):
+    """Own players directly opposed to the candidate buy this GW: a GKP/DEF
+    buy vs owned attackers, or an attacker buy vs owned GKP/DEF."""
+    opp_teams = opps_gw.get(buy_team) if opps_gw else None
+    if not opp_teams:
+        return []
+    attackerish = buy_pos in ("MID", "FWD")
+    other_side = ("GKP", "DEF") if attackerish else ("MID", "FWD")
+    return [pid for pid in squad_all
+            if pid != seller
+            and info[pid]["team"] in opp_teams
+            and info[pid]["pos"] in other_side]
+
+
+def _best_swap(squad, info, unowned, hz, bank, team_counts, xi=None,
+               squad_all=None, opps_gw=None, h2h_pen=0.0):
     """Best single like-for-like swap: maximizes remaining-horizon gain subject
     to budget and the 3-per-club cap. Returns {sell, buy, pos, gain} or None.
 
@@ -107,8 +122,14 @@ def _best_swap(squad, info, unowned, hz, bank, team_counts, xi=None):
                 gain = max(0.0, hz[b] - floor)
             else:
                 gain = hz[b] - s_hz
+            conflicts = []
+            if h2h_pen > 0 and opps_gw:
+                conflicts = _h2h_conflicts(s_pos, bi["team"], s,
+                                           squad_all or squad, info, opps_gw)
+                gain -= h2h_pen * len(conflicts)
             if best is None or gain > best["gain"]:
-                best = {"sell": s, "buy": b, "pos": s_pos, "gain": gain}
+                best = {"sell": s, "buy": b, "pos": s_pos, "gain": gain,
+                        "conflicts": conflicts}
     return best
 
 
@@ -122,6 +143,8 @@ def _move_record(m, info):
     }
     if m.get("forced_injury"):
         rec["forced_injury"] = True
+    if m.get("conflicts"):
+        rec["h2h_conflicts"] = [info[p]["name"] for p in m["conflicts"]]
     return rec
 
 
@@ -135,7 +158,7 @@ def _note(moves, ft_before, info):
 
 def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
                    hit_penalty=4.0, allow_hits=True, min_gain=2.0, max_moves_per_gw=3,
-                   _skip_first_gw=False):
+                   opponents_by_gw=None, _skip_first_gw=False):
     info = _build_info(proj, gws)
     squad = set(int(x) for x in squad_ids if int(x) in info)
     bank = float(itb_m)
@@ -224,8 +247,11 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
             # instead of giving up on the first miss.
             pool = set(squad)
             best = None
+            opps_gw = (opponents_by_gw or {}).get(g) or {}
+            h2h_pen = float(getattr(config, "TRANSFER_H2H_CONFLICT_PENALTY", 0.0) or 0.0)
             while pool:
-                cand = _best_swap(pool, info, unowned, hz, bank, team_counts, xi=xi)
+                cand = _best_swap(pool, info, unowned, hz, bank, team_counts, xi=xi,
+                                  squad_all=squad, opps_gw=opps_gw, h2h_pen=h2h_pen)
                 if cand is None:
                     break
                 bar = threshold * float(pos_mult.get(cand["pos"], 1.0))
@@ -299,7 +325,8 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
         alt = plan_transfers(
             proj, squad_ids, gws, itb_m=itb_m, start_ft=start_ft, ft_cap=ft_cap,
             hit_penalty=hit_penalty, allow_hits=allow_hits, min_gain=min_gain,
-            max_moves_per_gw=alt_cap, _skip_first_gw=True,
+            max_moves_per_gw=alt_cap, opponents_by_gw=opponents_by_gw,
+            _skip_first_gw=True,
         )
         alt_net = round(float(alt["total_net_gain"]), 2)
         result["roll_alternative_net_gain"] = float(alt_net)
