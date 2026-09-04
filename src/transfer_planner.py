@@ -66,9 +66,27 @@ def _horizon(info, pid, remaining):
     return sum(xg.get(g, 0.0) for g in remaining)
 
 
-def _best_swap(squad, info, unowned, hz, bank, team_counts):
+def _xi_floors(squad, info, hz):
+    """Likely XI (top 11 by remaining-horizon value) and its weakest member
+    per position / overall — the bar an incoming player must beat to turn a
+    bench slot into real points."""
+    xi_ids = set(sorted(squad, key=lambda p: hz.get(p, 0.0), reverse=True)[:11])
+    by_pos, overall = {}, None
+    for pid in xi_ids:
+        v, pos = hz.get(pid, 0.0), info[pid]["pos"]
+        by_pos[pos] = min(by_pos.get(pos, v), v)
+        overall = v if overall is None else min(overall, v)
+    return xi_ids, by_pos, (overall or 0.0)
+
+
+def _best_swap(squad, info, unowned, hz, bank, team_counts, xi=None):
     """Best single like-for-like swap: maximizes remaining-horizon gain subject
-    to budget and the 3-per-club cap. Returns {sell, buy, pos, gain} or None."""
+    to budget and the 3-per-club cap. Returns {sell, buy, pos, gain} or None.
+
+    With `xi` (from _xi_floors), a bench seller's swap only counts the points
+    the buyer would add by displacing the weakest same-position XI member —
+    upgrading a player who stays on the bench is worth nothing."""
+    xi_ids, xi_min_by_pos, xi_min_overall = xi if xi else (None, None, None)
     best = None
     for s in squad:
         si = info[s]
@@ -84,7 +102,11 @@ def _best_swap(squad, info, unowned, hz, bank, team_counts):
             count_after = team_counts.get(bt, 0) - (1 if bt == s_team else 0)
             if count_after + 1 > MAX_PER_TEAM:
                 continue
-            gain = hz[b] - s_hz
+            if xi_ids is not None and s not in xi_ids:
+                floor = xi_min_by_pos.get(s_pos, xi_min_overall)
+                gain = max(0.0, hz[b] - floor)
+            else:
+                gain = hz[b] - s_hz
             if best is None or gain > best["gain"]:
                 best = {"sell": s, "buy": b, "pos": s_pos, "gain": gain}
     return best
@@ -137,6 +159,8 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
         ft_before = ft
         remaining = gws[gi:]
         hz = {pid: _horizon(info, pid, remaining) for pid in info}
+        xi = (_xi_floors(squad, info, hz)
+              if bool(getattr(config, "TRANSFER_PLAN_XI_AWARE", True)) else None)
         team_counts = {}
         for pid in squad:
             t = info[pid]["team"]
@@ -175,7 +199,7 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
             pool = set(squad)
             best = None
             while pool:
-                cand = _best_swap(pool, info, unowned, hz, bank, team_counts)
+                cand = _best_swap(pool, info, unowned, hz, bank, team_counts, xi=xi)
                 if cand is None:
                     break
                 bar = threshold * float(pos_mult.get(cand["pos"], 1.0))
@@ -253,7 +277,13 @@ def _verdict_and_reasoning(plan, min_gain, ft_cap):
 
     if first and first["action"] == "transfer":
         names = ", ".join(f"{m['sell']['name']} -> {m['buy']['name']}" for m in first["moves"])
-        reasoning = f"Move now: {names} (+{first['gw_gain']} xPts >= {min_gain} threshold)."
+        if first.get("hits"):
+            # Quote what the user actually banks — the raw sum before hit
+            # costs reads as a bigger promise than the plan delivers.
+            reasoning = (f"Move now: {names} (net +{first['net_gain']} xPts "
+                         f"after -{first['hit_cost']:g} in hits; bar {min_gain}).")
+        else:
+            reasoning = f"Move now: {names} (+{first['gw_gain']} xPts >= {min_gain} threshold)."
         return "spend", reasoning
 
     if first:

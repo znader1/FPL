@@ -178,6 +178,12 @@ PROJ_PRICE_PRIOR_SLOPE = {1: 0.55, 2: 0.50, 3: 0.45, 4: 0.42}  # element_type ->
 # more than a sideways defender trade. Injury-forced sells bypass this.
 TRANSFER_PLAN_POS_GAIN_MULT = {"GKP": 2.0, "DEF": 1.75, "MID": 1.0, "FWD": 1.0}
 
+# XI-aware horizon planning (src/transfer_planner.py): a bench seller's swap
+# only credits the points the buyer would add by displacing the weakest
+# same-position XI member — upgrading a player who stays on the bench is
+# worth nothing, so the planner stops burning transfers (or hits) on subs.
+TRANSFER_PLAN_XI_AWARE = True
+
 # -----------------------------
 # Strategy recommendation tuning
 # -----------------------------
