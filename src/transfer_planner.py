@@ -205,7 +205,14 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
                 moves.append(best)
 
         pos_mult = getattr(config, "TRANSFER_PLAN_POS_GAIN_MULT", {}) or {}
-        while len(moves) < max_moves_per_gw:
+        # The cap follows the free transfers actually available this GW: 2 FT
+        # banked → up to 2 moves may be recommended (each still clears its own
+        # bar, and the whole plan still has to beat the roll counterfactual).
+        follow_ft = (bool(getattr(config, "TRANSFER_PLAN_MOVES_FOLLOW_FT", True))
+                     and not allow_hits)  # a hit IS a move beyond FT — don't clamp it away
+        gw_cap = (max(1, min(int(max_moves_per_gw), int(ft)))
+                  if follow_ft else int(max_moves_per_gw))
+        while len(moves) < gw_cap:
             within_ft = len(moves) < ft
             if not within_ft and not allow_hits:
                 break

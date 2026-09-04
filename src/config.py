@@ -176,7 +176,7 @@ PROJ_PRICE_PRIOR_SLOPE = {1: 0.55, 2: 0.50, 3: 0.45, 4: 0.42}  # element_type ->
 # A GKP/DEF swap must clear a higher multiple of min_gain before it beats
 # rolling: back-line moves swing fewer real points, and a banked FT is worth
 # more than a sideways defender trade. Injury-forced sells bypass this.
-TRANSFER_PLAN_POS_GAIN_MULT = {"GKP": 2.0, "DEF": 1.75, "MID": 1.0, "FWD": 1.0}
+TRANSFER_PLAN_POS_GAIN_MULT = {"GKP": 2.0, "DEF": 2.25, "MID": 1.0, "FWD": 1.0}
 
 # XI-aware horizon planning (src/transfer_planner.py): a bench seller's swap
 # only credits the points the buyer would add by displacing the weakest
@@ -189,7 +189,10 @@ TRANSFER_PLAN_XI_AWARE = True
 # explicitly compares moving now vs rolling for an extra transfer next week;
 # injury urgency is the only bypass.
 TRANSFER_PLAN_ALLOW_HITS = False
-TRANSFER_PLAN_MAX_MOVES_PER_GW = 1
+# Upper bound per GW; with MOVES_FOLLOW_FT the effective cap is the free
+# transfers actually banked that week (2 FT -> up to 2 moves, never hits).
+TRANSFER_PLAN_MAX_MOVES_PER_GW = 2
+TRANSFER_PLAN_MOVES_FOLLOW_FT = True
 
 # -----------------------------
 # Strategy recommendation tuning

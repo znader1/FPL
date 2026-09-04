@@ -84,6 +84,22 @@ def test_reasoning_names_the_counterfactual_double():
     assert "->" in plan["reasoning"].split("rolling", 1)[1]
 
 
+def test_cap_follows_available_free_transfers():
+    # 2 FT banked and two clear upgrades: both moves may land this GW.
+    plan = tp.plan_transfers(_proj_frame(_two_upgrade_market()), squad_ids=[1, 2],
+                             gws=[10, 11], itb_m=0.0, start_ft=2,
+                             allow_hits=False, min_gain=2.0, max_moves_per_gw=2)
+    assert len(plan["plan"][0]["moves"]) == 2
+
+
+def test_cap_still_bounded_by_single_free_transfer():
+    # Only 1 FT: the upper bound of 2 must not produce a second (hit) move.
+    plan = tp.plan_transfers(_proj_frame(_two_upgrade_market()), squad_ids=[1, 2],
+                             gws=[10, 11], itb_m=0.0, start_ft=1,
+                             allow_hits=False, min_gain=2.0, max_moves_per_gw=2)
+    assert len(plan["plan"][0]["moves"]) == 1
+
+
 def test_below_bar_still_rolls():
     players = [{"id": 1, "pos": "MID", "xpts": 2.0}]
     market = players + [{"id": 2, "pos": "MID", "xpts": 2.5}]
