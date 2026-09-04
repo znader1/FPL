@@ -226,6 +226,7 @@ STRATEGY_MAX_BENCH_MOVES = 6
 # -----------------------------
 # Chip plan tuning (src/chip_advisor.py — chip timing planner)
 # -----------------------------
+CHIP_PLAN_CACHE_TTL_S = 900.0   # /chips/plan result cache; a build costs minutes of CPU
 CHIP_PLAN_PHASE_SPLIT_GW = 19   # last GW of the first-half chip set
 CHIP_PLAN_SEASON_END_GW = 38
 CHIP_PLAN_HORIZON_GWS = 8       # model zone: full EV math over this many GWs

@@ -1,5 +1,15 @@
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
+
+from api import chips as _chips_module
+
+
+@pytest.fixture(autouse=True)
+def _clear_plan_cache():
+    _chips_module._plan_cache.clear()
+    yield
+    _chips_module._plan_cache.clear()
 
 
 def _fake_context(entry_id, current_gw, horizon=5):
@@ -24,6 +34,30 @@ def _fake_context(entry_id, current_gw, horizon=5):
         "fixtures": pd.DataFrame(columns=["event", "team_h", "team_a"]),
         "teams_short_map": {},
     }
+
+
+def test_chips_plan_is_cached_within_ttl(monkeypatch):
+    from api.main import app
+    from api import chips as chips_module
+    from src.auth import require_user
+
+    calls = []
+
+    def _counting_context(entry_id, current_gw, horizon=5):
+        calls.append(entry_id)
+        return _fake_context(entry_id, current_gw, horizon)
+
+    monkeypatch.setattr(chips_module, "_build_context_for_entry", _counting_context)
+    monkeypatch.setattr(chips_module, "_get_entry_chips", lambda entry_id: [])
+    monkeypatch.setattr(chips_module, "_resolve_current_gw", lambda: 5)
+    app.dependency_overrides[require_user] = lambda: {"sub": "test-user"}
+    client = TestClient(app)
+    r1 = client.get("/chips/plan?entry_id=321")
+    r2 = client.get("/chips/plan?entry_id=321")
+    assert r1.status_code == r2.status_code == 200
+    assert r1.json() == r2.json()
+    assert len(calls) == 1, "second request within the TTL must not rebuild"
+    app.dependency_overrides = {}
 
 
 def test_chips_plan_route(monkeypatch):

@@ -1,6 +1,8 @@
 """GET /chips/plan — chip timing recommendations over the projection horizon."""
 from __future__ import annotations
 import logging
+import threading
+import time
 from typing import Optional
 
 import pandas as pd
@@ -12,6 +14,14 @@ from src.chip_advisor import build_chip_plan
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+# A plan build runs the wildcard/free-hit optimizer ~16 times and takes
+# minutes on the shared vCPU; with one uvicorn worker an uncached call
+# head-of-line blocks every other request (live incident, GW3 deadline day).
+# The inputs change twice a day, so cache per (entry, gw, horizon) and hold a
+# global lock so concurrent identical calls don't stack builds.
+_plan_cache: dict = {}
+_plan_build_lock = threading.Lock()
 
 
 def _resolve_current_gw() -> int:
@@ -42,6 +52,21 @@ def chips_plan(
 ):
     current_gw = _resolve_current_gw()
     model_horizon = int(horizon or getattr(config, "CHIP_PLAN_HORIZON_GWS", 8))
+    ttl = float(getattr(config, "CHIP_PLAN_CACHE_TTL_S", 900.0) or 0.0)
+    cache_key = (int(entry_id), int(current_gw), int(model_horizon))
+    hit = _plan_cache.get(cache_key)
+    if hit and ttl > 0 and (time.time() - hit["ts"]) < ttl:
+        return hit["data"]
+    with _plan_build_lock:
+        hit = _plan_cache.get(cache_key)
+        if hit and ttl > 0 and (time.time() - hit["ts"]) < ttl:
+            return hit["data"]
+        result = _build_plan_response(entry_id, current_gw, model_horizon)
+        _plan_cache[cache_key] = {"ts": time.time(), "data": result}
+        return result
+
+
+def _build_plan_response(entry_id: int, current_gw: int, model_horizon: int):
     ctx = _build_context_for_entry(entry_id, current_gw, horizon=model_horizon)
 
     # No-chip baseline: the horizon transfer plan. Planning must never fail the plan.
