@@ -70,6 +70,8 @@ The xPts model blends a season PPG baseline with a recency-weighted recent avera
 5. **DGW**: second fixture counts at `DGW_EXTRA_FIXTURE_DISCOUNT` (0.65) of a normal fixture
 6. **Late season** (GW > `LATE_SEASON_GW_THRESHOLD`): window shrinks to 3 GWs so recent form dominates
 7. **ep_next removed**: FPL's own ep_next is opaque and slow-reacting; own blended model used for all GWs (`EP_NEXT_BLEND_WEIGHT = 0.0`)
+8. **Early-season shrinkage** (2026-09): the blended baseline is pulled toward a price×position prior (`PROJ_SHRINKAGE_GAMES`, `PROJ_PRICE_PRIOR_SLOPE`), weighted by finished GWs — a 4.1m defender with two clean sheets no longer projects like a premium. Pre-season (0 finished GWs) untouched. First-choice penalty takers get `PROJ_PENALTY_TAKER_UPLIFT` (+0.45/GW) after shrinkage.
+9. Known open issue: promoted-team small-sample clusters still inflate (shrinkage+`CHIP_PLAN_XPTS_CLAMP` are stopgaps); root fix + per-player home/away splits are backlogged pending an SP3 backtest.
 
 ### xG expected-points stack (shadow model — currently OFF)
 
@@ -101,16 +103,33 @@ All loaders return empty frames when data is missing → model degrades graceful
 
 ### Transfer recommender (`src/recommender.py`)
 
-Beam search over sell/buy combinations. Guardrails: min score-gain threshold, no captain sell unless large gain, position attack bonus, set-piece order bonuses. Weights in `config.py` under `TRANSFER_*`.
+Beam search over sell/buy combinations — feeds the frontend's collapsed "Quick options" list (the horizon planner is the advice). Guardrails: min score-gain threshold, no captain sell unless large gain, position attack bonus, set-piece order bonuses, the shared `TRANSFER_PLAN_POS_GAIN_MULT` bars, and bench-seller discipline (`swap_gain`: bench swaps compete on raw `base_score` — a set-piece taker is worthless on the bench). Weights in `config.py` under `TRANSFER_*`.
 
 ### Horizon transfer planner (`src/transfer_planner.py`)
 
-Greedy per-GW walk across the projection horizon, separate from the single-GW beam search above. Accrues one FT per GW (cap 5, 2026-27 banking rule), makes like-for-like swaps only when gain exceeds `min_gain` (else rolls), optionally takes -4 hits when gain exceeds `hit_penalty`. Emitted by `build_recommendations` as `transfer_plan_horizon` (additive, never breaks the response); rendered by the frontend's `HorizonTransferPlan` component.
+Greedy per-GW walk across the projection horizon, separate from the single-GW beam search above. Accrues one FT per GW (cap 5, 2026-27 banking rule), like-for-like swaps only. Emitted by `build_recommendations` as `transfer_plan_horizon`; rendered by the frontend's `HorizonTransferPlan`. The 2026-09 discipline layer (all config-gated, `TRANSFER_PLAN_*`):
+
+- **The headline plan is the product's ONE piece of advice**: at most `min(MAX_MOVES_PER_GW, banked FTs)` moves per GW (`MOVES_FOLLOW_FT`), never hit-funded (`ALLOW_HITS = False`); hits-allowed callers keep old semantics.
+- **Roll-vs-move counterfactual**: every first-GW spend is compared against banking the FT and playing a double next week (the alt walk gets its banked FT back); the verdict names the counterfactual's moves and quotes both nets. Injury urgency bypasses.
+- **XI-aware**: a bench seller's swap only credits points the buyer adds by displacing the weakest same-position XI member — bench churn is worth 0.
+- **Positional bars**: GKP/DEF swaps need `POS_GAIN_MULT` × min_gain (2.0 / 2.25) — shared with the beam search.
+- **Head-to-head hedge nudge**: buys directly opposing an owned GKP/DEF↔attacker pair that GW get `TRANSFER_H2H_CONFLICT_PENALTY` (variance preference, deliberately small) and an `h2h_conflicts` warning on the move record.
+- **Horizon floor**: the planner always evaluates ≥ `MIN_HORIZON_GWS` (3) regardless of the display slider — roll-vs-move never runs blind.
 
 ### Chip optimizer (`src/optimizer.py` + chip logic in `api/main.py`)
 
 - `free_hit`: optimize for next GW only, ignore sell prices
 - `wildcard`: blend of next-fixture xPts, multi-GW horizon, DGW upside, premium captaincy coverage. Weights under `CHIP_WILDCARD_*`.
+- `normalize_chip_strategy` also accepts `bench_boost`/`triple_captain` — they mark the chip in the response without changing squad optimization.
+
+### Chip timing planner (`src/chip_advisor.py`, 2026-09)
+
+`build_chip_plan()` answers "which chip, which GW": per-chip EV per candidate GW (TC = captain's extra ×1; BB = bench-4 sum; FH = budget-constrained rebuilt XI vs own, gated on ≥`CHIP_PLAN_FH_MIN_BLANKING` blanking starters; WC = budget/team-cap-constrained optimizer squad summed over the horizon, net of the transfer plan), expiry-aware chip windows (phase 1/2 via `chip_windows`, FPL names normalized there), min-EV thresholds with an expiry urgency ramp (`effective_min_ev`), a structural zone beyond the model horizon (announced DGW/BGW → `provisional` recs), and a next-GW `nudge`. Dream-squad sides clamp xpts at `CHIP_PLAN_XPTS_CLAMP`. All tunables `CHIP_PLAN_*`; thresholds are live-tuned, backtest pending.
+
+- **`GET /chips/plan?entry_id=&horizon=`** (require_user) — the frozen contract the frontend Chips tab consumes.
+- **`GET /admin/chip-plan?entry_id=`** (admin key) — same plan + season/deadline/model_meta for the snapshot job.
+- **`chip_plan_snapshots`** (Supabase): pre-deadline recommendations + post-GW chip actuals per entry (`scripts/chip_snapshot_to_db.py`, entries from `CHIP_SNAPSHOT_ENTRY_IDS` secret, runs in `snapshot-db.yml`). This is the training set for a future ML chip advisor and the substrate for the expert-article benchmark.
+- Chat chip agent + orchestrator are grounded on the same `build_chip_plan` payload (bank/fixtures/chips_played threaded; single entry-history fetch).
 
 ### Data refresh & snapshots
 
@@ -133,7 +152,8 @@ Free transfers for the target GW are derived from `entry_history.event_transfers
 | Branch | Purpose |
 |--------|---------|
 | `master` | Production (auto-deploys to Fly.io) |
-| `feature/weekly-db` | Current: weekly `player_gw_snapshots` Supabase table + snapshot job |
+| `feature/xpts-components` | Current integration branch (chip planner + 2026-09 model discipline landed here, then fast-forwarded to master) |
+| `feature/weekly-db` | Weekly `player_gw_snapshots` Supabase table + snapshot job (merged) |
 | `feature/xg-expected-points` | xG shadow model + SP1 minutes / SP2 ownership-EV / SP3 backtest |
 | `feature/smarter-projections` | Improved xPts model (blank-GW exclusion, recency weighting, ep_next removal) |
 | `feature/backtest` | Backtest experiments |
