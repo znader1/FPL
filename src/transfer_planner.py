@@ -286,25 +286,32 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
     # Injury-forced spends are urgency and skip the comparison.
     if (not _skip_first_gw and len(gws) > 1 and plan
             and plan[0]["action"] == "transfer" and verdict != "spend_forced_injury"):
+        # The banked FT must actually be spendable next week, or the roll path
+        # is judged with one hand tied behind its back.
+        alt_cap = max(int(max_moves_per_gw), min(int(ft_cap), int(start_ft) + 1))
         alt = plan_transfers(
             proj, squad_ids, gws, itb_m=itb_m, start_ft=start_ft, ft_cap=ft_cap,
             hit_penalty=hit_penalty, allow_hits=allow_hits, min_gain=min_gain,
-            max_moves_per_gw=max_moves_per_gw, _skip_first_gw=True,
+            max_moves_per_gw=alt_cap, _skip_first_gw=True,
         )
         alt_net = round(float(alt["total_net_gain"]), 2)
         result["roll_alternative_net_gain"] = float(alt_net)
+        alt_first = next((p for p in alt["plan"] if p["action"] == "transfer"), None)
+        alt_moves_txt = (
+            " + ".join(f"{m['sell']['name']} -> {m['buy']['name']}" for m in alt_first["moves"])
+            if alt_first else "no move"
+        )
         if alt_net > float(result["total_net_gain"]) + 1e-9:
             alt["roll_alternative_net_gain"] = float(alt_net)
             alt["verdict"] = "roll"
             alt["reasoning"] = (
-                f"Roll — banking for {min(int(ft_cap), int(start_ft) + 1)} transfers next "
-                f"week projects net +{alt_net} over the horizon vs "
-                f"+{result['total_net_gain']} moving now."
+                f"Roll — banking for next week's {alt_moves_txt} projects net "
+                f"+{alt_net} over the horizon vs +{result['total_net_gain']} moving now."
             )
             return alt
         base_reasoning = result["reasoning"].rstrip(".")
         result["reasoning"] = (
-            f"{base_reasoning} — beats rolling for a double next week "
+            f"{base_reasoning} — beats rolling for next week's {alt_moves_txt} "
             f"(net +{result['total_net_gain']} vs +{alt_net})."
         )
 

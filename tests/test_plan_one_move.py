@@ -58,6 +58,32 @@ def test_roll_alternative_is_computed_and_attached():
     assert plan["roll_alternative_net_gain"] <= plan["total_net_gain"] + 1e-9
 
 
+def test_roll_alternative_gets_to_spend_the_banked_double():
+    # Upgrades worth +7/GW each. Spend path: A at GW10 (2 GWs) + B at GW11
+    # (1 GW) = 21. Roll path must play BOTH at GW11 (= 14), not be capped to
+    # one move like the headline plan — a capped counterfactual undersells
+    # rolling.
+    players = [{"id": 1, "pos": "MID", "xpts": 2.0}, {"id": 2, "pos": "MID", "xpts": 2.0}]
+    market = players + [
+        {"id": 3, "pos": "MID", "xpts": 9.0},
+        {"id": 4, "pos": "MID", "xpts": 9.0},
+    ]
+    plan = tp.plan_transfers(_proj_frame(market), squad_ids=[1, 2],
+                             gws=[10, 11], itb_m=0.0, start_ft=1,
+                             allow_hits=False, min_gain=2.0, max_moves_per_gw=1)
+    assert plan["total_net_gain"] == 21.0
+    assert plan["roll_alternative_net_gain"] == 14.0
+
+
+def test_reasoning_names_the_counterfactual_double():
+    plan = tp.plan_transfers(_proj_frame(_two_upgrade_market()), squad_ids=[1, 2],
+                             gws=[10, 11], itb_m=0.0, start_ft=1,
+                             allow_hits=False, min_gain=2.0, max_moves_per_gw=1)
+    assert plan["verdict"] == "spend"
+    # The counterfactual's actual moves appear in the reasoning, not just a net.
+    assert "->" in plan["reasoning"].split("rolling", 1)[1]
+
+
 def test_below_bar_still_rolls():
     players = [{"id": 1, "pos": "MID", "xpts": 2.0}]
     market = players + [{"id": 2, "pos": "MID", "xpts": 2.5}]
