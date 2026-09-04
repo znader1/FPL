@@ -208,6 +208,12 @@ TRANSFER_PLAN_MOVES_FOLLOW_FT = True
 # ties toward the non-conflicting candidate, nothing more. 0 disables.
 TRANSFER_H2H_CONFLICT_PENALTY = 0.75  # xPts per directly-opposed own player
 
+# The roll-vs-move verdict is meaningless with no next week to roll into, and
+# a 1-GW display slider kept producing exactly that. The planner always
+# evaluates at least this many GWs regardless of the display horizon; the
+# slider still controls the pitch/optimization view (1 GW remains available).
+TRANSFER_PLAN_MIN_HORIZON_GWS = 3
+
 # -----------------------------
 # Strategy recommendation tuning
 # -----------------------------

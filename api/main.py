@@ -1111,6 +1111,16 @@ def build_recommendations(payload):
     if wildcard_is_active:
         projection_start_event_id = min(int(optimize_event_id), int(wildcard_play_event_id))
     projection_end_event_id = int(optimize_event_id) + int(display_horizon_gws) - 1
+    # The transfer planner never runs blind: it needs at least
+    # TRANSFER_PLAN_MIN_HORIZON_GWS of projections even when the display
+    # horizon is 1, or roll-vs-move has no next week to compare against.
+    plan_horizon_gws = max(
+        int(display_horizon_gws),
+        max(1, int(getattr(config, "TRANSFER_PLAN_MIN_HORIZON_GWS", 3))),
+    )
+    projection_end_event_id = max(
+        int(projection_end_event_id), int(optimize_event_id) + plan_horizon_gws - 1
+    )
     if wildcard_is_active:
         projection_end_event_id = max(
             int(projection_end_event_id),
@@ -1398,9 +1408,10 @@ def build_recommendations(payload):
                 _plan_proj = _plan_proj.merge(_elements_df[_status_cols], on="id", how="left")
             # Opponent map per GW (team_short <-> team_short) for the
             # head-to-head hedge nudge.
+            plan_gws = [int(optimize_event_id) + i for i in range(int(plan_horizon_gws))]
             _opps_by_gw = {}
             try:
-                for _g in gws:
+                for _g in plan_gws:
                     _m = {}
                     for _, _fx in fixtures[fixtures["event"] == _g].iterrows():
                         _th = teams_short.get(int(_fx["team_h"]))
@@ -1412,7 +1423,7 @@ def build_recommendations(payload):
             except Exception:  # noqa: BLE001 - the nudge is optional context
                 _opps_by_gw = None
             out["transfer_plan_horizon"] = transfer_planner.plan_transfers(
-                _plan_proj, _squad_ids, gws,
+                _plan_proj, _squad_ids, plan_gws,
                 itb_m=safe_float(itb_m, default=0.0) or 0.0,
                 start_ft=int(free_transfers_value), ft_cap=5,
                 allow_hits=bool(getattr(config, "TRANSFER_PLAN_ALLOW_HITS", False)),
