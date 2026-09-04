@@ -163,6 +163,21 @@ TRANSFER_PLANNER_RED_FLAG_STATUSES = ("i", "s", "u")
 # chance_of_playing_next_round at/below this also forces a sell (e.g. 0 == ruled out).
 TRANSFER_PLANNER_RED_FLAG_MAX_CHANCE = 0.0
 
+# --- Early-season shrinkage (src/projections.py) ---
+# FPL's ppg/form over 1-3 games otherwise get taken at face value: a 4.1m
+# defender with two clean sheets (ppg 10.0) projects like a premium and the
+# transfer planner chases him instead of rolling. Shrink each player's blended
+# baseline toward slope[element_type] × price_m, weighted by finished
+# gameweeks; fades as the season accumulates evidence. 0 disables.
+PROJ_SHRINKAGE_GAMES = 5.0
+PROJ_PRICE_PRIOR_SLOPE = {1: 0.55, 2: 0.50, 3: 0.45, 4: 0.42}  # element_type -> prior ppg per £1m
+
+# --- Positional bar for spending a free transfer (src/transfer_planner.py) ---
+# A GKP/DEF swap must clear a higher multiple of min_gain before it beats
+# rolling: back-line moves swing fewer real points, and a banked FT is worth
+# more than a sideways defender trade. Injury-forced sells bypass this.
+TRANSFER_PLAN_POS_GAIN_MULT = {"GKP": 2.0, "DEF": 1.75, "MID": 1.0, "FWD": 1.0}
+
 # -----------------------------
 # Strategy recommendation tuning
 # -----------------------------

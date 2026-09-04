@@ -161,16 +161,29 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
                 best["forced_injury"] = True
                 moves.append(best)
 
+        pos_mult = getattr(config, "TRANSFER_PLAN_POS_GAIN_MULT", {}) or {}
         while len(moves) < max_moves_per_gw:
-            unowned = [pid for pid in info if pid not in squad]
-            best = _best_swap(squad, info, unowned, hz, bank, team_counts)
-            if best is None:
-                break
             within_ft = len(moves) < ft
-            threshold = min_gain if within_ft else hit_penalty
-            if best["gain"] <= threshold:
-                break
             if not within_ft and not allow_hits:
+                break
+            threshold = min_gain if within_ft else hit_penalty
+            unowned = [pid for pid in info if pid not in squad]
+            # Positional bar: the best raw swap may be a GKP/DEF trade that
+            # fails its (higher) bar while a slightly smaller MID/FWD gain
+            # passes its own — so retry with the failing position excluded
+            # instead of giving up on the first miss.
+            pool = set(squad)
+            best = None
+            while pool:
+                cand = _best_swap(pool, info, unowned, hz, bank, team_counts)
+                if cand is None:
+                    break
+                bar = threshold * float(pos_mult.get(cand["pos"], 1.0))
+                if cand["gain"] > bar:
+                    best = cand
+                    break
+                pool = {pid for pid in pool if info[pid]["pos"] != cand["pos"]}
+            if best is None:
                 break
             s, b = best["sell"], best["buy"]
             squad.discard(s)

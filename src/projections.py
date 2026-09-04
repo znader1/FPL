@@ -90,6 +90,35 @@ def baseline_points_per_gw(
     return float(ppg_weight) * ppg + float(form_weight) * form * form_scale
 
 
+def shrink_toward_price_prior(blended_base, now_cost, element_type, gw_start):
+    """Empirical-Bayes shrink of the per-player baseline toward a price×position prior.
+
+    Early season, FPL's ppg/form cover 1-3 games and get taken at face value: a
+    4.1m defender with two clean sheets projects like a premium, and a quiet
+    premium gets buried. Shrink toward `slope[pos] × price_m` weighted by how
+    many gameweeks of evidence the season has produced; the effect fades as
+    games accumulate. PROJ_SHRINKAGE_GAMES = 0 disables entirely.
+    """
+    shrink_k = float(getattr(config, "PROJ_SHRINKAGE_GAMES", 0.0) or 0.0)
+    season_games = max(0, int(gw_start) - 1)
+    # Pre-season (0 finished GWs) the ppg/form columns carry curated or
+    # last-season signal, not small-sample noise — leave them alone. The
+    # failure mode this fixes needs at least one over-trusted game.
+    if shrink_k <= 0 or season_games == 0:
+        return blended_base
+    if now_cost is None or element_type is None:
+        return blended_base
+    slopes = getattr(config, "PROJ_PRICE_PRIOR_SLOPE", {}) or {}
+    price_m = pd.to_numeric(now_cost, errors="coerce")
+    if not isinstance(price_m, pd.Series):
+        return blended_base
+    price_m = price_m.fillna(0.0) / 10.0
+    etype = pd.to_numeric(element_type, errors="coerce")
+    slope = etype.map(lambda t: float(slopes.get(int(t), 0.45)) if pd.notna(t) else 0.45)
+    prior = price_m * slope
+    return (season_games * blended_base + shrink_k * prior) / (season_games + shrink_k)
+
+
 def team_recent_ppg_map(fixtures, gw_start, latest_n_matches=config.PROJ_DEFAULT_LATEST_N_MATCHES):
     """
     Build team form from last N finished fixtures before gw_start.
@@ -442,6 +471,9 @@ def project_elements_next_gws(
         recent_player_base * float(recent_blend_weight)
         + base_fallback * float(1.0 - recent_blend_weight)
     ).where(has_recent_history, base_fallback)
+    blended_base = shrink_toward_price_prior(
+        blended_base, df.get("now_cost"), df.get("element_type"), gw_start
+    )
 
     df["baseline_long_term_xpts"] = base_fallback.round(3)
     df["baseline_recent_gw_xpts"] = recent_avg_points.round(3)
