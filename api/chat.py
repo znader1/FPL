@@ -78,8 +78,11 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
     """
     # Local import to avoid circular and keep startup fast
     from src import fpl_client, transforms, projections, optimizer, config
+    from src.breaks import international_break_gws
 
     bootstrap = fpl_client.get_bootstrap()
+    # Reuses the bootstrap already fetched above — no extra network call.
+    breaks = international_break_gws(bootstrap.get("events", []))
     fixtures = transforms.fixtures_df(fpl_client.get_fixtures())
     elements, teams, teams_short_map = transforms.tables_from_bootstrap(bootstrap)
 
@@ -182,6 +185,7 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
         "proj": proj,
         "fixtures": fixtures,
         "teams_short_map": teams_short_map,
+        "breaks": breaks,
     }
 
 
@@ -310,6 +314,7 @@ def chat_chip(req: SpecialistRequest = Body(...)):
             chips_played=chips_played,
             bank_m=ctx["bank_m"],
             fixtures=ctx["fixtures"],
+            breaks=ctx["breaks"],
         )
     except Exception as e:
         logger.exception("chip agent failed")

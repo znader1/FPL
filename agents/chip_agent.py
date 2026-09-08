@@ -65,6 +65,7 @@ def _handle_tool_call(
     chips_played: list | None = None,
     bank_m: float = 0.0,
     fixtures: pd.DataFrame | None = None,
+    breaks: dict[int, dict] | None = None,
 ) -> dict:
     """Route tool calls to the deterministic advisor.
 
@@ -73,9 +74,16 @@ def _handle_tool_call(
     structural DGW/BGW zone) — without them the chat agent was silently
     working off a bank_m=0 / no-fixtures plan that could disagree with what
     the UI shows for the same entry.
+
+    breaks: {event_id: {"gap_days", "prev_event"}} for GWs right after an
+    international break (src.breaks.international_break_gws). Threaded into
+    build_chip_plan so its confidence haircut / "wait_for_team_news" nudge
+    flag apply here too, and surfaced (stringified keys, for JSON) directly
+    in the payload so the agent can cite it even when the affected GW isn't
+    the top-ranked recommendation.
     """
     if name == "get_chip_recommendations":
-        return build_chip_plan(
+        result = build_chip_plan(
             squad=squad,
             current_gw=int(args["current_gw"]),
             gw_projections=gw_projections,
@@ -83,7 +91,11 @@ def _handle_tool_call(
             itb_m=float(bank_m or 0.0),
             fixtures=fixtures,
             horizon_gws=int(args.get("gws_ahead", 5)) + 1,
+            breaks=breaks,
         )
+        if breaks:
+            result["breaks"] = {str(k): v for k, v in breaks.items()}
+        return result
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -97,6 +109,7 @@ def run_chip_agent(
     chips_played: list | None = None,
     bank_m: float = 0.0,
     fixtures: pd.DataFrame | None = None,
+    breaks: dict[int, dict] | None = None,
 ) -> str:
     """
     Entry point. Returns a natural-language recommendation string.
@@ -112,6 +125,10 @@ def run_chip_agent(
         matches the REST /chips/plan route instead of defaulting to 0.
     fixtures: fixtures DataFrame — threaded to the tool so the structural
         DGW/BGW zone beyond the model horizon is available to the agent too.
+    breaks: international-break map ({event_id: {"gap_days", "prev_event"}})
+        — threaded to the tool so the chat agent's advice reflects the same
+        break-aware confidence haircut and post-break "hold for team news"
+        nudge as the REST /chips/plan route.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -154,6 +171,7 @@ def run_chip_agent(
                     chips_played,
                     bank_m=bank_m,
                     fixtures=fixtures,
+                    breaks=breaks,
                 )
                 tool_results.append({
                     "type": "tool_result",

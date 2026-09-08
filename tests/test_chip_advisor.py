@@ -301,6 +301,50 @@ def test_chip_agent_tool_returns_full_plan(monkeypatch):
     assert result == sentinel
 
 
+def test_chip_agent_tool_threads_breaks_to_build_chip_plan(monkeypatch):
+    """breaks must reach build_chip_plan (so its confidence haircut / nudge
+    flag fire for the chat path too) AND be surfaced directly in the tool
+    payload (stringified keys) so the agent can cite it."""
+    from agents import chip_agent
+
+    captured = {}
+
+    def fake_build_chip_plan(**kw):
+        captured.update(kw)
+        return {"recommendations": [], "nudge": None, "chips_remaining": [],
+                "current_gw": 5, "horizon_model_gws": 8, "transfer_context": {}}
+
+    monkeypatch.setattr(chip_agent, "build_chip_plan", fake_build_chip_plan)
+
+    squad = _squad_15()[["player_id", "name", "pos", "team", "price_m"]]
+    breaks = {7: {"gap_days": 13.0, "prev_event": 6}}
+    result = chip_agent._handle_tool_call(
+        "get_chip_recommendations", {"current_gw": 5},
+        squad, {5: _squad_15()}, ["wildcard"],
+        breaks=breaks,
+    )
+
+    assert captured["breaks"] == breaks
+    assert result["breaks"] == {"7": {"gap_days": 13.0, "prev_event": 6}}
+
+
+def test_chip_agent_tool_omits_breaks_key_when_absent(monkeypatch):
+    """No breaks known (or upstream detection failed) -> no 'breaks' key,
+    matching the prompt's "the context MAY include a breaks map" framing."""
+    from agents import chip_agent
+
+    sentinel = {"recommendations": [], "nudge": None, "chips_remaining": [],
+                "current_gw": 5, "horizon_model_gws": 8, "transfer_context": {}}
+    monkeypatch.setattr(chip_agent, "build_chip_plan", lambda **kw: sentinel)
+
+    squad = _squad_15()[["player_id", "name", "pos", "team", "price_m"]]
+    result = chip_agent._handle_tool_call(
+        "get_chip_recommendations", {"current_gw": 5},
+        squad, {5: _squad_15()}, ["wildcard"],
+    )
+    assert "breaks" not in result
+
+
 def test_orchestrator_threads_chips_played_to_chip_agent(monkeypatch):
     """The orchestrator must not silently treat every chip as available: it
     has to forward the context's chips_played through to run_chip_agent so
