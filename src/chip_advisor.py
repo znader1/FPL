@@ -8,6 +8,7 @@ The LLM explainer (Layer 3) can later wrap this output into natural language.
 """
 from __future__ import annotations
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 import pandas as pd
@@ -85,9 +86,10 @@ class ChipRecommendation:
     confidence: float       # 0..1
     reasoning: list[str] = field(default_factory=list)
     risks: list[str] = field(default_factory=list)
+    haul_prob: float | None = None   # TC only: P(captain gets 2+ goal involvements)
 
     def to_dict(self) -> dict:
-        return {
+        out = {
             "chip": self.chip,
             "gw": self.gw,
             "expected_value": round(float(self.expected_value), 2),
@@ -95,6 +97,9 @@ class ChipRecommendation:
             "reasoning": list(self.reasoning),
             "risks": list(self.risks),
         }
+        if self.haul_prob is not None:
+            out["haul_prob"] = round(float(self.haul_prob), 3)
+        return out
 
 
 # ---------- helpers ----------
@@ -126,14 +131,20 @@ def _pick_best_xi(squad_with_xpts: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([starting, s.loc[extra]], ignore_index=False)
 
 
-def _pick_captain_xpts(starting_xi: pd.DataFrame) -> float:
-    """Return xPts of the best captain candidate (favor FWD/MID slightly)."""
+def _pick_captain_row(starting_xi: pd.DataFrame):
+    """Row of the best captain candidate (position-weighted, favor FWD/MID)."""
     if starting_xi.empty:
-        return 0.0
+        return None
     cap_mult = {"FWD": 1.16, "MID": 1.12, "DEF": 0.92, "GKP": 0.70}
     s = starting_xi.copy()
     s["_score"] = s["xpts"] * s["pos"].map(cap_mult).fillna(1.0)
-    return float(s.sort_values("_score", ascending=False).iloc[0]["xpts"])
+    return s.sort_values("_score", ascending=False).iloc[0]
+
+
+def _pick_captain_xpts(starting_xi: pd.DataFrame) -> float:
+    """Return xPts of the best captain candidate (favor FWD/MID slightly)."""
+    row = _pick_captain_row(starting_xi)
+    return 0.0 if row is None else float(row["xpts"])
 
 
 def _clip_market_xpts(market: pd.DataFrame, col: str = "xpts") -> pd.DataFrame:
@@ -186,6 +197,8 @@ def score_triple_captain(
     squad: pd.DataFrame,
     gw_projections: dict[int, pd.DataFrame],
     candidate_gws: list[int],
+    xgi_per90: dict[int, float] | None = None,
+    team_difficulty_by_gw: dict[int, dict[str, float]] | None = None,
 ) -> list[ChipRecommendation]:
     """
     For each candidate GW, find the best captain in the squad and compute the
@@ -210,7 +223,7 @@ def score_triple_captain(
         uplift = best_cap_xpts
 
         # Detect DGW for the captain — bigger TC value if captain plays twice
-        captain_row = xi.sort_values("xpts", ascending=False).iloc[0]
+        captain_row = _pick_captain_row(xi)
         is_dgw = int(captain_row.get("fixture_count", 1)) >= 2
 
         reasoning = []
@@ -224,6 +237,20 @@ def score_triple_captain(
         if best_cap_xpts < 5.0:
             risks.append("Captain projection below 5 pts — high blank risk")
 
+        haul_prob = None
+        if xgi_per90:
+            per90 = float(xgi_per90.get(int(captain_row["player_id"]), 0.0) or 0.0)
+            if per90 > 0:
+                dmap = (team_difficulty_by_gw or {}).get(gw) or {}
+                d = dmap.get(captain_row.get("team"))
+                mult_map = getattr(config, "CHIP_PLAN_TC_DIFF_MULT", {})
+                mult = float(mult_map.get(int(round(d)), 1.0)) if d is not None else 1.0
+                n_fix = max(1, int(captain_row.get("fixture_count", 1)))
+                lam = per90 * mult * n_fix
+                haul_prob = 1.0 - math.exp(-lam) * (1.0 + lam)
+                reasoning.append(
+                    f"~{haul_prob:.0%} chance of a 2+ goal-involvement haul")
+
         recs.append(ChipRecommendation(
             chip="triple_captain",
             gw=gw,
@@ -231,6 +258,7 @@ def score_triple_captain(
             confidence=0.6 + (0.3 if is_dgw else 0) + (0.1 if best_cap_xpts > 8 else 0),
             reasoning=reasoning,
             risks=risks,
+            haul_prob=haul_prob,
         ))
     return recs
 
@@ -290,6 +318,7 @@ def score_free_hit(
     gw_projections: dict[int, pd.DataFrame],
     candidate_gws: list[int],
     budget_m: float,
+    team_difficulty_by_gw: dict[int, dict[str, float]] | None = None,
 ) -> list[ChipRecommendation]:
     """
     FH value = (best possible XI for that GW within budget) - (your normal XI for that GW)
@@ -356,17 +385,34 @@ def score_free_hit(
         # Detect BGW: many squad players with no fixture
         n_blanking = int((squad_with_xpts["fixture_count"] == 0).sum())
 
+        # Tough-pileup OR-path: many squad players facing hard fixtures this GW
+        n_tough = 0
+        if team_difficulty_by_gw:
+            dmap = team_difficulty_by_gw.get(gw) or {}
+            tough_at = float(getattr(config, "CHIP_PLAN_FH_TOUGH_DIFFICULTY", 4.0))
+            n_tough = int(sum(
+                1 for t in squad_with_xpts["team"].tolist()
+                if dmap.get(t) is not None and float(dmap[t]) >= tough_at))
+
         min_blanking = int(getattr(config, "CHIP_PLAN_FH_MIN_BLANKING", 3))
-        if n_blanking < min_blanking:
-            continue  # ordinary week — hold FH for a genuine blank-heavy GW
+        min_tough = int(getattr(config, "CHIP_PLAN_FH_MIN_TOUGH", 6))
+        blank_trigger = n_blanking >= min_blanking
+        tough_trigger = n_tough >= min_tough
+        if not blank_trigger and not tough_trigger:
+            continue  # ordinary week — hold FH for a blank- or tough-heavy GW
 
         reasoning = [
             f"Your normal XI projected: {normal_xi_xpts:.1f} xPts",
             f"Best FH XI projected: {fh_xi_xpts:.1f} xPts"
             + (" [unbudgeted proxy — optimizer fallback]" if fallback_used else " (budget-constrained)"),
             f"FH uplift: +{uplift:.1f} xPts",
-            f"{n_blanking} squad players blanking — strong FH candidate",
         ]
+        if blank_trigger:
+            reasoning.append(f"{n_blanking} squad players blanking — strong FH candidate")
+        if tough_trigger:
+            tough_at = float(getattr(config, "CHIP_PLAN_FH_TOUGH_DIFFICULTY", 4.0))
+            reasoning.append(
+                f"{n_tough} of your 15 face difficulty ≥{tough_at:.1f} in GW{gw}")
 
         risks = []
         if uplift < 5:
@@ -376,7 +422,8 @@ def score_free_hit(
             chip="free_hit",
             gw=gw,
             expected_value=uplift,
-            confidence=0.4 + (0.4 if n_blanking >= 3 else 0) + (0.2 if uplift > 15 else 0),
+            confidence=0.4 + (0.4 if (blank_trigger or tough_trigger) else 0)
+                       + (0.2 if uplift > 15 else 0),
             reasoning=reasoning,
             risks=risks,
         ))
@@ -529,6 +576,9 @@ def recommend_chips(
     gws_ahead: int = 10,
     bank_m: float = 0.0,
     transfer_plan_net_gain: float = 0.0,
+    breaks: dict[int, dict] | None = None,
+    xgi_per90: dict[int, float] | None = None,
+    team_difficulty_by_gw: dict[int, dict[str, float]] | None = None,
 ) -> list[ChipRecommendation]:
     """
     Main entry point. Returns ranked list of (chip, gw, value, reasoning) for
@@ -543,11 +593,17 @@ def recommend_chips(
 
     all_recs = []
     if "triple_captain" in chips_remaining:
-        all_recs.extend(score_triple_captain(squad, gw_projections, candidate_gws))
+        all_recs.extend(score_triple_captain(
+            squad, gw_projections, candidate_gws,
+            xgi_per90=xgi_per90, team_difficulty_by_gw=team_difficulty_by_gw,
+        ))
     if "bench_boost" in chips_remaining:
         all_recs.extend(score_bench_boost(squad, gw_projections, candidate_gws))
     if "free_hit" in chips_remaining:
-        all_recs.extend(score_free_hit(squad, gw_projections, candidate_gws, bank_m))
+        all_recs.extend(score_free_hit(
+            squad, gw_projections, candidate_gws, bank_m,
+            team_difficulty_by_gw=team_difficulty_by_gw,
+        ))
     if "wildcard" in chips_remaining:
         all_recs.extend(score_wildcard(
             squad, gw_projections, candidate_gws,
@@ -555,6 +611,17 @@ def recommend_chips(
             transfer_plan_net_gain=transfer_plan_net_gain,
             budget_m=bank_m,
         ))
+
+    if breaks:
+        mult = float(getattr(config, "CHIP_PLAN_BREAK_CONFIDENCE_MULT", 0.85))
+        for r in all_recs:
+            if r.gw in breaks:
+                r.confidence *= mult
+                r.reasoning.append(
+                    "First GW after international break — elevated injury/rotation uncertainty")
+                if r.chip == "triple_captain":
+                    r.risks.append(
+                        "Late fitness flags after the break hit TC hardest — confirm lineups first")
 
     # Sort by expected value (descending), filter out zero-value
     return sorted(
@@ -573,6 +640,10 @@ def build_chip_plan(
     fixtures: pd.DataFrame | None = None,
     transfer_plan: dict | None = None,
     horizon_gws: int | None = None,
+    breaks: dict[int, dict] | None = None,
+    team_difficulty_by_gw: dict[int, dict[str, float]] | None = None,
+    swings: list[dict] | None = None,
+    xgi_per90: dict[int, float] | None = None,
 ) -> dict:
     """Assemble the full chip plan payload: model-zone EV recommendations,
     structural provisional windows, next-GW nudge, and transfer context."""
@@ -593,6 +664,9 @@ def build_chip_plan(
         gws_ahead=horizon - 1,
         bank_m=budget_m,
         transfer_plan_net_gain=plan_net_gain,
+        breaks=breaks,
+        xgi_per90=xgi_per90,
+        team_difficulty_by_gw=team_difficulty_by_gw,
     )
 
     recommendations = []
@@ -621,10 +695,22 @@ def build_chip_plan(
             "reasons": list(best.reasoning) + [f"Risk: {r}" for r in best.risks],
             "ev_curve": curve,
         }
+        if best.haul_prob is not None:
+            rec["haul_prob"] = round(float(best.haul_prob), 3)
+        if swings and chip in ("wildcard", "triple_captain"):
+            near = [s for s in swings
+                    if s.get("direction") == "easier"
+                    and abs(int(s.get("gw", 0)) - rec["event_id"]) <= 1]
+            if near:
+                names = ", ".join(sorted(
+                    s.get("team_short") or s.get("team", "?") for s in near)[:3])
+                rec["reasons"].append(
+                    f"Fixture swing: {names} turn easier around GW{rec['event_id']}")
         recommendations.append(rec)
         if rec["event_id"] == current_gw and rec["ev_gain"] >= nudge_floor:
             if nudge is None or rec["ev_gain"] > nudge["ev_gain"]:
-                nudge = {"chip": chip, "event_id": current_gw, "ev_gain": rec["ev_gain"]}
+                nudge = {"chip": chip, "event_id": current_gw, "ev_gain": rec["ev_gain"],
+                         "wait_for_team_news": bool(breaks and current_gw in breaks)}
 
     # Structural zone: announced DGWs/BGWs beyond the model horizon, up to expiry.
     if fixtures is not None and not fixtures.empty:

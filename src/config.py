@@ -277,6 +277,11 @@ CHIP_PLAN_XPTS_CLAMP_BY_POS = {"GKP": 7.0, "DEF": 8.0, "MID": 12.0, "FWD": 13.0}
 CHIP_PLAN_BLANK_TEAM_THRESHOLD = 14  # structural zone: <= this many teams playing = blank-heavy GW
 BREAK_GAP_DAYS = 10.0           # deadline-to-deadline gap marking a post-international-break GW
 CHIP_PLAN_BREAK_CONFIDENCE_MULT = 0.85  # confidence haircut on recs targeting a post-break GW
+CHIP_PLAN_FH_MIN_TOUGH = 6      # squad players on tough fixtures that open the FH gate
+CHIP_PLAN_FH_TOUGH_DIFFICULTY = 4.0  # ticker difficulty counting as "tough"
+# Difficulty→multiplier for the TC haul-prob lambda (mirrors the projection
+# engine's FDR multipliers; keyed on round(difficulty)).
+CHIP_PLAN_TC_DIFF_MULT = {1: 1.25, 2: 1.12, 3: 1.0, 4: 0.88, 5: 0.75}
 
 # Fixture swing detection (src/fixture_difficulty.py -> compute_fixture_swings)
 SWING_WINDOW_GWS = 3            # fixture-swing comparison window (before vs after)

@@ -1,5 +1,8 @@
+import math
+
 import pandas as pd
 
+from src import config
 from src.chip_advisor import chip_windows, team_fixture_counts, _clip_market_xpts
 
 
@@ -350,3 +353,156 @@ def test_clip_unknown_pos_uses_flat_clamp():
     market = pd.DataFrame({"player_id": [1], "pos": ["???"], "xpts": [12.0]})
     out = _clip_market_xpts(market)
     assert out["xpts"].tolist() == [9.0]
+
+
+# ---------------------------------------------------------------------------
+# Task 4: new signals threaded through the chip engine
+#
+# NOTE: the brief's shared builder is named `_squad_15(team="Arsenal")`, which
+# would clobber the existing `_squad_15(prefix="own", xpts=2.0)` defined above
+# in this same module (Python resolves the module-level name at call time, so
+# every earlier test calling `_squad_15(prefix=..., xpts=...)` would break).
+# Renamed to `_squad_15_single_team` here; all new call sites below use the
+# renamed helper.
+# ---------------------------------------------------------------------------
+
+from src.chip_advisor import (
+    build_chip_plan, score_free_hit, score_triple_captain, recommend_chips,
+)
+
+
+def _squad_15_single_team(team="Arsenal"):
+    """Minimal legal 15: 2 GKP / 5 DEF / 5 MID / 3 FWD, one team name."""
+    pos = ["GKP"] * 2 + ["DEF"] * 5 + ["MID"] * 5 + ["FWD"] * 3
+    return pd.DataFrame({
+        "player_id": range(1, 16),
+        "name": [f"P{i}" for i in range(1, 16)],
+        "pos": pos,
+        "team": [team] * 15,
+        "price_m": [5.0] * 15,
+    })
+
+
+def _market_for(squad, gw_xpts=4.0, fixture_count=1, extra_rows=40):
+    """Market containing the squad plus a filler pool of outside players."""
+    rows = squad.copy()
+    rows["xpts"] = gw_xpts
+    rows["fixture_count"] = fixture_count
+    pool_pos = (["GKP", "DEF", "MID", "FWD"] * (extra_rows // 4 + 1))[:extra_rows]
+    pool = pd.DataFrame({
+        "player_id": range(100, 100 + extra_rows),
+        "name": [f"M{i}" for i in range(extra_rows)],
+        "pos": pool_pos,
+        "team": [f"T{i % 8}" for i in range(extra_rows)],
+        "price_m": [5.0] * extra_rows,
+        "xpts": [6.0] * extra_rows,
+        "fixture_count": [1] * extra_rows,
+    })
+    return pd.concat([rows, pool], ignore_index=True)
+
+
+# ---- FH tough-pileup gate ----
+
+def test_fh_tough_pileup_opens_gate_without_blanks():
+    squad = _squad_15_single_team(team="Arsenal")
+    market = _market_for(squad, gw_xpts=2.0)  # squad weak this GW, market strong
+    diff = {5: {"Arsenal": 4.5}}              # all 15 face difficulty 4.5
+    recs = score_free_hit(squad, {5: market}, [5], budget_m=100.0,
+                          team_difficulty_by_gw=diff)
+    assert len(recs) == 1
+    assert any("difficulty" in r for r in recs[0].reasoning)
+
+
+def test_fh_gate_still_closed_on_ordinary_week():
+    squad = _squad_15_single_team(team="Arsenal")
+    market = _market_for(squad, gw_xpts=2.0)
+    diff = {5: {"Arsenal": 2.5}}              # easy fixtures — no trigger
+    recs = score_free_hit(squad, {5: market}, [5], budget_m=100.0,
+                          team_difficulty_by_gw=diff)
+    assert recs == []
+
+
+def test_fh_no_difficulty_map_falls_back_to_blank_gate_only():
+    squad = _squad_15_single_team(team="Arsenal")
+    market = _market_for(squad, gw_xpts=2.0)
+    recs = score_free_hit(squad, {5: market}, [5], budget_m=100.0,
+                          team_difficulty_by_gw=None)
+    assert recs == []  # no blanks, no map → today's behavior
+
+
+# ---- TC haul probability ----
+
+def test_tc_haul_prob_poisson_math():
+    squad = _squad_15_single_team(team="Arsenal")
+    market = _market_for(squad, gw_xpts=6.0)
+    xgi = {i: 0.0 for i in range(1, 16)}
+    xgi[13] = 0.9  # a FWD; neutral difficulty → lambda = 0.9
+    recs = score_triple_captain(squad, {5: market}, [5], xgi_per90=xgi,
+                                team_difficulty_by_gw={5: {"Arsenal": 3.0}})
+    lam = 0.9
+    expected = 1 - math.exp(-lam) * (1 + lam)
+    assert recs[0].haul_prob is not None
+    assert abs(recs[0].haul_prob - expected) < 1e-6
+    assert any("haul" in r for r in recs[0].reasoning)
+
+
+def test_tc_haul_prob_missing_xgi_omits_field():
+    squad = _squad_15_single_team(team="Arsenal")
+    market = _market_for(squad, gw_xpts=6.0)
+    recs = score_triple_captain(squad, {5: market}, [5])
+    assert recs[0].haul_prob is None
+    assert "haul_prob" not in recs[0].to_dict()
+
+
+def test_tc_haul_prob_dgw_sums_lambdas():
+    squad = _squad_15_single_team(team="Arsenal")
+    market = _market_for(squad, gw_xpts=6.0, fixture_count=2)
+    xgi = {13: 0.9}
+    recs = score_triple_captain(squad, {5: market}, [5], xgi_per90=xgi,
+                                team_difficulty_by_gw={5: {"Arsenal": 3.0}})
+    lam = 0.9 * 2
+    expected = 1 - math.exp(-lam) * (1 + lam)
+    assert abs(recs[0].haul_prob - expected) < 1e-6
+
+
+# ---- break haircut + nudge flag ----
+
+def test_break_haircut_and_reason_applied():
+    squad = _squad_15_single_team(team="Arsenal")
+    market = _market_for(squad, gw_xpts=6.0)
+    base = recommend_chips(squad, 5, {5: market}, ["triple_captain"], gws_ahead=0)
+    hair = recommend_chips(squad, 5, {5: market}, ["triple_captain"], gws_ahead=0,
+                           breaks={5: {"gap_days": 14.0, "prev_event": 4}})
+    assert hair[0].confidence < base[0].confidence
+    assert abs(hair[0].confidence - base[0].confidence * 0.85) < 1e-6
+    assert any("international break" in r for r in hair[0].reasoning)
+
+
+def test_nudge_wait_for_team_news_flag(monkeypatch):
+    squad = _squad_15_single_team(team="Arsenal")
+    market = _market_for(squad, gw_xpts=8.0)
+    # Force TC over the min-EV bar for a current-GW nudge
+    monkeypatch.setattr(config, "CHIP_PLAN_MIN_EV",
+                        {**config.CHIP_PLAN_MIN_EV, "triple_captain": 1.0})
+    plan_no_break = build_chip_plan(
+        squad, 5, {5: market}, chips_played=[], breaks={})
+    plan_break = build_chip_plan(
+        squad, 5, {5: market}, chips_played=[],
+        breaks={5: {"gap_days": 14.0, "prev_event": 4}})
+    assert plan_no_break["nudge"]["wait_for_team_news"] is False
+    assert plan_break["nudge"]["wait_for_team_news"] is True
+
+
+# ---- swing reasons ----
+
+def test_wildcard_rec_names_easier_swings(monkeypatch):
+    squad = _squad_15_single_team(team="Arsenal")
+    markets = {g: _market_for(squad, gw_xpts=2.0) for g in range(5, 9)}
+    monkeypatch.setattr(config, "CHIP_PLAN_MIN_EV",
+                        {**config.CHIP_PLAN_MIN_EV, "wildcard": 1.0})
+    swings = [{"team": "T1", "team_short": "T1", "gw": 5, "delta": 1.2,
+               "direction": "easier"}]
+    plan = build_chip_plan(squad, 5, markets, chips_played=[], swings=swings)
+    wc = next((r for r in plan["recommendations"] if r["chip"] == "wildcard"), None)
+    assert wc is not None
+    assert any("swing" in reason.lower() for reason in wc["reasons"])
