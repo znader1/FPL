@@ -269,6 +269,8 @@ CHIP_PLAN_NUDGE_MIN_EV = 4.0    # floor for the next-GW nudge surface
 CHIP_PLAN_FH_MIN_BLANKING = 3   # FH model-zone rec suppressed below this many squad blanks
 CHIP_PLAN_XPTS_CLAMP = 9.0      # stopgap clip on WC/FH dream-squad market xPts (outlier projections bug)
 CHIP_PLAN_BLANK_TEAM_THRESHOLD = 14  # structural zone: <= this many teams playing = blank-heavy GW
+BREAK_GAP_DAYS = 10.0           # deadline-to-deadline gap marking a post-international-break GW
+CHIP_PLAN_BREAK_CONFIDENCE_MULT = 0.85  # confidence haircut on recs targeting a post-break GW
 
 # -----------------------------
 # Chip strategy tuning
