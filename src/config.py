@@ -268,6 +268,12 @@ CHIP_PLAN_EXPIRY_RAMP_GWS = 5   # threshold decays linearly to 0 over the last N
 CHIP_PLAN_NUDGE_MIN_EV = 4.0    # floor for the next-GW nudge surface
 CHIP_PLAN_FH_MIN_BLANKING = 3   # FH model-zone rec suppressed below this many squad blanks
 CHIP_PLAN_XPTS_CLAMP = 9.0      # stopgap clip on WC/FH dream-squad market xPts (outlier projections bug)
+# Position-aware dream-squad clamp. The flat CHIP_PLAN_XPTS_CLAMP treated a
+# promoted-team DEF outlier pinned at 9.0 as equal to a genuinely elite FWD
+# also pinned at 9.0, so WC drafts picked the junk on price. Legit single-GW
+# ceilings differ sharply by position; flat clamp remains the fallback when a
+# market has no `pos` column.
+CHIP_PLAN_XPTS_CLAMP_BY_POS = {"GKP": 7.0, "DEF": 8.0, "MID": 12.0, "FWD": 13.0}
 CHIP_PLAN_BLANK_TEAM_THRESHOLD = 14  # structural zone: <= this many teams playing = blank-heavy GW
 BREAK_GAP_DAYS = 10.0           # deadline-to-deadline gap marking a post-international-break GW
 CHIP_PLAN_BREAK_CONFIDENCE_MULT = 0.85  # confidence haircut on recs targeting a post-break GW

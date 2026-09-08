@@ -1,6 +1,6 @@
 import pandas as pd
 
-from src.chip_advisor import chip_windows, team_fixture_counts
+from src.chip_advisor import chip_windows, team_fixture_counts, _clip_market_xpts
 
 
 def test_chip_windows_all_available_when_none_played():
@@ -324,3 +324,29 @@ def test_orchestrator_threads_chips_played_to_chip_agent(monkeypatch):
 
     assert result == "ok"
     assert captured["chips_played"] == already_played
+
+
+def test_clip_position_aware_caps():
+    market = pd.DataFrame({
+        "player_id": [1, 2, 3, 4],
+        "pos": ["GKP", "DEF", "MID", "FWD"],
+        "xpts": [13.5, 11.0, 11.5, 12.5],
+    })
+    out = _clip_market_xpts(market)
+    got = dict(zip(out["player_id"], out["xpts"]))
+    assert got[1] == 7.0     # cheap-GKP outlier capped hard
+    assert got[2] == 8.0     # DEF spike capped
+    assert got[3] == 11.5    # premium MID survives under 12.0 cap
+    assert got[4] == 12.5    # premium FWD survives under 13.0 cap
+
+
+def test_clip_flat_fallback_without_pos_column():
+    market = pd.DataFrame({"player_id": [1, 2], "xpts": [13.5, 5.0]})
+    out = _clip_market_xpts(market)
+    assert out["xpts"].tolist() == [9.0, 5.0]
+
+
+def test_clip_unknown_pos_uses_flat_clamp():
+    market = pd.DataFrame({"player_id": [1], "pos": ["???"], "xpts": [12.0]})
+    out = _clip_market_xpts(market)
+    assert out["xpts"].tolist() == [9.0]

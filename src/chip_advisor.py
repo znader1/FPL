@@ -149,13 +149,20 @@ def _clip_market_xpts(market: pd.DataFrame, col: str = "xpts") -> pd.DataFrame:
     This is a stopgap on the MARKET side of a chip comparison only — the
     user's own squad valuation (`normal_total` / `normal_xi_xpts`) is never
     clamped, since that's a real read of what the user's squad is worth, not
-    a dream-squad search over noisy candidates.
+    a dream-squad search over noisy candidates. Caps are position-aware when
+    a `pos` column is present, otherwise falls back to a flat clamp.
     """
     if market is None or col not in market.columns:
         return market
-    clamp = float(getattr(config, "CHIP_PLAN_XPTS_CLAMP", 9.0))
+    flat = float(getattr(config, "CHIP_PLAN_XPTS_CLAMP", 9.0))
+    by_pos = getattr(config, "CHIP_PLAN_XPTS_CLAMP_BY_POS", None)
     out = market.copy()
-    out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0).clip(upper=clamp)
+    xp = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
+    if by_pos and "pos" in out.columns:
+        caps = out["pos"].map(by_pos).fillna(flat).astype(float)
+        out[col] = np.minimum(xp, caps)
+    else:
+        out[col] = xp.clip(upper=flat)
     return out
 
 
