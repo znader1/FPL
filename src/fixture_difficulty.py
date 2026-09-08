@@ -703,6 +703,55 @@ def build_fixture_ticker(ratings, fixtures, teams_short_map, gw_start, horizon_g
     }
 
 
+def compute_fixture_swings(ticker, window=None, min_delta=None):
+    """Detect per-team fixture swings in a ``build_fixture_ticker`` payload.
+
+    A swing at GW t means the team's average difficulty over [t, t+window)
+    differs from its average over [t-window, t) by at least ``min_delta``.
+    Blank cells count as neutral 3.0 (mirrors the ticker's own convention).
+    GWs without a full window on both sides are skipped. Only the strongest
+    event per team per direction is kept, so a long run doesn't spam
+    near-identical adjacent events.
+
+    Returns [{team_id, team_short, gw, delta, direction}] with delta > 0
+    meaning the run gets easier ("easier") and < 0 harder ("harder");
+    the emitted delta is the absolute magnitude, direction carries the sign.
+    """
+    window = int(window if window is not None else getattr(config, "SWING_WINDOW_GWS", 3))
+    min_delta = float(min_delta if min_delta is not None
+                      else getattr(config, "SWING_MIN_DELTA", 0.8))
+    gws = list(ticker.get("gws") or [])
+    events = []
+    for row in ticker.get("teams") or []:
+        cells = row.get("gws") or {}
+        vals = {}
+        for gw in gws:
+            cell = cells.get(gw) or {}
+            d = cell.get("difficulty")
+            vals[gw] = 3.0 if d is None else float(d)
+        best = {}  # direction -> event
+        for t in gws:
+            before = [vals[g] for g in range(t - window, t) if g in vals]
+            after = [vals[g] for g in range(t, t + window) if g in vals]
+            if len(before) < window or len(after) < window:
+                continue
+            delta = float(np.mean(before) - np.mean(after))
+            if abs(delta) < min_delta:
+                continue
+            direction = "easier" if delta > 0 else "harder"
+            ev = {
+                "team_id": row.get("team_id"),
+                "team_short": row.get("team_short"),
+                "gw": t,
+                "delta": round(abs(delta), 2),
+                "direction": direction,
+            }
+            if direction not in best or ev["delta"] > best[direction]["delta"]:
+                best[direction] = ev
+        events.extend(best.values())
+    return events
+
+
 def team_ratings_table(ratings):
     """Flatten the ratings dict into a tidy DataFrame (excludes ``_league``)."""
     rows = []

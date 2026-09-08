@@ -272,6 +272,10 @@ CHIP_PLAN_BLANK_TEAM_THRESHOLD = 14  # structural zone: <= this many teams playi
 BREAK_GAP_DAYS = 10.0           # deadline-to-deadline gap marking a post-international-break GW
 CHIP_PLAN_BREAK_CONFIDENCE_MULT = 0.85  # confidence haircut on recs targeting a post-break GW
 
+# Fixture swing detection (src/fixture_difficulty.py -> compute_fixture_swings)
+SWING_WINDOW_GWS = 3            # fixture-swing comparison window (before vs after)
+SWING_MIN_DELTA = 0.8           # min avg-difficulty delta to call a swing
+
 # -----------------------------
 # Chip strategy tuning
 # -----------------------------
