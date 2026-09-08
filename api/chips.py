@@ -130,6 +130,10 @@ def _build_plan_response(entry_id: int, current_gw: int, model_horizon: int):
             for s in compute_fixture_swings(ticker)
         ]
     except Exception as e:  # noqa: BLE001 — signals must never fail the plan
+        # All-or-nothing: a failure part-way through (e.g. the ticker call,
+        # after breaks/xGI were already assigned) must not hand the engine a
+        # mix of populated and missing signals — reset to the no-signals path.
+        breaks = team_difficulty_by_gw = swings = xgi_per90 = None
         logger.warning("chip strategy signals unavailable: %s", e)
 
     plan = build_chip_plan(

@@ -170,3 +170,58 @@ def test_plan_response_carries_new_optional_keys(monkeypatch):
     assert nudge["wait_for_team_news"] is True, (
         "breaks wiring did not reach build_chip_plan's nudge")
     app.dependency_overrides = {}
+
+
+def test_signal_failure_resets_all_signals(monkeypatch):
+    """A failure part-way through signal building (here: the ticker call,
+    which runs AFTER breaks/xGI are assigned) must reset all four signals to
+    None — the engine gets the no-signals path, never a populated/missing
+    mix. Same break+xGI fixtures as the success test above, so the only
+    difference is the ticker raising: if any signal leaked through, the TC
+    rec would carry haul_prob and the nudge would flag wait_for_team_news."""
+    from api.main import app
+    from api import chips as chips_module
+    import api.main as main_module
+    from src.auth import require_user
+
+    current_gw = 5
+
+    def _fake_bootstrap():
+        base = pd.Timestamp("2026-08-01T18:00:00Z")
+        events = []
+        for eid in range(1, 8):
+            gap = 14 if eid == current_gw else 7
+            if eid > 1:
+                base = base + pd.Timedelta(days=gap)
+            events.append({"id": eid, "deadline_time": base.isoformat()})
+        teams = [{"id": 3, "name": "T3"}]
+        elements = [{"id": pid, "expected_goals_per_90": 0.6, "expected_assists_per_90": 0.3}
+                    for pid in range(1, 16)]
+        return {"events": events, "teams": teams, "elements": elements}
+
+    def _raising_ticker(gw_start=None, horizon_gws=6):
+        raise RuntimeError("ticker unavailable")
+
+    monkeypatch.setattr(chips_module, "_build_context_for_entry", _fake_context_with_boosted_captain)
+    monkeypatch.setattr(chips_module, "_get_entry_chips", lambda entry_id: [])
+    monkeypatch.setattr(chips_module, "_resolve_current_gw", lambda: current_gw)
+    monkeypatch.setattr(chips_module.fpl_client, "get_bootstrap", _fake_bootstrap)
+    monkeypatch.setattr(main_module, "build_fixture_difficulty_payload", _raising_ticker)
+
+    app.dependency_overrides = {}
+    app.dependency_overrides[require_user] = lambda: {"sub": "test-user"}
+    client = TestClient(app)
+    resp = client.get("/chips/plan", params={"entry_id": 1})
+    assert resp.status_code == 200, "signal failure must never fail the plan"
+    body = resp.json()
+
+    # breaks were assigned before the ticker raised — the reset must wipe them
+    nudge = body.get("nudge")
+    assert nudge is not None and nudge.get("chip") == "triple_captain"
+    assert nudge["wait_for_team_news"] is False, (
+        "breaks leaked through a partial signal failure")
+    # xgi_per90 was assigned before the ticker raised — reset must wipe it too
+    tc_recs = [r for r in body["recommendations"] if r.get("chip") == "triple_captain"]
+    assert tc_recs and "haul_prob" not in tc_recs[0], (
+        "xgi_per90 leaked through a partial signal failure")
+    app.dependency_overrides = {}
