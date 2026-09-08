@@ -12,6 +12,31 @@ def _clear_plan_cache():
     _chips_module._plan_cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def _clear_bootstrap_cache():
+    """api.main.get_bootstrap_cached holds a process-wide TTL cache (keyed
+    on wall-clock time, not per-test). A real or fake fetch in one test can
+    otherwise leak into a later test's assertions — reset before/after every
+    test in this module so each test's own bootstrap stub is what actually
+    gets returned."""
+    import api.main as _main_module
+    _main_module._bootstrap_cache["data"] = None
+    _main_module._bootstrap_cache["ts"] = 0.0
+    yield
+    _main_module._bootstrap_cache["data"] = None
+    _main_module._bootstrap_cache["ts"] = 0.0
+
+
+def _network_disabled_bootstrap():
+    """Stub for fpl_client.get_bootstrap in tests that don't exercise the
+    strategy signals. Raising — rather than faking a full bootstrap/ticker —
+    proves the signal block's fail-soft try/except isolates a broken
+    bootstrap fetch without ever reaching the live FPL API, and makes
+    build_fixture_difficulty_payload (which runs after it in the try block)
+    unreachable."""
+    raise RuntimeError("network disabled in tests")
+
+
 def _fake_context(entry_id, current_gw, horizon=5):
     rows, pid = [], 1
     for pos, n in (("GKP", 2), ("DEF", 5), ("MID", 5), ("FWD", 3)):
@@ -50,6 +75,7 @@ def test_chips_plan_is_cached_within_ttl(monkeypatch):
     monkeypatch.setattr(chips_module, "_build_context_for_entry", _counting_context)
     monkeypatch.setattr(chips_module, "_get_entry_chips", lambda entry_id: [])
     monkeypatch.setattr(chips_module, "_resolve_current_gw", lambda: 5)
+    monkeypatch.setattr(chips_module.fpl_client, "get_bootstrap", _network_disabled_bootstrap)
     app.dependency_overrides[require_user] = lambda: {"sub": "test-user"}
     client = TestClient(app)
     r1 = client.get("/chips/plan?entry_id=321")
@@ -67,6 +93,7 @@ def test_chips_plan_route(monkeypatch):
     monkeypatch.setattr(chips_module, "_build_context_for_entry", _fake_context)
     monkeypatch.setattr(chips_module, "_get_entry_chips", lambda entry_id: [])
     monkeypatch.setattr(chips_module, "_resolve_current_gw", lambda: 5)
+    monkeypatch.setattr(chips_module.fpl_client, "get_bootstrap", _network_disabled_bootstrap)
     app.dependency_overrides = {}
     # require_user is applied at include_router time; override it
     from src.auth import require_user

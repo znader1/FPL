@@ -550,3 +550,52 @@ def test_wildcard_rec_names_easier_swings(monkeypatch):
     wc = next((r for r in plan["recommendations"] if r["chip"] == "wildcard"), None)
     assert wc is not None
     assert any("swing" in reason.lower() for reason in wc["reasons"])
+
+
+def test_tc_swing_reason_filtered_to_captain_team(monkeypatch):
+    """A TC rec should only cite a fixture swing when the swing's team is the
+    recommended captain's own team — a swing elsewhere in the league is not
+    a reason to triple-captain this player."""
+    squad = _squad_15_single_team(team="Arsenal")
+    market = _market_for(squad, gw_xpts=8.0)
+    monkeypatch.setattr(config, "CHIP_PLAN_MIN_EV",
+                        {**config.CHIP_PLAN_MIN_EV, "triple_captain": 1.0})
+
+    swings_other_team = [{"team": "Chelsea", "team_short": "CHE", "gw": 5,
+                           "delta": 1.2, "direction": "easier"}]
+    plan_other = build_chip_plan(squad, 5, {5: market}, chips_played=[],
+                                 swings=swings_other_team)
+    tc_other = next(r for r in plan_other["recommendations"] if r["chip"] == "triple_captain")
+    assert not any("swing" in reason.lower() for reason in tc_other["reasons"])
+
+    swings_captain_team = [{"team": "Arsenal", "team_short": "ARS", "gw": 5,
+                             "delta": 1.2, "direction": "easier"}]
+    plan_captain = build_chip_plan(squad, 5, {5: market}, chips_played=[],
+                                   swings=swings_captain_team)
+    tc_captain = next(r for r in plan_captain["recommendations"] if r["chip"] == "triple_captain")
+    assert any("swing" in reason.lower() for reason in tc_captain["reasons"])
+
+
+# ---- confidence surfaced in the rec payload (finding 1) ----
+
+def test_build_chip_plan_confidence_key_and_break_haircut(monkeypatch):
+    """The rec dict must carry a `confidence` key (so `agents/chip_agent.md`'s
+    "confidence >= 0.6" gating step has a field to read), and a break haircut
+    on the underlying ChipRecommendation must lower it."""
+    squad = _squad_15_single_team(team="Arsenal")
+    market = _market_for(squad, gw_xpts=8.0)
+    monkeypatch.setattr(config, "CHIP_PLAN_MIN_EV",
+                        {**config.CHIP_PLAN_MIN_EV, "triple_captain": 1.0})
+
+    plan_no_break = build_chip_plan(squad, 5, {5: market}, chips_played=[], breaks={})
+    plan_break = build_chip_plan(
+        squad, 5, {5: market}, chips_played=[],
+        breaks={5: {"gap_days": 14.0, "prev_event": 4}})
+
+    tc_no_break = next(r for r in plan_no_break["recommendations"] if r["chip"] == "triple_captain")
+    tc_break = next(r for r in plan_break["recommendations"] if r["chip"] == "triple_captain")
+
+    assert "confidence" in tc_no_break
+    assert "confidence" in tc_break
+    assert tc_break["confidence"] < tc_no_break["confidence"]
+    assert abs(tc_break["confidence"] - round(tc_no_break["confidence"] * 0.85, 2)) < 1e-6
