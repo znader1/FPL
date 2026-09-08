@@ -36,8 +36,8 @@ release (backend Fly + frontend Vercel) before the next deadline.
 ## Non-goals
 
 - No changes to projection math (`projections.py` xPts) — approach B (variance modelling,
-  dynamic thresholds) rejected for mid-season regression risk. Exception: the outlier
-  bug fix in Section 4 is a bug fix, not a model change.
+  dynamic thresholds) rejected for mid-season regression risk. Section 4's clamp change
+  lives entirely in `chip_advisor._clip_market_xpts` (dream-squad side only).
 - No full event-level xPts decomposition (Poisson goals/assists/CS replacing blended
   xPts) — correct long-term direction, but a separate project with its own backtest
   cycle. `haul_prob` is annotation-only groundwork for it.
@@ -122,22 +122,28 @@ def compute_fixture_swings(ticker: dict, window: int = SWING_WINDOW_GWS,
 
 ## Section 4 — Triple captain scoring refinement
 
-Two problems for TC specifically:
+Two problems (corrected after code read — the clamp never touches the TC path;
+`score_triple_captain` merges raw market xPts, so TC already sees spike weeks):
 
-1. **The xPts clamp blinds TC to spike weeks.** `_clip_market_xpts` clamps every
-   player's GW xPts at `CHIP_PLAN_XPTS_CLAMP = 9.0` — a stopgap for a known projections
-   outlier bug. A genuine 10-12 xPts Haaland week (easy home fixture, DGW) is flattened
-   to 9.0, so TC EV cannot distinguish elite spike weeks from good-ordinary weeks.
-2. **No distribution view.** TC EV correctly uses mean xPts (linearity: E[extra captain
-   points] = E[score]), but two weeks with equal means can differ hugely in haul
-   probability. The planner should show that risk shape.
+1. **The flat clamp contaminates WC/FH dream squads.** `_clip_market_xpts` caps the
+   dream-squad market at a flat `CHIP_PLAN_XPTS_CLAMP = 9.0` — a stopgap for the known
+   promoted-team small-sample outlier bug. At a flat cap, clearly-wrong cheap spikes
+   (e.g. three Hull defenders pinned at 9.0) read as equally valuable as genuinely
+   elite premiums also pinned at 9.0, so the optimizer picks the junk on price. This is
+   why `CHIP_PLAN_MIN_EV["wildcard"]` had to be cranked to 120.
+2. **No distribution view for TC.** TC EV correctly uses mean xPts (linearity: E[extra
+   captain points] = E[score]), but two weeks with equal means can differ hugely in
+   haul probability. The planner should show that risk shape.
 
 **Changes:**
 
-- **Root-cause the outlier bug** behind the clamp (suspects: DGW summation,
-  `chance_of_playing` edge cases), fix it, then raise the clamp to a pure safety net:
-  `CHIP_PLAN_XPTS_CLAMP` default 15.0. The clamp stays as a guardrail, no longer as a
-  model correction.
+- **Position-aware clamp:** `CHIP_PLAN_XPTS_CLAMP_BY_POS = {"GKP": 7.0, "DEF": 8.0,
+  "MID": 12.0, "FWD": 13.0}` replaces the flat cap inside `_clip_market_xpts` (flat
+  `CHIP_PLAN_XPTS_CLAMP` remains the fallback when a market has no `pos` column).
+  Cheap-defender/GKP spikes get capped harder than today; premium attackers are no
+  longer flattened to 9.0, so WC drafts stop equating outlier junk with Haaland. The
+  root projections fix (promoted-team small-sample inflation) stays backlogged pending
+  an SP3 backtest, per CLAUDE.md.
 - **Haul-probability annotation** on TC recommendations: estimate the captain's expected
   goal involvements for the candidate GW from FPL per-player `expected_goals` +
   `expected_assists` per-90, scaled by the fixture factor already used in projections,
@@ -176,7 +182,8 @@ EV path unaffected.
 | `CHIP_PLAN_FH_TOUGH_DIFFICULTY` | 4.0 | Difficulty threshold counting as tough |
 | `SWING_WINDOW_GWS` | 3 | Swing comparison window |
 | `SWING_MIN_DELTA` | 0.8 | Min avg-difficulty delta to call a swing |
-| `CHIP_PLAN_XPTS_CLAMP` | 9.0 → 15.0 | Raised to safety-net level once outlier bug fixed |
+| `CHIP_PLAN_XPTS_CLAMP_BY_POS` | GKP 7.0, DEF 8.0, MID 12.0, FWD 13.0 | Position-aware dream-squad clamp (flat `CHIP_PLAN_XPTS_CLAMP` stays as fallback) |
+| `CHIP_PLAN_TC_DIFF_MULT` | {1: 1.25, 2: 1.12, 3: 1.0, 4: 0.88, 5: 0.75} | Difficulty→multiplier for haul-prob lambda |
 
 ## Testing
 
@@ -186,8 +193,10 @@ EV path unaffected.
   `tests/test_chip_advisor.py`; ticker-missing fallback.
 - **Unit — swings:** synthetic ticker with a known flip; below-threshold delta ignored;
   blanks handled.
-- **Unit — TC:** clamp regression (a 12-xPts spike week outranks a 9-xPts week after the
-  fix); haul_prob Poisson math on known lambdas; missing-xG fallback omits the field.
+- **Unit — clamp:** position-aware caps applied per pos; flat fallback without `pos`
+  column; a premium FWD at 12 xPts survives while a DEF spike is capped at 8.
+- **Unit — TC:** haul_prob Poisson math on known lambdas; missing-xG fallback omits the
+  field.
 - **Route:** `tests/test_chips_route.py` asserts `wait_for_team_news` and `haul_prob`
   passthrough.
 - **Frontend:** existing ChipRoadmapPanel/ChipNudgeCard tests from the branch + badge
