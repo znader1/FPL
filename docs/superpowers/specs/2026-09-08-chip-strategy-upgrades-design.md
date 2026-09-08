@@ -36,7 +36,11 @@ release (backend Fly + frontend Vercel) before the next deadline.
 ## Non-goals
 
 - No changes to projection math (`projections.py` xPts) — approach B (variance modelling,
-  dynamic thresholds) rejected for mid-season regression risk.
+  dynamic thresholds) rejected for mid-season regression risk. Exception: the outlier
+  bug fix in Section 4 is a bug fix, not a model change.
+- No full event-level xPts decomposition (Poisson goals/assists/CS replacing blended
+  xPts) — correct long-term direction, but a separate project with its own backtest
+  cycle. `haul_prob` is annotation-only groundwork for it.
 - No new pages; chips surface inside the existing RecommendationsPanel tab + nudge card.
 - No changes to chip EV formulas; new signals act through gates, confidence, and reasons.
 
@@ -116,7 +120,38 @@ def compute_fixture_swings(ticker: dict, window: int = SWING_WINDOW_GWS,
 - **Fixtures page (optional polish):** swing badges on the ticker rows. Ships only if
   frontend time allows; backend exposes swings regardless.
 
-## Section 4 — Frontend ship + release
+## Section 4 — Triple captain scoring refinement
+
+Two problems for TC specifically:
+
+1. **The xPts clamp blinds TC to spike weeks.** `_clip_market_xpts` clamps every
+   player's GW xPts at `CHIP_PLAN_XPTS_CLAMP = 9.0` — a stopgap for a known projections
+   outlier bug. A genuine 10-12 xPts Haaland week (easy home fixture, DGW) is flattened
+   to 9.0, so TC EV cannot distinguish elite spike weeks from good-ordinary weeks.
+2. **No distribution view.** TC EV correctly uses mean xPts (linearity: E[extra captain
+   points] = E[score]), but two weeks with equal means can differ hugely in haul
+   probability. The planner should show that risk shape.
+
+**Changes:**
+
+- **Root-cause the outlier bug** behind the clamp (suspects: DGW summation,
+  `chance_of_playing` edge cases), fix it, then raise the clamp to a pure safety net:
+  `CHIP_PLAN_XPTS_CLAMP` default 15.0. The clamp stays as a guardrail, no longer as a
+  model correction.
+- **Haul-probability annotation** on TC recommendations: estimate the captain's expected
+  goal involvements for the candidate GW from FPL per-player `expected_goals` +
+  `expected_assists` per-90, scaled by the fixture factor already used in projections,
+  then Poisson: `haul_prob = P(involvements >= 2)`. DGW candidate = sum of per-fixture
+  lambdas.
+  - Surfaced as a new additive field `haul_prob: float` on TC recommendations and a
+    reason string, e.g. `"~34% chance of a 2+ goal-involvement haul"`.
+  - EV stays mean-based; haul_prob informs, never re-ranks.
+- **Frontend:** show haul % on TC rows in ChipRoadmapPanel.
+
+**Failure mode:** missing per-player xG data → `haul_prob` omitted, reason skipped,
+EV path unaffected.
+
+## Section 5 — Frontend ship + release
 
 - Rebase/merge `feature/chip-planner-frontend` onto a main-based release branch:
   ChipRoadmapPanel, ChipNudgeCard, chips tab in RecommendationsPanel,
@@ -128,6 +163,7 @@ def compute_fixture_swings(ticker: dict, window: int = SWING_WINDOW_GWS,
 **API contract (additive only):**
 
 - `nudge` object: + optional `wait_for_team_news: bool`.
+- TC recommendations: + optional `haul_prob: float`.
 - No removals or renames; existing frontend branch code remains compatible.
 
 **Config additions (`src/config.py`):**
@@ -140,6 +176,7 @@ def compute_fixture_swings(ticker: dict, window: int = SWING_WINDOW_GWS,
 | `CHIP_PLAN_FH_TOUGH_DIFFICULTY` | 4.0 | Difficulty threshold counting as tough |
 | `SWING_WINDOW_GWS` | 3 | Swing comparison window |
 | `SWING_MIN_DELTA` | 0.8 | Min avg-difficulty delta to call a swing |
+| `CHIP_PLAN_XPTS_CLAMP` | 9.0 → 15.0 | Raised to safety-net level once outlier bug fixed |
 
 ## Testing
 
@@ -149,7 +186,10 @@ def compute_fixture_swings(ticker: dict, window: int = SWING_WINDOW_GWS,
   `tests/test_chip_advisor.py`; ticker-missing fallback.
 - **Unit — swings:** synthetic ticker with a known flip; below-threshold delta ignored;
   blanks handled.
-- **Route:** `tests/test_chips_route.py` asserts `wait_for_team_news` passthrough.
+- **Unit — TC:** clamp regression (a 12-xPts spike week outranks a 9-xPts week after the
+  fix); haul_prob Poisson math on known lambdas; missing-xG fallback omits the field.
+- **Route:** `tests/test_chips_route.py` asserts `wait_for_team_news` and `haul_prob`
+  passthrough.
 - **Frontend:** existing ChipRoadmapPanel/ChipNudgeCard tests from the branch + badge
   render test.
 - **Pre-deploy:** `scripts/spotcheck_chip_plan.py` against live data; verify reasons read
