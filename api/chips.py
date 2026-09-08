@@ -67,6 +67,60 @@ def chips_plan(
         return result
 
 
+def build_chip_signals(bootstrap: dict, current_gw: int, model_horizon: int):
+    """Build the breaks / team_difficulty_by_gw / swings / xgi_per90 strategy
+    signals from an already-fetched bootstrap payload.
+
+    Shared by `_build_plan_response` and `scripts/spotcheck_chip_plan.py` so
+    the two never drift out of sync. Raises on any failure — callers wrap
+    this in their own fail-soft try/except (signals must never fail the plan)
+    and reset all four to None on error, rather than handing the engine a
+    mix of populated and missing signals.
+    """
+    from src.breaks import international_break_gws
+    breaks = international_break_gws(bootstrap.get("events", []))
+
+    id_to_name = {int(t["id"]): t["name"] for t in bootstrap.get("teams", [])}
+    el = pd.DataFrame(bootstrap.get("elements", []))
+    xgi_per90 = None
+    if not el.empty and "expected_goals_per_90" in el.columns:
+        xg = pd.to_numeric(el["expected_goals_per_90"], errors="coerce").fillna(0.0)
+        # xA column may be absent from the bootstrap payload — treat missing
+        # as 0.0 and keep an xG-only lambda rather than losing all signals.
+        if "expected_assists_per_90" in el.columns:
+            xa = pd.to_numeric(el["expected_assists_per_90"], errors="coerce").fillna(0.0)
+        else:
+            xa = pd.Series(0.0, index=el.index)
+        xgi_per90 = dict(zip(el["id"].astype(int), (xg + xa).astype(float)))
+
+    # Ticker spans horizon + swing window so edge GWs get a forward window.
+    # Lazy import: api.main imports api.chips at module load, so a
+    # module-level import of build_fixture_difficulty_payload here would
+    # be a circular import; importing at request time avoids the cycle.
+    from api.main import build_fixture_difficulty_payload
+    from src.fixture_difficulty import compute_fixture_swings
+    window = int(getattr(config, "SWING_WINDOW_GWS", 3))
+    ticker = build_fixture_difficulty_payload(
+        gw_start=current_gw, horizon_gws=model_horizon + window)
+    team_difficulty_by_gw = {}
+    for row in ticker.get("teams", []):
+        name = id_to_name.get(int(row.get("team_id", 0)))
+        if not name:
+            continue
+        for gw, cell in (row.get("gws") or {}).items():
+            d = (cell or {}).get("difficulty")
+            # Producer contract: skip None/non-finite so the TC path's
+            # int(round(d)) never sees a NaN.
+            if d is None or not math.isfinite(d):
+                continue
+            team_difficulty_by_gw.setdefault(int(gw), {})[name] = float(d)
+    swings = [
+        {**s, "team": id_to_name.get(int(s.get("team_id", 0)), s.get("team_short"))}
+        for s in compute_fixture_swings(ticker)
+    ]
+    return breaks, team_difficulty_by_gw, swings, xgi_per90
+
+
 def _build_plan_response(entry_id: int, current_gw: int, model_horizon: int):
     ctx = _build_context_for_entry(entry_id, current_gw, horizon=model_horizon)
 
@@ -93,42 +147,14 @@ def _build_plan_response(entry_id: int, current_gw: int, model_horizon: int):
     swings = None
     xgi_per90 = None
     try:
-        from src.breaks import international_break_gws
-        bootstrap = fpl_client.get_bootstrap()
-        breaks = international_break_gws(bootstrap.get("events", []))
-
-        id_to_name = {int(t["id"]): t["name"] for t in bootstrap.get("teams", [])}
-        el = pd.DataFrame(bootstrap.get("elements", []))
-        if not el.empty and "expected_goals_per_90" in el.columns:
-            xg = pd.to_numeric(el["expected_goals_per_90"], errors="coerce").fillna(0.0)
-            xa = pd.to_numeric(el.get("expected_assists_per_90"), errors="coerce").fillna(0.0)
-            xgi_per90 = dict(zip(el["id"].astype(int), (xg + xa).astype(float)))
-
-        # Ticker spans horizon + swing window so edge GWs get a forward window.
-        # Lazy import: api.main imports api.chips at module load, so a
-        # module-level import of build_fixture_difficulty_payload here would
-        # be a circular import; importing at request time avoids the cycle.
-        from api.main import build_fixture_difficulty_payload
-        from src.fixture_difficulty import compute_fixture_swings
-        window = int(getattr(config, "SWING_WINDOW_GWS", 3))
-        ticker = build_fixture_difficulty_payload(
-            gw_start=current_gw, horizon_gws=model_horizon + window)
-        team_difficulty_by_gw = {}
-        for row in ticker.get("teams", []):
-            name = id_to_name.get(int(row.get("team_id", 0)))
-            if not name:
-                continue
-            for gw, cell in (row.get("gws") or {}).items():
-                d = (cell or {}).get("difficulty")
-                # Producer contract: skip None/non-finite so the TC path's
-                # int(round(d)) never sees a NaN.
-                if d is None or not math.isfinite(d):
-                    continue
-                team_difficulty_by_gw.setdefault(int(gw), {})[name] = float(d)
-        swings = [
-            {**s, "team": id_to_name.get(int(s.get("team_id", 0)), s.get("team_short"))}
-            for s in compute_fixture_swings(ticker)
-        ]
+        # _build_context_for_entry above already fetched a bootstrap; use the
+        # shared TTL cache instead of another raw HTTPS GET. Lazy import:
+        # api.main imports api.chips at module load, so a module-level import
+        # here would be circular; importing at request time avoids the cycle.
+        from api.main import get_bootstrap_cached
+        bootstrap = get_bootstrap_cached()
+        breaks, team_difficulty_by_gw, swings, xgi_per90 = build_chip_signals(
+            bootstrap, current_gw, model_horizon)
     except Exception as e:  # noqa: BLE001 — signals must never fail the plan
         # All-or-nothing: a failure part-way through (e.g. the ticker call,
         # after breaks/xGI were already assigned) must not hand the engine a
