@@ -87,6 +87,7 @@ class ChipRecommendation:
     reasoning: list[str] = field(default_factory=list)
     risks: list[str] = field(default_factory=list)
     haul_prob: float | None = None   # TC only: P(captain gets 2+ goal involvements)
+    captain_team: str | None = None  # TC only: captain's team — internal, not emitted by to_dict()
 
     def to_dict(self) -> dict:
         out = {
@@ -259,6 +260,7 @@ def score_triple_captain(
             reasoning=reasoning,
             risks=risks,
             haul_prob=haul_prob,
+            captain_team=captain_row.get("team"),
         ))
     return recs
 
@@ -691,6 +693,7 @@ def build_chip_plan(
             "chip": chip,
             "event_id": int(best.gw),
             "ev_gain": round(float(best.expected_value), 2),
+            "confidence": round(float(best.confidence), 2),
             "provisional": False,
             "reasons": list(best.reasoning) + [f"Risk: {r}" for r in best.risks],
             "ev_curve": curve,
@@ -701,6 +704,13 @@ def build_chip_plan(
             near = [s for s in swings
                     if s.get("direction") == "easier"
                     and abs(int(s.get("gw", 0)) - rec["event_id"]) <= 1]
+            if chip == "triple_captain":
+                # TC only benefits from a swing that involves the recommended
+                # captain's own team — a swing elsewhere in the league isn't
+                # a reason to triple-captain this player.
+                near = [s for s in near
+                        if best.captain_team is not None
+                        and best.captain_team in (s.get("team"), s.get("team_short"))]
             if near:
                 names = ", ".join(sorted(
                     s.get("team_short") or s.get("team", "?") for s in near)[:3])
