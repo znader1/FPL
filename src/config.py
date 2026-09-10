@@ -297,6 +297,12 @@ CHIP_WILDCARD_DEFAULT_HORIZON_GWS = 5
 # planner's TRANSFER_H2H_CONFLICT_PENALTY. Soft: a clearly better pick still
 # survives, and surviving pairs are reported as `h2h_conflicts`.
 CHIP_H2H_CONFLICT_PENALTY = 0.75
+# Chip-draft availability: injured/suspended/unavailable never enter the
+# market (XI or bench); bench fodder additionally prefers players with at
+# least this many season minutes — cheap is fine, ghosts are not. Soft
+# preference, not a hard filter: a thin market still builds.
+CHIP_MARKET_EXCLUDE_STATUS = ("i", "s", "u")
+CHIP_BENCH_MIN_MINUTES = 90.0
 CHIP_MAX_PER_TEAM = 3
 CHIP_SQUAD_SHAPE = {
     "GKP": 2,

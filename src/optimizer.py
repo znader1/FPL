@@ -94,9 +94,17 @@ def _prepare_chip_market(elements_all, score_col, shape):
     if score_col not in elements_all.columns:
         return pd.DataFrame()
 
-    cols = ["id", "web_name", "pos", "team", "team_short", "team_name", "price_m", "now_cost", score_col]
+    cols = ["id", "web_name", "pos", "team", "team_short", "team_name", "price_m", "now_cost",
+            "status", "minutes", score_col]
     keep = [c for c in cols if c in elements_all.columns]
     market = elements_all[keep].copy()
+
+    # Injured / suspended / unavailable players never belong in a chip draft —
+    # not in the XI and not as bench fodder. Column-guarded: engine callers
+    # whose markets carry no status column are unaffected.
+    if "status" in market.columns:
+        excluded = tuple(getattr(config, "CHIP_MARKET_EXCLUDE_STATUS", ("i", "s", "u")))
+        market = market[~market["status"].astype(str).str.lower().isin(excluded)].copy()
 
     market["id"] = pd.to_numeric(market.get("id"), errors="coerce")
     market["team"] = pd.to_numeric(market.get("team"), errors="coerce")
@@ -387,6 +395,26 @@ def _ensure_min_premium_attackers(
 _H2H_DEFENSIVE_POS = {"GKP", "DEF"}
 
 
+def _bench_sort(pool):
+    """Bench-fodder ordering: players with at least CHIP_BENCH_MIN_MINUTES
+    season minutes come first (cheap is fine, ghosts are not), then price
+    ascending, then WORST scorer so a price tie never eats an XI candidate.
+    Preference, not a filter — a thin market falls through to the ghosts."""
+    pool = pool.copy()
+    floor = float(getattr(config, "CHIP_BENCH_MIN_MINUTES", 90.0))
+    if "minutes" in pool.columns:
+        pool["_bench_pref"] = (
+            pd.to_numeric(pool["minutes"], errors="coerce").fillna(0.0) >= floor
+        )
+    else:
+        pool["_bench_pref"] = True
+    return pool.sort_values(
+        ["_bench_pref", "price_m", "chip_score"],
+        ascending=[False, True, True],
+        kind="mergesort",
+    )
+
+
 def _h2h_conflict_count(row, picked_rows, opponents):
     """Count GK/DEF↔attacker pairs between `row` and already-picked XI rows
     whose teams face each other this GW — own players cancelling each other."""
@@ -439,15 +467,14 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None, o
     # Cheapest available GKP for bench slot. The XI keeper is NOT price-picked —
     # it competes on chip_score inside the XI loop below like every other XI
     # slot (a price-ranked XI keeper meant a random 4.0m backup started every
-    # free hit). Tie-break equal prices by ascending score: the bench takes
-    # the worst scorer of the cheapest tier, leaving better keepers for the XI.
-    gkp_pool = market[market["pos"] == "GKP"].sort_values(
-        ["price_m", "chip_score"], ascending=[True, True], kind="mergesort"
-    )
+    # free hit). Bench ordering prefers fodder that actually plays (minutes
+    # floor), then cheapest, then the worst scorer of a price tie — leaving
+    # better keepers for the XI.
+    gkp_pool = market[market["pos"] == "GKP"]
     if len(gkp_pool) < 2:
         return {"ok": False, "reason": "Not enough GKPs in market.", "squad_df": None}
 
-    bench_gkp = gkp_pool.iloc[[0]]  # cheapest GKP
+    bench_gkp = _bench_sort(gkp_pool).iloc[[0]]
 
     # --- Step 2: pick best XI across all valid formations ---
     best_xi = None
@@ -465,12 +492,10 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None, o
         team_counts_bench = _team_counts(bench_gkp)
         ok = True
         for pos, need in [("DEF", bench_d), ("MID", bench_m), ("FWD", bench_f)]:
-            # Cheapest first; equal prices resolve to the WORST scorer so the
-            # bench never eats an XI candidate on a price tie.
-            pool = market[
+            pool = _bench_sort(market[
                 (market["pos"] == pos)
                 & (~market["id"].astype(int).isin(used_ids | {r["id"] for r in bench_outfield}))
-            ].sort_values(["price_m", "chip_score"], ascending=[True, True], kind="mergesort")
+            ])
             picked = []
             for _, row in pool.iterrows():
                 t = int(row["team"])
@@ -568,6 +593,9 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None, o
         return {"ok": False, "reason": "Could not build a valid free-hit XI under budget.", "squad_df": None}
 
     selected = pd.concat([best_xi, best_bench], ignore_index=True)
+    selected = selected.drop(
+        columns=[c for c in ("_bench_pref", "_adj") if c in selected.columns]
+    )
     selected = selected.copy().reset_index(drop=True)
     selected["player_id"] = selected["id"].astype(int)
     selected["multiplier"] = 0

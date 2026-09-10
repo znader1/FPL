@@ -64,6 +64,45 @@ def test_free_hit_squad_still_legal():
     assert squad["team"].value_counts().max() <= 3
 
 
+def test_injured_players_excluded_from_chip_market():
+    m = _market()
+    m["status"] = "a"
+    m.loc[m["id"] == 1, "status"] = "i"  # GoodGK injured
+    build = optimizer.build_free_hit_squad(m, "xpts_gw4", 100.0)
+    assert build["ok"], build["reason"]
+    assert 1 not in build["squad_df"]["id"].tolist()
+
+
+def test_bench_prefers_players_with_minutes():
+    m = _market()
+    m["status"] = "a"
+    m["minutes"] = 270
+    # Two extra 4.0m keepers: a zero-minutes body and a playing backup.
+    extra = pd.DataFrame(
+        [
+            (50, "NoMinGK", "GKP", 23, 4.0, 0.4),
+            (51, "PlayingGK", "GKP", 24, 4.0, 0.4),
+        ],
+        columns=["id", "web_name", "pos", "team", "price_m", "xpts_gw4"],
+    )
+    extra["status"] = "a"
+    extra["minutes"] = [0, 270]
+    m = pd.concat([m, extra], ignore_index=True)
+    build = optimizer.build_free_hit_squad(m, "xpts_gw4", 100.0)
+    _, bench = _xi_and_bench(build["squad_df"])
+    bench_gk_id = int(bench[bench["pos"] == "GKP"].iloc[0]["id"])
+    assert bench_gk_id != 50  # zero-minutes body skipped for the playing one
+
+
+def test_bench_minutes_floor_relaxes_when_market_is_thin():
+    m = _market()
+    m["status"] = "a"
+    m["minutes"] = 0  # nobody meets the floor — build must still succeed
+    build = optimizer.build_free_hit_squad(m, "xpts_gw4", 100.0)
+    assert build["ok"], build["reason"]
+    assert len(build["squad_df"]) == 15
+
+
 def _market_h2h(hot_gk_score=5.0):
     """Team 1's keeper faces team 2, whose three attackers top the market.
     A near-as-good keeper on team 20 has no conflicting picks."""
