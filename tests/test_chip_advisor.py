@@ -599,3 +599,46 @@ def test_build_chip_plan_confidence_key_and_break_haircut(monkeypatch):
     assert "confidence" in tc_break
     assert tc_break["confidence"] < tc_no_break["confidence"]
     assert abs(tc_break["confidence"] - round(tc_no_break["confidence"] * 0.85, 2)) < 1e-6
+
+
+# ---- chip outlook (always-visible planning rows) ----
+
+def test_build_chip_plan_outlook_lists_every_available_chip():
+    squad = _squad_15_single_team()
+    market = _market_for(squad, gw_xpts=6.0)
+    plan = build_chip_plan(squad, 5, {5: market}, chips_played=[])
+    chips = {o["chip"] for o in plan["outlook"]}
+    assert chips == {"wildcard", "free_hit", "bench_boost", "triple_captain"}
+
+    tc = next(o for o in plan["outlook"] if o["chip"] == "triple_captain")
+    assert tc["status"] == "hold"
+    assert tc["ev_gain"] is not None and tc["ev_gain"] < tc["bar"]
+    assert tc["event_id"] == 5
+    assert tc["reasons"]
+
+    fh = next(o for o in plan["outlook"] if o["chip"] == "free_hit")
+    assert fh["status"] == "hold"
+    assert fh["event_id"] is None  # gate never opened — no candidate window
+    assert fh["reasons"]
+
+
+def test_build_chip_plan_outlook_play_row_matches_recommendation(monkeypatch):
+    squad = _squad_15_single_team()
+    market = _market_for(squad, gw_xpts=8.0)
+    monkeypatch.setattr(config, "CHIP_PLAN_MIN_EV",
+                        {**config.CHIP_PLAN_MIN_EV, "triple_captain": 1.0})
+    plan = build_chip_plan(squad, 5, {5: market}, chips_played=[])
+    tc_out = next(o for o in plan["outlook"] if o["chip"] == "triple_captain")
+    tc_rec = next(r for r in plan["recommendations"] if r["chip"] == "triple_captain")
+    assert tc_out["status"] == "play"
+    assert tc_out["event_id"] == tc_rec["event_id"]
+    assert tc_out["ev_gain"] == tc_rec["ev_gain"]
+
+
+def test_build_chip_plan_outlook_excludes_used_chips():
+    squad = _squad_15_single_team()
+    market = _market_for(squad, gw_xpts=6.0)
+    plan = build_chip_plan(squad, 5, {5: market},
+                           chips_played=[{"name": "bboost", "event": 3}])
+    chips = {o["chip"] for o in plan["outlook"]}
+    assert "bench_boost" not in chips

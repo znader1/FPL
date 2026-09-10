@@ -675,20 +675,47 @@ def build_chip_plan(
     nudge = None
     nudge_floor = float(getattr(config, "CHIP_PLAN_NUDGE_MIN_EV", 4.0))
 
+    # Outlook: one row per available chip, ALWAYS — even when the verdict is
+    # hold. "No recommendation" should still show the plan (best window, EV,
+    # the bar it failed to clear), not an empty panel.
+    outlook = []
     for chip in remaining:
-        chip_recs = [r for r in all_recs if r.chip == chip]
-        if not chip_recs:
-            continue
         expires_gw = windows[chip]["expires_gw"]
+        chip_recs = [r for r in all_recs if r.chip == chip]
         # Model-zone candidates only run to the chip's expiry.
         in_window = [r for r in chip_recs if r.gw <= expires_gw]
         if not in_window:
+            base_bar = float(getattr(config, "CHIP_PLAN_MIN_EV", {}).get(chip, 0.0))
+            no_window_reason = (
+                "No blank-heavy or tough-fixture week in the model horizon"
+                if chip == "free_hit"
+                else "No positive-EV window in the model horizon"
+            )
+            outlook.append({
+                "chip": chip,
+                "event_id": None,
+                "ev_gain": None,
+                "bar": round(base_bar, 2),
+                "status": "hold",
+                "reasons": [no_window_reason],
+            })
             continue
         best = max(in_window, key=lambda r: r.expected_value)
         curve = [{"gw": r.gw, "ev": round(float(r.expected_value), 2)}
                  for r in sorted(in_window, key=lambda r: r.gw)]
-        if best.expected_value < effective_min_ev(chip, best.gw, expires_gw):
+        bar = effective_min_ev(chip, best.gw, expires_gw)
+        outlook_row = {
+            "chip": chip,
+            "event_id": int(best.gw),
+            "ev_gain": round(float(best.expected_value), 2),
+            "bar": round(float(bar), 2),
+            "status": "hold",
+            "reasons": list(best.reasoning)[:3],
+        }
+        outlook.append(outlook_row)
+        if best.expected_value < bar:
             continue  # hold — nothing in the model zone clears the bar
+        outlook_row["status"] = "play"
         rec = {
             "chip": chip,
             "event_id": int(best.gw),
@@ -762,6 +789,7 @@ def build_chip_plan(
         ],
         "horizon_model_gws": horizon,
         "recommendations": recommendations,
+        "outlook": outlook,
         "nudge": nudge,
         "transfer_context": {
             "planned_transfers_net_gain": round(plan_net_gain, 2),
