@@ -73,9 +73,9 @@ The xPts model blends a season PPG baseline with a recency-weighted recent avera
 8. **Early-season shrinkage** (2026-09): the blended baseline is pulled toward a price×position prior (`PROJ_SHRINKAGE_GAMES`, `PROJ_PRICE_PRIOR_SLOPE`), weighted by finished GWs — a 4.1m defender with two clean sheets no longer projects like a premium. Pre-season (0 finished GWs) untouched. First-choice penalty takers get `PROJ_PENALTY_TAKER_UPLIFT` (+0.45/GW) after shrinkage.
 9. Known open issue: promoted-team small-sample clusters still inflate (shrinkage+`CHIP_PLAN_XPTS_CLAMP` are stopgaps); root fix + per-player home/away splits are backlogged pending an SP3 backtest.
 
-### xG expected-points stack (shadow model — currently OFF)
+### xG expected-points stack (ON at 0.5 blend since 2026-08-24)
 
-A parallel, per-player, per-GW expected-points table (`xpts_model_*`) that `projections.project_elements_next_gws` blends into its baseline via `PROJ_MODEL_BLEND_WEIGHT` (**default 0.0** — baseline unchanged until raised). Three composable modules combined by `src/expected_points.py`:
+A parallel, per-player, per-GW expected-points table (`xpts_model_*`) that `projections.project_elements_next_gws` blends into its baseline via `PROJ_MODEL_BLEND_WEIGHT` (**0.5** — displayed xPts is half probability-model, half ppg/form baseline). Backtest evidence: 2025-26 sweep won on every metric; the 2026-09-10 extended sweep (0.5..1.0) confirmed 0.5-0.6 as the interior optimum — do not raise past 0.6 without new evidence (`scripts/backtest_blend_sweep.py`). Three composable modules combined by `src/expected_points.py`:
 
 - **`src/fixture_difficulty.py`** — turns per-match xG into per-team **attack/defense** ratings (multipliers vs league avg) with exponential time decay (`FDR_XG_HALFLIFE_DAYS`) and shrinkage (`FDR_XG_SHRINKAGE_MATCHES`). A user-maintained `data/models/knowledge_discount.json` nudges teams for info xG can't see yet (signings, injuries, manager change).
 - **`src/minutes_model.py`** — P(start), P(≥60), E[minutes] per player from decayed start/minutes history with a position prior (`MINUTES_*` tunables).

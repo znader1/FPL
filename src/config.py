@@ -439,8 +439,12 @@ OUTPUT_DC_BASE_RATE = {"GKP": 0.0, "DEF": 0.12, "MID": 0.06, "FWD": 0.0}  # shri
 # ## Results): scripts.backtest_blend_sweep over 2025-26 GW6-29 (24 GWs), DC=True,
 # weight 0.5 beat weight 0.0 on every metric (MAE -0.202/-9.47%, captain hit +0.042,
 # top10 +0.029, regret -0.334), with MAE improving monotonically across the whole
-# grid and no regression at any weight. 0.5 is the top of the script's default grid,
-# not a confirmed interior optimum -- see the Task 8 caveats in the plan doc.
+# grid and no regression at any weight.
+# 2026-09-10 extended sweep (0.5..1.0, GW6-38) resolved the old "top of grid,
+# not a confirmed interior optimum" caveat: the bowl bottoms at 0.5-0.6
+# (MAE 1.902/1.897 — noise-level apart), degrades from 0.8, and 1.0 drops
+# captain hit back to baseline. 0.5 is confirmed at-optimum; do not raise
+# past 0.6 without new evidence.
 PROJ_MODEL_BLEND_WEIGHT = 0.5
 
 # --- minutes/rotation-risk multiplier (surgical, applied in projections.py) ---
