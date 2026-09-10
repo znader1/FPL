@@ -1290,6 +1290,30 @@ def build_recommendations(payload):
         raise HTTPException(status_code=500, detail="Could not optimize lineup for this squad.")
     timings["optimize_base_ms"] = elapsed_ms(ts)
 
+    # Stack odds: joint return/blank probabilities for same-team attacker
+    # stacks in a chip-draft XI — a mean-xPts sum is blind to the correlation
+    # (three attackers vs one tight defence can all blank on a single 0-0).
+    if chip_info.get("is_active"):
+        try:
+            from src import stack_odds as stack_odds_mod
+            ratings = get_team_ratings_cached(teams_short)
+            fdt = fixture_difficulty.fixture_difficulty_table(
+                ratings, get_fixtures_cached(), int(optimize_event_id))
+            lam_by_team = {int(r["team_id"]): float(r["xg_for"]) for _, r in fdt.iterrows()}
+            xgi_map = {}
+            if "expected_goals_per_90" in proj_all.columns:
+                xg = pd.to_numeric(proj_all["expected_goals_per_90"], errors="coerce").fillna(0.0)
+                if "expected_assists_per_90" in proj_all.columns:
+                    xg = xg + pd.to_numeric(proj_all["expected_assists_per_90"], errors="coerce").fillna(0.0)
+                xgi_map = dict(zip(proj_all["id"].astype(int), xg.astype(float)))
+            rows = stack_odds_mod.stack_odds_for_xi(
+                res["starting_xi"].to_dict("records"), lam_by_team, xgi_map)
+            for r0 in rows:
+                r0["team_short"] = teams_short.get(r0["team"], "?")
+            chip_info["stack_odds"] = rows
+        except Exception as e:  # noqa: BLE001 — annotation must never fail the response
+            logger.warning("stack odds unavailable: %s", e)
+
     gws = [int(optimize_event_id) + i for i in range(int(display_horizon_gws))]
     chip_profile_gws = gws
     if wildcard_is_active:

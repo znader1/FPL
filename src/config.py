@@ -319,6 +319,10 @@ CHIP_ATTACKER_STACK_PENALTY = 0.6
 # near-equal low-owned players displace the template. 0.35 → a 50%-owned
 # player loses ~17.5% of its score; mini-league differentiation, off by default.
 CHIP_DIFF_OWNERSHIP_WEIGHT = 0.35
+# Stack odds annotation (src/stack_odds.py): joint return/blank odds for
+# same-team attacker stacks in a draft XI. Slots ≈ scorer + assister per goal.
+CHIP_STACK_ODDS_MIN = 2
+CHIP_STACK_SLOTS_PER_GOAL = 2.0
 CHIP_MAX_PER_TEAM = 3
 CHIP_SQUAD_SHAPE = {
     "GKP": 2,
