@@ -62,3 +62,65 @@ def test_free_hit_squad_still_legal():
     assert (squad["pos"] == "GKP").sum() == 2
     assert float(squad["price_m"].sum()) <= 100.0
     assert squad["team"].value_counts().max() <= 3
+
+
+def _market_h2h(hot_gk_score=5.0):
+    """Team 1's keeper faces team 2, whose three attackers top the market.
+    A near-as-good keeper on team 20 has no conflicting picks."""
+    rows = [
+        (1, "HotGK", "GKP", 1, 5.5, hot_gk_score),
+        (2, "CleanGK", "GKP", 20, 5.0, 4.8),
+        (3, "BackupA", "GKP", 21, 4.0, 0.5),
+        (4, "BackupB", "GKP", 22, 4.0, 0.6),
+        (30, "OppMid1", "MID", 2, 6.0, 5.9),
+        (31, "OppMid2", "MID", 2, 6.0, 5.8),
+        (40, "OppFwd", "FWD", 2, 6.5, 6.0),
+    ]
+    pid = 10
+    for i in range(8):
+        rows.append((pid, f"D{i}", "DEF", 5 + i, 5.0, 4.5 - i * 0.1))
+        pid += 1
+    for i in range(6):
+        rows.append((pid, f"M{i}", "MID", 5 + i, 6.0, 5.5 - i * 0.1))
+        pid += 1
+    for i in range(4):
+        rows.append((pid, f"F{i}", "FWD", 13 + i, 6.5, 5.6 - i * 0.1))
+        pid += 1
+    return pd.DataFrame(rows, columns=["id", "web_name", "pos", "team", "price_m", "xpts_gw4"])
+
+
+_OPPONENTS = {1: {2}, 2: {1}}
+
+
+def test_h2h_penalty_moves_keeper_off_conflicted_pick():
+    # Team 2's three attackers make the XI; HotGK (5.0) faces all of them, so
+    # 3 × 0.75 penalty drops him below CleanGK (4.8).
+    build = optimizer.build_free_hit_squad(
+        _market_h2h(), "xpts_gw4", 100.0, opponents=_OPPONENTS
+    )
+    assert build["ok"], build["reason"]
+    xi, _ = _xi_and_bench(build["squad_df"])
+    assert int(xi[xi["pos"] == "GKP"].iloc[0]["id"]) == 2
+    assert build["h2h_conflicts"] == []
+
+
+def test_h2h_no_opponents_map_keeps_raw_pick():
+    build = optimizer.build_free_hit_squad(_market_h2h(), "xpts_gw4", 100.0)
+    xi, _ = _xi_and_bench(build["squad_df"])
+    assert int(xi[xi["pos"] == "GKP"].iloc[0]["id"]) == 1
+    assert build["h2h_conflicts"] == []
+
+
+def test_h2h_conflict_survives_when_clearly_better_and_is_reported():
+    # HotGK at 7.5 still wins after the 3-pair penalty (7.5 - 2.25 > 4.8);
+    # the surviving pairs are surfaced for the UI.
+    build = optimizer.build_free_hit_squad(
+        _market_h2h(hot_gk_score=7.5), "xpts_gw4", 100.0, opponents=_OPPONENTS
+    )
+    xi, _ = _xi_and_bench(build["squad_df"])
+    assert int(xi[xi["pos"] == "GKP"].iloc[0]["id"]) == 1
+    pairs = build["h2h_conflicts"]
+    assert len(pairs) == 3
+    assert all(p["defender"] == "HotGK" for p in pairs)
+    assert {p["attacker"] for p in pairs} == {"OppMid1", "OppMid2", "OppFwd"}
+    assert "H2H" in build["reason"] or "h2h" in build["reason"]

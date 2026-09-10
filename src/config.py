@@ -291,6 +291,12 @@ SWING_MIN_DELTA = 0.8           # min avg-difficulty delta to call a swing
 # Chip strategy tuning
 # -----------------------------
 CHIP_WILDCARD_DEFAULT_HORIZON_GWS = 5
+# Own GK/DEF facing own attackers in the same GW cancel each other out (a
+# hedge — same mean, lower ceiling). Chip drafts dock a candidate's score by
+# this much per directly-opposed own XI player, mirroring the transfer
+# planner's TRANSFER_H2H_CONFLICT_PENALTY. Soft: a clearly better pick still
+# survives, and surviving pairs are reported as `h2h_conflicts`.
+CHIP_H2H_CONFLICT_PENALTY = 0.75
 CHIP_MAX_PER_TEAM = 3
 CHIP_SQUAD_SHAPE = {
     "GKP": 2,

@@ -384,7 +384,26 @@ def _ensure_min_premium_attackers(
     return out, final_ok
 
 
-def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
+_H2H_DEFENSIVE_POS = {"GKP", "DEF"}
+
+
+def _h2h_conflict_count(row, picked_rows, opponents):
+    """Count GK/DEF↔attacker pairs between `row` and already-picked XI rows
+    whose teams face each other this GW — own players cancelling each other."""
+    if not opponents:
+        return 0
+    row_defensive = row["pos"] in _H2H_DEFENSIVE_POS
+    row_opps = opponents.get(int(row["team"])) or ()
+    n = 0
+    for r in picked_rows:
+        if (r["pos"] in _H2H_DEFENSIVE_POS) == row_defensive:
+            continue
+        if int(r["team"]) in row_opps:
+            n += 1
+    return n
+
+
+def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None, opponents=None):
     """
     Build a legal free-hit 15-man squad optimised for a single gameweek.
 
@@ -394,6 +413,11 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
     - Bench (4 slots): fill with the cheapest legal players in the required
       positions (1 GKP + remaining outfield to complete the shape), keeping
       budget available for the XI.
+    - Head-to-head hedge: with an `opponents` map ({team_id: opponent ids this
+      GW}), a candidate is docked CHIP_H2H_CONFLICT_PENALTY per own XI player
+      it directly opposes (GK/DEF vs attacker), so the draft avoids picks that
+      cancel each other unless one is clearly better. Surviving pairs are
+      returned as `h2h_conflicts`.
 
     This reflects real free-hit usage: the bench only exists to satisfy the
     squad rules, not to score points.
@@ -415,10 +439,10 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
     # Cheapest available GKP for bench slot. The XI keeper is NOT price-picked —
     # it competes on chip_score inside the XI loop below like every other XI
     # slot (a price-ranked XI keeper meant a random 4.0m backup started every
-    # free hit). Stable sort so the 4.0m tie-tier resolves by the market's
-    # score-descending pre-sort instead of quicksort order.
+    # free hit). Tie-break equal prices by ascending score: the bench takes
+    # the worst scorer of the cheapest tier, leaving better keepers for the XI.
     gkp_pool = market[market["pos"] == "GKP"].sort_values(
-        "price_m", ascending=True, kind="mergesort"
+        ["price_m", "chip_score"], ascending=[True, True], kind="mergesort"
     )
     if len(gkp_pool) < 2:
         return {"ok": False, "reason": "Not enough GKPs in market.", "squad_df": None}
@@ -441,10 +465,12 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
         team_counts_bench = _team_counts(bench_gkp)
         ok = True
         for pos, need in [("DEF", bench_d), ("MID", bench_m), ("FWD", bench_f)]:
+            # Cheapest first; equal prices resolve to the WORST scorer so the
+            # bench never eats an XI candidate on a price tie.
             pool = market[
                 (market["pos"] == pos)
                 & (~market["id"].astype(int).isin(used_ids | {r["id"] for r in bench_outfield}))
-            ].sort_values("price_m", ascending=True)
+            ].sort_values(["price_m", "chip_score"], ascending=[True, True], kind="mergesort")
             picked = []
             for _, row in pool.iterrows():
                 t = int(row["team"])
@@ -472,8 +498,12 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
         bench_ids = used_ids | {int(r["id"]) for r in bench_outfield}
 
         # Pick the XI (best by score within xi_budget). The keeper slot is
-        # score-picked here exactly like the outfield slots — GKP first so its
-        # small price range can't be squeezed out by premium outfield spend.
+        # score-picked here exactly like the outfield slots. Order matters for
+        # the H2H hedge: outfield first, keeper last, so the GK choice can see
+        # which attackers it would directly oppose. Conflicts only pair
+        # defensive picks (GK/DEF) with attackers, so within one position
+        # group the penalty is constant and can be computed per pool.
+        h2h_penalty = float(getattr(config, "CHIP_H2H_CONFLICT_PENALTY", 0.75))
         xi_rows = []
         team_counts_xi = {}
         # Merge bench team counts since they share the same 15-man squad
@@ -482,11 +512,18 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
 
         xi_ok = True
         total_xi_slots = 1 + d + m + f
-        for pos, need in [("GKP", 1), ("DEF", d), ("MID", m), ("FWD", f)]:
+        for pos, need in [("DEF", d), ("MID", m), ("FWD", f), ("GKP", 1)]:
             pool = market[
                 (market["pos"] == pos)
                 & (~market["id"].astype(int).isin(bench_ids | {int(r["id"]) for r in xi_rows}))
-            ].sort_values("chip_score", ascending=False, kind="mergesort")
+            ].copy()
+            if opponents and len(pool):
+                pool["_adj"] = pool["chip_score"] - h2h_penalty * pool.apply(
+                    lambda r: _h2h_conflict_count(r, xi_rows, opponents), axis=1
+                )
+            else:
+                pool["_adj"] = pool["chip_score"]
+            pool = pool.sort_values("_adj", ascending=False, kind="mergesort")
             picked = []
             for _, row in pool.iterrows():
                 t = int(row["team"])
@@ -512,14 +549,16 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
         if not xi_ok:
             continue
 
-        xi_score = sum(float(r["chip_score"]) for r in xi_rows)
+        # Compare formations on the hedge-adjusted score so a formation that
+        # avoids self-cancelling picks can beat a raw-score-equal one.
+        xi_score = sum(float(r["_adj"]) for r in xi_rows)
         if xi_score > best_xi_score:
             best_xi_score = xi_score
             best_formation = (d, m, f)
             best_xi = pd.concat(
                 [pd.DataFrame([r]) for r in xi_rows],
                 ignore_index=True,
-            )
+            ).drop(columns=["_adj"])
             best_bench = pd.concat(
                 [bench_gkp] + [pd.DataFrame([r]) for r in bench_outfield],
                 ignore_index=True,
@@ -538,9 +577,38 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
     cost = float(pd.to_numeric(selected["price_m"], errors="coerce").fillna(0.0).sum())
     xi_score_total = float(pd.to_numeric(best_xi["chip_score"], errors="coerce").fillna(0.0).sum())
 
+    # Surviving head-to-head pairs in the chosen XI (penalty applied but the
+    # conflicted pick still won) — surfaced so the UI can badge them.
+    h2h_conflicts = []
+    if opponents:
+        defensive = best_xi[best_xi["pos"].isin(_H2H_DEFENSIVE_POS)]
+        attackers = best_xi[~best_xi["pos"].isin(_H2H_DEFENSIVE_POS)]
+        for _, drow in defensive.iterrows():
+            opps = opponents.get(int(drow["team"])) or ()
+            for _, arow in attackers.iterrows():
+                if int(arow["team"]) in opps:
+                    h2h_conflicts.append({
+                        "defender": str(drow.get("web_name", drow.get("id"))),
+                        "attacker": str(arow.get("web_name", arow.get("id"))),
+                        "defender_team": int(drow["team"]),
+                        "attacker_team": int(arow["team"]),
+                    })
+
+    reason = (
+        f"Free-hit draft built: {best_formation[0]}-{best_formation[1]}-{best_formation[2]} "
+        f"formation, XI xPts={round(xi_score_total, 1)}."
+    )
+    if h2h_conflicts:
+        pair_txt = "; ".join(f"{p['defender']} vs {p['attacker']}" for p in h2h_conflicts[:3])
+        reason += (
+            f" H2H note: {len(h2h_conflicts)} own-player pair(s) face each other this GW"
+            f" ({pair_txt}) — kept despite the hedge penalty."
+        )
+
     return {
         "ok": True,
-        "reason": f"Free-hit draft built: {best_formation[0]}-{best_formation[1]}-{best_formation[2]} formation, XI xPts={round(xi_score_total, 1)}.",
+        "reason": reason,
+        "h2h_conflicts": h2h_conflicts,
         "objective_score_col": score_col,
         "budget_m": float(round(budget_m, 2)),
         "squad_cost_m": float(round(cost, 2)),

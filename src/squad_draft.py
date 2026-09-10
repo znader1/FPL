@@ -352,9 +352,20 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
             min_premium = 0
 
     if objective == "free_hit":
+        # H2H hedge input (own GK/DEF vs own attackers). Fail-soft.
+        fh_opponents = None
+        try:
+            by_team = transforms.fixtures_by_team_for_gw(fixtures, int(gw_start))
+            fh_opponents = {
+                int(t): {int(it["opp"]) for it in lst if it.get("opp") is not None}
+                for t, lst in by_team.items()
+            }
+        except Exception:
+            fh_opponents = None
         build = optimizer.build_free_hit_squad(
             elements_all=draft_pool, score_col=f"xpts_gw{gw_start}",
-            budget_m=budget_m, max_per_team=max_per_team)
+            budget_m=budget_m, max_per_team=max_per_team,
+            opponents=fh_opponents)
     else:
         score_col = "wildcard_score" if objective == "wildcard" else f"xpts_gw{gw_start}"
         build = optimizer.build_chip_squad(

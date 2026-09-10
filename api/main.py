@@ -1204,11 +1204,24 @@ def build_recommendations(payload):
             else 0
         )
         if chip_strategy == "free_hit":
+            # H2H hedge input: which team faces which this GW, so the draft
+            # avoids own GK/DEF vs own attackers. Fail-soft — no map, no penalty.
+            fh_opponents = None
+            try:
+                by_team = transforms.fixtures_by_team_for_gw(
+                    get_fixtures_cached(), int(optimize_event_id))
+                fh_opponents = {
+                    int(t): {int(it["opp"]) for it in lst if it.get("opp") is not None}
+                    for t, lst in by_team.items()
+                }
+            except Exception as e:  # noqa: BLE001
+                logger.warning("free-hit opponents map unavailable: %s", e)
             chip_build = optimizer.build_free_hit_squad(
                 elements_all=proj_all,
                 score_col=chip_objective_col,
                 budget_m=budget_m,
                 max_per_team=int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3),
+                opponents=fh_opponents,
             )
         else:
             chip_build = optimizer.build_chip_squad(
