@@ -95,6 +95,10 @@ CAPTAIN_PREMIUM_PRICE_FLOOR = 9.0
 CAPTAIN_PREMIUM_PRICE_BONUS_PER_M = 0.10
 CAPTAIN_FORM_CEILING_WEIGHT = 0.04
 CAPTAIN_SET_PIECE_PENALTY_WEIGHT = 0.55
+# Armband tilt per FDR step from neutral 3: captaincy is a ceiling game — a
+# D4/D5 fixture crushes haul probability more than mean xPts, so a near-tie
+# resolves toward the easier fixture. ±0.35/step only flips close calls.
+CAPTAIN_FIXTURE_DIFFICULTY_WEIGHT = 0.35
 
 # -----------------------------
 # Transfer recommender tuning
@@ -303,6 +307,18 @@ CHIP_H2H_CONFLICT_PENALTY = 0.75
 # preference, not a hard filter: a thin market still builds.
 CHIP_MARKET_EXCLUDE_STATUS = ("i", "s", "u")
 CHIP_BENCH_MIN_MINUTES = 90.0
+# Bench diversity: prefer a distinct-team bench body over a duplicate when one
+# exists at (cheapest + this margin). 0.0 = only free swaps, never pay extra.
+CHIP_BENCH_DIVERSITY_MAX_EXTRA_M = 0.0
+# Soft attacker-stack limit: from this many same-team attackers already in the
+# XI, the next one is docked the penalty — stacking survives only when the
+# stacked player is clearly better than the spread alternative.
+CHIP_ATTACKER_STACK_SOFT_LIMIT = 2
+CHIP_ATTACKER_STACK_PENALTY = 0.6
+# Differential draft mode: dock a candidate's score by weight × ownership so
+# near-equal low-owned players displace the template. 0.35 → a 50%-owned
+# player loses ~17.5% of its score; mini-league differentiation, off by default.
+CHIP_DIFF_OWNERSHIP_WEIGHT = 0.35
 CHIP_MAX_PER_TEAM = 3
 CHIP_SQUAD_SHAPE = {
     "GKP": 2,

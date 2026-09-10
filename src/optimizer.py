@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 
 from . import config
@@ -95,7 +97,7 @@ def _prepare_chip_market(elements_all, score_col, shape):
         return pd.DataFrame()
 
     cols = ["id", "web_name", "pos", "team", "team_short", "team_name", "price_m", "now_cost",
-            "status", "minutes", score_col]
+            "status", "minutes", "selected_by_percent", score_col]
     keep = [c for c in cols if c in elements_all.columns]
     market = elements_all[keep].copy()
 
@@ -131,6 +133,23 @@ def _prepare_chip_market(elements_all, score_col, shape):
     market = market[market["price_m"] > 0].copy()
     market = market.sort_values(["chip_score", "price_m"], ascending=[False, True]).reset_index(drop=True)
     return market
+
+
+def _apply_differential(market):
+    """Differential draft mode: dock each candidate's score by
+    CHIP_DIFF_OWNERSHIP_WEIGHT × ownership, so near-equal low-owned players
+    displace the template. No-op when ownership data is missing."""
+    if market is None or market.empty or "selected_by_percent" not in market.columns:
+        return market
+    w = float(getattr(config, "CHIP_DIFF_OWNERSHIP_WEIGHT", 0.35))
+    own = (
+        pd.to_numeric(market["selected_by_percent"], errors="coerce").fillna(0.0) / 100.0
+    ).clip(0.0, 1.0)
+    out = market.copy()
+    out["chip_score"] = out["chip_score"] * (1.0 - w * own)
+    return out.sort_values(
+        ["chip_score", "price_m"], ascending=[False, True]
+    ).reset_index(drop=True)
 
 
 def _replace_row(selected, idx, cand):
@@ -431,7 +450,8 @@ def _h2h_conflict_count(row, picked_rows, opponents):
     return n
 
 
-def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None, opponents=None):
+def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None, opponents=None,
+                         differential=False):
     """
     Build a legal free-hit 15-man squad optimised for a single gameweek.
 
@@ -460,6 +480,8 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None, o
     )
     if market.empty:
         return {"ok": False, "reason": f"Market missing columns or score `{score_col}`.", "squad_df": None}
+    if differential:
+        market = _apply_differential(market)
 
     # --- Step 1: pick bench fillers first (cheapest per position) ---
     # Bench shape: 1 GKP + enough outfield to complete the 15.
@@ -487,21 +509,43 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None, o
         # Need d DEF + m MID + f FWD in XI, then bench = (5-d) DEF + (5-m) MID + (3-f) FWD
         bench_d, bench_m, bench_f = 5 - d, 5 - m, 3 - f
 
-        # Pick bench outfielders (cheapest) first to know budget left for XI
+        # Pick bench outfielders (cheapest) first to know budget left for XI.
+        # Two passes per position: the first prefers teams not already on the
+        # bench (so one postponement can't wipe several subs), but only at
+        # the cheapest available price (+ configurable margin) — diversity is
+        # never allowed to inflate the bench cost. The second pass fills
+        # whatever the diversity preference couldn't.
         bench_outfield = []
         team_counts_bench = _team_counts(bench_gkp)
+        bench_teams = set(team_counts_bench.keys())
+        diversity_extra = float(getattr(config, "CHIP_BENCH_DIVERSITY_MAX_EXTRA_M", 0.0))
         ok = True
         for pos, need in [("DEF", bench_d), ("MID", bench_m), ("FWD", bench_f)]:
             pool = _bench_sort(market[
                 (market["pos"] == pos)
                 & (~market["id"].astype(int).isin(used_ids | {r["id"] for r in bench_outfield}))
             ])
+            min_price = float(pool["price_m"].min()) if len(pool) else 0.0
             picked = []
-            for _, row in pool.iterrows():
-                t = int(row["team"])
-                if team_counts_bench.get(t, 0) < max_per_team:
-                    picked.append(row)
-                    team_counts_bench[t] = team_counts_bench.get(t, 0) + 1
+            picked_ids = set()
+            for prefer_distinct in (True, False):
+                for _, row in pool.iterrows():
+                    if len(picked) == need:
+                        break
+                    t = int(row["team"])
+                    rid = int(row["id"])
+                    if rid in picked_ids:
+                        continue
+                    if prefer_distinct and (
+                        t in bench_teams
+                        or float(row["price_m"]) > min_price + diversity_extra
+                    ):
+                        continue
+                    if team_counts_bench.get(t, 0) < max_per_team:
+                        picked.append(row)
+                        picked_ids.add(rid)
+                        team_counts_bench[t] = team_counts_bench.get(t, 0) + 1
+                        bench_teams.add(t)
                 if len(picked) == need:
                     break
             if len(picked) < need:
@@ -542,12 +586,26 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None, o
                 (market["pos"] == pos)
                 & (~market["id"].astype(int).isin(bench_ids | {int(r["id"]) for r in xi_rows}))
             ].copy()
-            if opponents and len(pool):
-                pool["_adj"] = pool["chip_score"] - h2h_penalty * pool.apply(
-                    lambda r: _h2h_conflict_count(r, xi_rows, opponents), axis=1
-                )
-            else:
-                pool["_adj"] = pool["chip_score"]
+            pool["_adj"] = pool["chip_score"]
+            if len(pool):
+                if opponents:
+                    pool["_adj"] = pool["_adj"] - h2h_penalty * pool.apply(
+                        lambda r: _h2h_conflict_count(r, xi_rows, opponents), axis=1
+                    )
+                # Soft attacker-stack limit: from the Nth same-team attacker
+                # already in the XI, the next one pays a penalty — stacking
+                # survives only when clearly better than the spread option.
+                stack_pen = float(getattr(config, "CHIP_ATTACKER_STACK_PENALTY", 0.6))
+                stack_lim = int(getattr(config, "CHIP_ATTACKER_STACK_SOFT_LIMIT", 2))
+                if pos in ("MID", "FWD") and stack_pen > 0:
+                    atk_counts: dict[int, int] = {}
+                    for r in xi_rows:
+                        if r["pos"] in ("MID", "FWD"):
+                            rt = int(r["team"])
+                            atk_counts[rt] = atk_counts.get(rt, 0) + 1
+                    pool["_adj"] = pool["_adj"] - pool["team"].astype(int).map(
+                        lambda t: stack_pen if atk_counts.get(t, 0) >= stack_lim else 0.0
+                    )
             pool = pool.sort_values("_adj", ascending=False, kind="mergesort")
             picked = []
             for _, row in pool.iterrows():
@@ -655,12 +713,14 @@ def build_chip_squad(
     min_premium_attackers=0,
     premium_floor=0.0,
     premium_positions=None,
+    differential=False,
 ):
     """
     Build a legal 15-man draft for wildcard/free-hit under budget and team caps.
 
     The draft squad objective is `score_col` (for example `xpts_horizon` for wildcard,
     or `xpts_gwXX` for free hit), while the final XI can still be optimized separately.
+    `differential=True` docks scores by ownership (see _apply_differential).
     """
     shape_map = _chip_shape(shape)
     max_per_team = int(max_per_team or getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3)
@@ -668,6 +728,8 @@ def build_chip_squad(
     market = _prepare_chip_market(elements_all, score_col=score_col, shape=shape_map)
     if market.empty:
         return {"ok": False, "reason": f"Market missing columns or score `{score_col}`.", "squad_df": None}
+    if differential:
+        market = _apply_differential(market)
 
     for pos, need in shape_map.items():
         have = int((market["pos"] == pos).sum())
@@ -766,8 +828,16 @@ def merge_scores(squad_df, projections_df, score_col):
     for c in ["price_m", "form", "penalties_order"]:
         if c in projections_df.columns:
             optional_cols.append(c)
+    # Matching per-GW fixture difficulty (diff_avg_gw{N} for xpts_gw{N}) rides
+    # along as `fixture_difficulty` so the captain pick can see the fixture.
+    rename = {"id": "player_id", score_col: "xpts"}
+    m = re.match(r"xpts_gw(\d+)$", str(score_col))
+    if m and f"diff_avg_gw{m.group(1)}" in projections_df.columns:
+        diff_col = f"diff_avg_gw{m.group(1)}"
+        optional_cols.append(diff_col)
+        rename[diff_col] = "fixture_difficulty"
     proj = projections_df[["id", score_col] + optional_cols].copy()
-    proj = proj.rename(columns={"id": "player_id", score_col: "xpts"})
+    proj = proj.rename(columns=rename)
     df = df.merge(proj, on="player_id", how="left")
     df["xpts"] = pd.to_numeric(df["xpts"], errors="coerce").fillna(0.0)
     if "price_m" in df.columns:
@@ -848,6 +918,15 @@ def optimize_lineup(squad_df, projections_df, score_col, formations=None):
                     float(config.CAPTAIN_SET_PIECE_PENALTY_WEIGHT)
                     if to_number(r.get("penalties_order"), 99.0) == 1.0
                     and str(r.get("pos")) in ["MID", "FWD"]
+                    else 0.0
+                )
+                + (
+                    # Ceiling term: captaincy pays on hauls, and hauls die in
+                    # D4/D5 fixtures faster than the mean does. ± per FDR
+                    # step from neutral 3 — flips near-ties, never a monster.
+                    (3.0 - to_number(r.get("fixture_difficulty"), 3.0))
+                    * float(getattr(config, "CAPTAIN_FIXTURE_DIFFICULTY_WEIGHT", 0.35))
+                    if str(r.get("pos")) in ["MID", "FWD"]
                     else 0.0
                 )
             ),

@@ -959,6 +959,7 @@ def build_recommendations(payload):
     chip_play_event_id_raw = payload.get("chip_play_event_id")
     chip_strategy_raw = payload.get("chip_strategy")
     chip_strategy = normalize_chip_strategy(chip_strategy_raw)
+    chip_differential = parse_bool(payload.get("differential"), default=False)
     latest_n_matches_raw = payload.get("latest_n_matches", getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3))
     apply_transfer_count_raw = payload.get("apply_transfer_count")
 
@@ -1222,6 +1223,7 @@ def build_recommendations(payload):
                 budget_m=budget_m,
                 max_per_team=int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3),
                 opponents=fh_opponents,
+                differential=chip_differential,
             )
         else:
             chip_build = optimizer.build_chip_squad(
@@ -1232,6 +1234,7 @@ def build_recommendations(payload):
                 min_premium_attackers=min_premium_attackers,
                 premium_floor=premium_floor,
                 premium_positions=premium_positions,
+                differential=chip_differential,
             )
         timings["chip_draft_ms"] = elapsed_ms(ts)
 

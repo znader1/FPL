@@ -365,13 +365,15 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
         build = optimizer.build_free_hit_squad(
             elements_all=draft_pool, score_col=f"xpts_gw{gw_start}",
             budget_m=budget_m, max_per_team=max_per_team,
-            opponents=fh_opponents)
+            opponents=fh_opponents,
+            differential=bool(p.get("differential")))
     else:
         score_col = "wildcard_score" if objective == "wildcard" else f"xpts_gw{gw_start}"
         build = optimizer.build_chip_squad(
             elements_all=draft_pool, score_col=score_col, budget_m=budget_m,
             max_per_team=max_per_team, min_premium_attackers=min_premium,
-            premium_floor=premium_floor, premium_positions=premium_positions)
+            premium_floor=premium_floor, premium_positions=premium_positions,
+            differential=bool(p.get("differential")))
 
     if not build.get("ok"):
         return {
