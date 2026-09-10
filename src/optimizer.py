@@ -412,21 +412,25 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
     # --- Step 1: pick bench fillers first (cheapest per position) ---
     # Bench shape: 1 GKP + enough outfield to complete the 15.
     # We defer deciding the exact outfield bench split until after picking the XI.
-    # Cheapest available GKP for bench slot.
-    gkp_pool = market[market["pos"] == "GKP"].sort_values("price_m", ascending=True)
+    # Cheapest available GKP for bench slot. The XI keeper is NOT price-picked —
+    # it competes on chip_score inside the XI loop below like every other XI
+    # slot (a price-ranked XI keeper meant a random 4.0m backup started every
+    # free hit). Stable sort so the 4.0m tie-tier resolves by the market's
+    # score-descending pre-sort instead of quicksort order.
+    gkp_pool = market[market["pos"] == "GKP"].sort_values(
+        "price_m", ascending=True, kind="mergesort"
+    )
     if len(gkp_pool) < 2:
         return {"ok": False, "reason": "Not enough GKPs in market.", "squad_df": None}
 
     bench_gkp = gkp_pool.iloc[[0]]  # cheapest GKP
-    xi_gkp = gkp_pool.iloc[[1]]     # second GKP goes to XI
 
     # --- Step 2: pick best XI across all valid formations ---
     best_xi = None
     best_xi_score = -1.0
     best_formation = None
 
-    # Outfield pool excludes both GKPs already assigned
-    used_ids = set(bench_gkp["id"].astype(int).tolist() + xi_gkp["id"].astype(int).tolist())
+    used_ids = set(bench_gkp["id"].astype(int).tolist())
 
     for d, m, f in VALID_FORMATIONS:
         # Need d DEF + m MID + f FWD in XI, then bench = (5-d) DEF + (5-m) MID + (3-f) FWD
@@ -467,25 +471,31 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
 
         bench_ids = used_ids | {int(r["id"]) for r in bench_outfield}
 
-        # Pick XI outfielders (best by score within xi_budget)
-        xi_outfield = []
-        team_counts_xi = _team_counts(xi_gkp)
+        # Pick the XI (best by score within xi_budget). The keeper slot is
+        # score-picked here exactly like the outfield slots — GKP first so its
+        # small price range can't be squeezed out by premium outfield spend.
+        xi_rows = []
+        team_counts_xi = {}
         # Merge bench team counts since they share the same 15-man squad
         for t, c in team_counts_bench.items():
             team_counts_xi[t] = team_counts_xi.get(t, 0) + c
 
         xi_ok = True
-        xi_cost = float(xi_gkp["price_m"].sum())
-        for pos, need in [("DEF", d), ("MID", m), ("FWD", f)]:
+        total_xi_slots = 1 + d + m + f
+        for pos, need in [("GKP", 1), ("DEF", d), ("MID", m), ("FWD", f)]:
             pool = market[
                 (market["pos"] == pos)
-                & (~market["id"].astype(int).isin(bench_ids | {int(r["id"]) for r in xi_outfield}))
-            ].sort_values("chip_score", ascending=False)
+                & (~market["id"].astype(int).isin(bench_ids | {int(r["id"]) for r in xi_rows}))
+            ].sort_values("chip_score", ascending=False, kind="mergesort")
             picked = []
             for _, row in pool.iterrows():
                 t = int(row["team"])
-                cost_so_far = xi_cost + sum(float(r["price_m"]) for r in xi_outfield) + float(row["price_m"])
-                remaining_slots = (d + m + f) - len(xi_outfield) - 1
+                cost_so_far = (
+                    sum(float(r["price_m"]) for r in xi_rows)
+                    + sum(float(r["price_m"]) for r in picked)
+                    + float(row["price_m"])
+                )
+                remaining_slots = total_xi_slots - len(xi_rows) - len(picked) - 1
                 # rough budget check: leave min budget for remaining slots
                 if cost_so_far + remaining_slots * 4.0 > xi_budget:
                     continue
@@ -497,17 +507,17 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
             if len(picked) < need:
                 xi_ok = False
                 break
-            xi_outfield.extend(picked)
+            xi_rows.extend(picked)
 
         if not xi_ok:
             continue
 
-        xi_score = float(xi_gkp["chip_score"].sum()) + sum(float(r["chip_score"]) for r in xi_outfield)
+        xi_score = sum(float(r["chip_score"]) for r in xi_rows)
         if xi_score > best_xi_score:
             best_xi_score = xi_score
             best_formation = (d, m, f)
             best_xi = pd.concat(
-                [xi_gkp] + [pd.DataFrame([r]) for r in xi_outfield],
+                [pd.DataFrame([r]) for r in xi_rows],
                 ignore_index=True,
             )
             best_bench = pd.concat(
