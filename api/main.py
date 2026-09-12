@@ -12,19 +12,22 @@ except ImportError:
 from pathlib import Path
 
 import pandas as pd
-from fastapi import Body, Depends, FastAPI, Header, HTTPException
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exception_handlers import http_exception_handler
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, projections, recommender, transfer_planner, transforms
-from src.auth import check_api_key, check_admin_key, require_user
+from src.auth import check_api_key, check_admin_key, require_user, authenticated_subject
+from src.ratelimit import (
+    LLM_LIMIT, MAX_REQUEST_BYTES, _client_ip, _user_key, limiter,
+)
 from src.insights import (
     build_chip_profile,
     build_scoring_guide,
@@ -131,20 +134,26 @@ app.add_middleware(
 )
 
 
-# --- per-IP rate limiting (defense-in-depth against LLM cost / DoS abuse) ---
-def _client_ip(request):
-    # Fly (and most proxies) put the real client IP first in X-Forwarded-For.
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
-    return get_remote_address(request)
-
-
-_rl_default = _csv_env("FPL_RATE_LIMITS") or ["90/minute", "1500/hour"]
-limiter = Limiter(key_func=_client_ip, default_limits=_rl_default, headers_enabled=True)
+# --- rate limiting + request-size ceiling (see src/ratelimit.py) -----------
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
+
+
+@app.middleware("http")
+async def _cap_request_body(request, call_next):
+    """Refuse oversized bodies before Starlette buffers them into 512MB of RAM.
+
+    See docs/prelaunch_audit_2026-09-12.md (C3).
+    """
+    declared = request.headers.get("content-length")
+    if declared:
+        try:
+            if int(declared) > MAX_REQUEST_BYTES:
+                return JSONResponse(status_code=413, content={"detail": "Request body too large."})
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length."})
+    return await call_next(request)
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -804,7 +813,7 @@ def build_squad(payload):
     }
 
 
-def optimize_squad(payload):
+def optimize_squad(payload, owner=None):
     """
     "Improve my team" optimizer for the pre-deadline window (unlimited free
     transfers, no hits). Repeatedly applies the best beneficial free swaps until
@@ -925,7 +934,7 @@ def optimize_squad(payload):
         cap = ranked[0] if ranked else None
         vice = ranked[1] if len(ranked) > 1 else None
     if apply_result and len(set(final_ids)) == 15:
-        manual_squad.save_manual_squad(entry_id, final_ids, captain_id=cap, vice_id=vice)
+        manual_squad.save_manual_squad(entry_id, final_ids, captain_id=cap, vice_id=vice, owner=owner)
         applied = True
 
     return {
@@ -1866,6 +1875,17 @@ def entry_identity_get(
     return JSONResponse(content=jsonable_encoder(build_entry_identity(entry_id)))
 
 
+def _owner_of(x_api_key, authorization):
+    """Ownership key for per-user writes: the Supabase `sub`, or None.
+
+    None means the caller presented the static service key (scripts, the refresh
+    cron) and is trusted server-to-server. Client-supplied entry_id must never be
+    treated as proof of ownership — see docs/prelaunch_audit_2026-09-12.md (C4).
+    """
+    subject = authenticated_subject(x_api_key=x_api_key, authorization=authorization)
+    return (subject or {}).get("sub")
+
+
 @app.post("/squad")
 def squad_post(
     payload=Body(None),
@@ -1897,6 +1917,13 @@ def squad_manual_post(
     entry_id = safe_int(payload.get("entry_id"))
     if not entry_id:
         raise HTTPException(status_code=400, detail="Missing/invalid entry_id.")
+
+    owner = _owner_of(x_api_key, authorization)
+    try:
+        manual_squad.assert_can_write(entry_id, owner)
+    except manual_squad.OwnershipError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
     player_ids = payload.get("player_ids") or []
     captain_id = payload.get("captain_id")
     vice_id = payload.get("vice_id")
@@ -1914,7 +1941,7 @@ def squad_manual_post(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    manual_squad.save_manual_squad(entry_id, player_ids, captain_id=captain_id, vice_id=vice_id)
+    manual_squad.save_manual_squad(entry_id, player_ids, captain_id=captain_id, vice_id=vice_id, owner=owner)
     out = build_squad({"entry_id": entry_id})
     return JSONResponse(content=jsonable_encoder(out))
 
@@ -1931,7 +1958,12 @@ def squad_manual_delete(
     entry_id = safe_int(entry_id)
     if not entry_id:
         raise HTTPException(status_code=400, detail="Missing/invalid entry_id.")
-    removed = manual_squad.clear_manual_squad(entry_id)
+    try:
+        removed = manual_squad.clear_manual_squad(
+            entry_id, owner=_owner_of(x_api_key, authorization)
+        )
+    except manual_squad.OwnershipError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     return JSONResponse(content={"entry_id": int(entry_id), "removed": bool(removed)})
 
 
@@ -1949,7 +1981,10 @@ def squad_optimize_post(
     err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key or payload.get("api_key"))
     if err:
         return err
-    out = optimize_squad(payload)
+    try:
+        out = optimize_squad(payload, owner=_owner_of(x_api_key, authorization))
+    except manual_squad.OwnershipError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     return JSONResponse(content=jsonable_encoder(out))
 
 
@@ -2064,7 +2099,9 @@ def league_strategy_post(
 
 
 @app.post("/explain")
+@limiter.limit(LLM_LIMIT, key_func=_user_key)
 def explain_post(
+    request: Request,
     payload=Body(None),
     api_key=None, x_api_key=Header(None), authorization=Header(None),
 ):

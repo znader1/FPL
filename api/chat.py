@@ -21,7 +21,9 @@ import logging
 from typing import Optional
 
 import pandas as pd
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Request
+
+from src.ratelimit import LLM_LIMIT, _user_key, limiter
 from pydantic import BaseModel, Field
 
 
@@ -229,7 +231,8 @@ def _load_rules_text() -> str | None:
 
 
 @router.post("/chat/captain", response_model=ChatResponse)
-def chat_captain(req: SpecialistRequest = Body(...)):
+@limiter.limit(LLM_LIMIT, key_func=_user_key)
+def chat_captain(request: Request, req: SpecialistRequest = Body(...)):
     """Direct captain-agent call — skips orchestrator for speed."""
     from agents.captain_agent import run_captain_agent
 
@@ -251,7 +254,8 @@ def chat_captain(req: SpecialistRequest = Body(...)):
 
 
 @router.post("/chat/transfer", response_model=ChatResponse)
-def chat_transfer(req: SpecialistRequest = Body(...)):
+@limiter.limit(LLM_LIMIT, key_func=_user_key)
+def chat_transfer(request: Request, req: SpecialistRequest = Body(...)):
     """
     Direct transfer-agent call — skips orchestrator for speed.
     Computes the model-recommended captain (deterministic, fast) and protects
@@ -289,7 +293,8 @@ def chat_transfer(req: SpecialistRequest = Body(...)):
 
 
 @router.post("/chat/chip", response_model=ChatResponse)
-def chat_chip(req: SpecialistRequest = Body(...)):
+@limiter.limit(LLM_LIMIT, key_func=_user_key)
+def chat_chip(request: Request, req: SpecialistRequest = Body(...)):
     """Direct chip-agent call — skips orchestrator for speed."""
     from agents.chip_agent import run_chip_agent
 
@@ -325,7 +330,8 @@ def chat_chip(req: SpecialistRequest = Body(...)):
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest = Body(...)):
+@limiter.limit(LLM_LIMIT, key_func=_user_key)
+def chat(request: Request, req: ChatRequest = Body(...)):
     """Route a user question to the FPL orchestrator agent (free-form questions)."""
     from agents.orchestrator import run_orchestrator
     from api.main import build_next_event_summary, get_bootstrap_cached, get_fixtures_cached

@@ -38,13 +38,44 @@ def _path_for(entry_id):
     return _data_dir() / f"entry_{int(entry_id)}.json"
 
 
-def save_manual_squad(entry_id, player_ids, captain_id=None, vice_id=None):
+class OwnershipError(Exception):
+    """Raised when a caller tries to write another user's manual squad."""
+
+
+def _assert_owner(entry_id, owner):
+    """Reject a write when the stored squad belongs to a different user.
+
+    ``owner=None`` means the caller authenticated with the static service key
+    (scripts, the refresh cron) and is trusted. A squad persisted before
+    ownership existed carries no ``owner_sub`` and is claimed by its next
+    authenticated writer.
+    """
+    if owner is None:
+        return
+    existing = load_manual_squad(entry_id)
+    if not existing:
+        return
+    stored = existing.get("owner_sub")
+    if stored is not None and stored != owner:
+        raise OwnershipError(
+            f"Manual squad for entry {int(entry_id)} belongs to another user."
+        )
+
+
+def assert_can_write(entry_id, owner):
+    """Raise OwnershipError if `owner` may not write this entry's squad."""
+    _assert_owner(entry_id, owner)
+
+
+def save_manual_squad(entry_id, player_ids, captain_id=None, vice_id=None, owner=None):
     """Persist the raw manual selection. Validation happens at build time."""
+    _assert_owner(entry_id, owner)
     payload = {
         "entry_id": int(entry_id),
         "player_ids": [int(p) for p in player_ids],
         "captain_id": int(captain_id) if captain_id is not None else None,
         "vice_id": int(vice_id) if vice_id is not None else None,
+        "owner_sub": owner,
     }
     d = _data_dir()
     d.mkdir(parents=True, exist_ok=True)
@@ -63,8 +94,9 @@ def load_manual_squad(entry_id):
         return None
 
 
-def clear_manual_squad(entry_id):
+def clear_manual_squad(entry_id, owner=None):
     """Remove a persisted manual squad (e.g. once the real fetch takes over)."""
+    _assert_owner(entry_id, owner)
     p = _path_for(entry_id)
     if p.exists():
         p.unlink()
