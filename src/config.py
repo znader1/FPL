@@ -457,6 +457,20 @@ OUTPUT_DC_BASE_RATE = {"GKP": 0.0, "DEF": 0.12, "MID": 0.06, "FWD": 0.0}  # shri
 # --- blend of the xG model into the baseline projection ---
 # Set from the Task 8 sweep (docs/superpowers/plans/2026-08-25-transfer-planner-v2.md
 # ## Results): scripts.backtest_blend_sweep over 2025-26 GW6-29 (24 GWs), DC=True,
+# Which fixture-difficulty source drives the BASELINE leg's multiplier (and
+# the published diff_avg_gw{n} the captain ceiling term reads):
+#   "fpl"        — FPL's official FDR (legacy; opinion-based, lags form)
+#   "xg_ratings" — our xG attack/defence ratings via attack_difficulty(),
+#                  continuous 1-5 (smooth multiplier, no integer rounding),
+#                  knowledge_discount applied — one difficulty truth with the
+#                  ticker/chips/stack-odds side.
+# A/B (scripts/backtest_difficulty_ab.py, 2025-26 GW6-38, blend 0.5):
+# MAE 1.902 vs 1.903 — statistical tie; captain hit 0.121→0.152, regret
+# 10.97→10.88 (both within noise). Flipped on no-regression + unification:
+# one difficulty truth across engine, ticker, chips, stack odds AND the
+# (Dn) badges; knowledge_discount nudges now move everything consistently.
+PROJ_DIFFICULTY_SOURCE = "xg_ratings"
+
 # weight 0.5 beat weight 0.0 on every metric (MAE -0.202/-9.47%, captain hit +0.042,
 # top10 +0.029, regret -0.334), with MAE improving monotonically across the whole
 # grid and no regression at any weight.

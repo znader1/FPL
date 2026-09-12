@@ -215,6 +215,7 @@ def annotate_elements_with_gw_fixtures(
     fx,
     gw,
     teams_short_map,
+    diff_by_team=None,
 ):
     """
     Adds per-player, team-based GW annotations:
@@ -222,9 +223,19 @@ def annotate_elements_with_gw_fixtures(
       - gw_fixture_count (int)
       - gw_diff_sum, gw_diff_avg
       - price_m (if available)
+
+    ``diff_by_team`` ({team_id: continuous 1-5 difficulty}) overrides the FPL
+    official FDR in both the (Dn) label and gw_diff_sum/avg — so the badge
+    and the multiplier can share one difficulty source. A team missing from
+    the map falls back to the FPL value for that fixture.
     """
     by_team = fixtures_by_team_for_gw(fx, int(gw))
     df = elements.copy()
+    diff_by_team = diff_by_team or {}
+
+    def _diff(team_id, it):
+        override = diff_by_team.get(int(team_id))
+        return float(override) if override is not None else float(it["diff"])
 
     def label(team_id):
         lst = by_team.get(int(team_id), [])
@@ -233,18 +244,21 @@ def annotate_elements_with_gw_fixtures(
         parts = []
         for it in lst:
             opp = teams_short_map.get(int(it["opp"]), "?")
-            parts.append(f"{'H' if it['is_home'] else 'A'}-{opp}(D{int(it['diff'])})")
+            d = max(1, min(5, int(round(_diff(team_id, it)))))
+            parts.append(f"{'H' if it['is_home'] else 'A'}-{opp}(D{d})")
         return " & ".join(parts)
 
     def dsum(team_id):
-        return int(sum(int(it["diff"]) for it in by_team.get(int(team_id), [])))
+        return float(sum(_diff(team_id, it) for it in by_team.get(int(team_id), [])))
 
     def dcnt(team_id):
         return int(len(by_team.get(int(team_id), [])))
 
     df["gw_fixtures"] = df["team"].map(label)
     df["gw_fixture_count"] = df["team"].map(dcnt).fillna(0).astype(int)
-    df["gw_diff_sum"] = df["team"].map(dsum).fillna(0).astype(int)
+    # float, not int: with a continuous difficulty override an int cast would
+    # truncate the resolution the override exists to provide
+    df["gw_diff_sum"] = df["team"].map(dsum).fillna(0.0).astype(float)
     # avoid division by zero
     df["gw_diff_avg"] = df.apply(
         lambda r: (r["gw_diff_sum"] / r["gw_fixture_count"]) if r["gw_fixture_count"] else 0, axis=1

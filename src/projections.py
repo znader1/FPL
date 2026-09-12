@@ -39,6 +39,64 @@ def clamp(value, low, high):
     return float(v)
 
 
+def difficulty_multiplier_smooth(diff_avg):
+    """Continuous version of ``difficulty_multiplier``: piecewise-linear
+    between the integer anchors of DIFFICULTY_MULTIPLIER, clamped to 1..5.
+    Used for the xG-ratings difficulty source, whose 1-5 scale is a float —
+    integer rounding would throw away most of its resolution."""
+    if pd.isna(diff_avg):
+        return 1.0
+    try:
+        d = float(diff_avg)
+    except Exception:
+        return 1.0
+    d = max(1.0, min(5.0, d))
+    lo = int(d)
+    hi = min(5, lo + 1)
+    frac = d - lo
+    m_lo = float(DIFFICULTY_MULTIPLIER.get(lo, 1.0))
+    m_hi = float(DIFFICULTY_MULTIPLIER.get(hi, 1.0))
+    return m_lo + (m_hi - m_lo) * frac
+
+
+def xg_team_difficulty_for_gw(ratings, fixtures, gw):
+    """Per-team continuous difficulty (1-5) for one GW from the xG ratings —
+    ``attack_difficulty`` per fixture, averaged on a DGW. Teams with no
+    fixture are absent (same convention as the FPL-FDR path's missing rows)."""
+    from src import fixture_difficulty as _fd
+
+    by_team = transforms.fixtures_by_team_for_gw(fixtures, int(gw))
+    out = {}
+    for team_id, lst in by_team.items():
+        vals = []
+        for it in lst:
+            opp = it.get("opp")
+            if opp is None:
+                continue
+            vals.append(_fd.attack_difficulty(ratings, int(team_id), int(opp),
+                                              bool(it.get("is_home"))))
+        if vals:
+            out[int(team_id)] = float(sum(vals) / len(vals))
+    return out
+
+
+def resolve_projection_difficulty_ratings(teams_short_map):
+    """Build the xG ratings for the projections difficulty source, or None.
+
+    Reuses the same loaders the blend leg patches in backtests, so the
+    leak-safety of the harness carries over. Any failure degrades to None →
+    the caller falls back to the FPL-FDR path.
+    """
+    try:
+        from src import fixture_difficulty as _fd
+        match_df = _fd.load_match_history()
+        team_xg = _fd.build_team_match_xg(match_df)
+        ratings = _fd.resolve_team_ratings(team_xg, teams_short_map=teams_short_map)
+        return _fd.apply_knowledge_discount(ratings, teams_short_map=teams_short_map)
+    except Exception:
+        return None
+
+
 def difficulty_multiplier(diff_avg):
     """Map FPL difficulty (1..5) to a simple multiplier."""
     if pd.isna(diff_avg):
@@ -521,13 +579,33 @@ def project_elements_next_gws(
 
     team_recent_ppg = team_recent_ppg_map(fixtures, gw_start=gw_start, latest_n_matches=latest_n_matches)
 
+    # One-difficulty-truth switch: with "xg_ratings" the baseline leg's
+    # multiplier (and the published diff_avg_gw{n}) come from our own xG
+    # attack/defence ratings instead of FPL's official FDR. Fail-soft: no
+    # usable ratings → the legacy FPL-FDR path below runs unchanged.
+    diff_source = str(getattr(config, "PROJ_DIFFICULTY_SOURCE", "fpl"))
+    xg_diff_ratings = (
+        resolve_projection_difficulty_ratings(teams_short_map)
+        if diff_source == "xg_ratings" else None
+    )
+
     horizon_total = pd.Series(0.0, index=df.index, dtype="float64")
 
     for i, gw in enumerate(gws):
-        ann = transforms.annotate_elements_with_gw_fixtures(df, fixtures, int(gw), teams_short_map)
+        xg_map = (
+            xg_team_difficulty_for_gw(xg_diff_ratings, fixtures, int(gw))
+            if xg_diff_ratings is not None else None
+        )
+        # diff_by_team also rewrites the (Dn) badge labels and gw_diff_avg, so
+        # the multiplier, the published diff_avg_gw{n}, and what the user SEES
+        # all come from the same difficulty source.
+        ann = transforms.annotate_elements_with_gw_fixtures(
+            df, fixtures, int(gw), teams_short_map, diff_by_team=xg_map)
         fixture_count = pd.to_numeric(ann["gw_fixture_count"], errors="coerce").fillna(0.0)
         diff_avg = pd.to_numeric(ann["gw_diff_avg"], errors="coerce").fillna(0.0)
-        diff_mult = diff_avg.apply(difficulty_multiplier)
+        diff_mult = diff_avg.apply(
+            difficulty_multiplier_smooth if xg_map is not None else difficulty_multiplier
+        )
         if fdr_strength != 1.0:
             # Scale only the fixture-difficulty multiplier's deviation from 1.0 —
             # home/away and team-form multipliers below are untouched.
