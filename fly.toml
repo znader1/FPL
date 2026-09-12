@@ -26,7 +26,9 @@ primary_region = 'lhr'
   force_https = true
   auto_stop_machines = 'stop'
   auto_start_machines = true
-  min_machines_running = 0
+  # Was 0: the first deadline-hour user paid a cold boot *and* a cold model
+  # build, and a health-check failure could restart into a cache stampede.
+  min_machines_running = 1
 
   [[http_service.checks]]
     interval = '15s'
