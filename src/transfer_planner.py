@@ -133,7 +133,7 @@ def _best_swap(squad, info, unowned, hz, bank, team_counts, xi=None,
     return best
 
 
-def _move_record(m, info):
+def _move_record(m, info, gw=None):
     s, b = info[m["sell"]], info[m["buy"]]
     rec = {
         "position": m["pos"],
@@ -141,6 +141,11 @@ def _move_record(m, info):
         "buy": {"id": b["id"], "name": b["name"], "team": b["team"], "price": round(b["price"], 1)},
         "score_gain": round(m["gain"], 2),
     }
+    if gw is not None:
+        # score_gain is the HORIZON total — surface the immediate-week slice
+        # too so a multi-week edge never masquerades as this week's gain.
+        rec["this_gw_gain"] = round(
+            float(b["xg"].get(gw, 0.0)) - float(s["xg"].get(gw, 0.0)), 2)
     if m.get("forced_injury"):
         rec["forced_injury"] = True
     if m.get("conflicts"):
@@ -148,11 +153,16 @@ def _move_record(m, info):
     return rec
 
 
-def _note(moves, ft_before, info):
+def _note(moves, ft_before, info, gw=None):
     if not moves:
         return f"Roll — no move above the bar; bank the free transfer (had {ft_before})."
-    parts = [f"{info[m['sell']]['name']} → {info[m['buy']]['name']} (+{round(m['gain'], 1)})"
-             for m in moves]
+    parts = []
+    for m in moves:
+        gain_txt = f"+{round(m['gain'], 1)}"
+        if gw is not None:
+            tg = float(info[m["buy"]]["xg"].get(gw, 0.0)) - float(info[m["sell"]]["xg"].get(gw, 0.0))
+            gain_txt = f"+{round(tg, 1)} this GW, +{round(m['gain'], 1)} over horizon"
+        parts.append(f"{info[m['sell']]['name']} → {info[m['buy']]['name']} ({gain_txt})")
     return "; ".join(parts)
 
 
@@ -287,8 +297,8 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
             "gw_gain": gw_gain,
             "net_gain": net,
             "bank_after": round(bank, 2),
-            "moves": [_move_record(m, info) for m in moves],
-            "note": _note(moves, ft_before, info),
+            "moves": [_move_record(m, info, gw=g) for m in moves],
+            "note": _note(moves, ft_before, info, gw=g),
         })
         ft = ft_after
 

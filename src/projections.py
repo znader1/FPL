@@ -632,6 +632,22 @@ def project_elements_next_gws(
             else 1.0
         )
 
+        # Combined fixture-context multiplier. For GOALKEEPERS its deviation
+        # from 1.0 is damped by PROJ_GK_FIXTURE_DAMP: a keeper's floor
+        # (appearance + save points) barely moves with the fixture — only the
+        # clean-sheet share is fixture-elastic — so the full stack overstates
+        # GK fixture sensitivity and inflates GK transfer gains.
+        ctx_mult = diff_mult * home_away_mult * opp_form_mult * team_form_mult
+        gk_damp = float(getattr(config, "PROJ_GK_FIXTURE_DAMP", 1.0))
+        if gk_damp != 1.0:
+            if "element_type" in df.columns:
+                is_gk = pd.to_numeric(df["element_type"], errors="coerce") == 1
+            elif "pos" in df.columns:
+                is_gk = df["pos"].astype(str) == "GKP"
+            else:
+                is_gk = pd.Series(False, index=df.index)
+            ctx_mult = (1.0 + (ctx_mult - 1.0) * gk_damp).where(is_gk, ctx_mult)
+
         minutes_mult = None
         if apply_minutes:
             try:
@@ -661,8 +677,8 @@ def project_elements_next_gws(
             # For players where ep_next is available, treat base_gw0 as a per-GW total
             # and only apply difficulty/home/form context multipliers, not fixture scaling.
             has_ep = ep_next.notna()
-            xpts_with_ep = base_gw0 * diff_mult * home_away_mult * opp_form_mult * team_form_mult
-            xpts_no_ep = blended_base * effective_fixtures * diff_mult * home_away_mult * opp_form_mult * team_form_mult
+            xpts_with_ep = base_gw0 * ctx_mult
+            xpts_no_ep = blended_base * effective_fixtures * ctx_mult
             xpts = xpts_with_ep.where(has_ep, xpts_no_ep)
             # Zero out blanks for non-ep players
             xpts = xpts.where(has_ep | (fixture_count > 0), 0.0)
@@ -672,7 +688,7 @@ def project_elements_next_gws(
                 xpts = xpts * play_prob
         else:
             base = blended_base
-            xpts = base * effective_fixtures * diff_mult * home_away_mult * opp_form_mult * team_form_mult
+            xpts = base * effective_fixtures * ctx_mult
             if minutes_mult is not None:
                 xpts = xpts * minutes_mult
             elif i <= 2:

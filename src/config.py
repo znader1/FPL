@@ -471,6 +471,18 @@ OUTPUT_DC_BASE_RATE = {"GKP": 0.0, "DEF": 0.12, "MID": 0.06, "FWD": 0.0}  # shri
 # (Dn) badges; knowledge_discount nudges now move everything consistently.
 PROJ_DIFFICULTY_SOURCE = "xg_ratings"
 
+# GK fixture-sensitivity damp: fraction of the combined context multiplier's
+# deviation from 1.0 that applies to GOALKEEPERS. 1.0 = legacy (full stack on
+# the whole GK baseline — overstates fixture elasticity: saves + appearance
+# points barely move with the opponent, only the CS share does). Tune only
+# via scripts/backtest_gk_damp.py. 2026-09-12 sweep (GW6-38): GK MAE flat at
+# every damp (±0.001) — the backtest is INSENSITIVE here (1-GW MAE can't see
+# horizon-spread inflation; blend dilutes the leg). 0.5 shipped on scoring-
+# rule arithmetic, not a backtest win: CS is ~40-50% of GK expected points,
+# appearance+saves are fixture-flat — full elasticity overstated GK transfer
+# gains ~2x (live case: a GK swap topped the plan at +11.6/5GW).
+PROJ_GK_FIXTURE_DAMP = 0.5
+
 # weight 0.5 beat weight 0.0 on every metric (MAE -0.202/-9.47%, captain hit +0.042,
 # top10 +0.029, regret -0.334), with MAE improving monotonically across the whole
 # grid and no regression at any weight.
