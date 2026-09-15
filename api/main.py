@@ -1309,6 +1309,21 @@ def build_recommendations(payload):
             fdt = fixture_difficulty.fixture_difficulty_table(
                 ratings, get_fixtures_cached(), int(optimize_event_id))
             lam_by_team = {int(r["team_id"]): float(r["xg_for"]) for _, r in fdt.iterrows()}
+            # Blend in market-implied expected goals where the odds API covers
+            # the fixture — the market prices team news our xG can't see.
+            # Fail-soft: no key/odds → pure xG lambdas as before.
+            try:
+                from src import odds_client
+                odds_w = float(getattr(config, "ODDS_LAMBDA_BLEND_WEIGHT", 0.7))
+                if odds_w > 0:
+                    fpl_names = {int(t["id"]): t["name"]
+                                 for t in get_bootstrap_cached().get("teams", [])}
+                    odds_lam = odds_client.odds_lambda_by_team(fpl_names)
+                    for tid, lam in odds_lam.items():
+                        if tid in lam_by_team:
+                            lam_by_team[tid] = odds_w * lam + (1.0 - odds_w) * lam_by_team[tid]
+            except Exception as e:  # noqa: BLE001 — odds must never fail the response
+                logger.warning("odds lambda unavailable: %s", e)
             xgi_map = {}
             if "expected_goals_per_90" in proj_all.columns:
                 xg = pd.to_numeric(proj_all["expected_goals_per_90"], errors="coerce").fillna(0.0)
