@@ -80,6 +80,17 @@ def xg_team_difficulty_for_gw(ratings, fixtures, gw):
     return out
 
 
+def resolve_market_difficulty(names_by_id):
+    """Market-implied 1-5 difficulty per team for the NEXT fixture, from the
+    bookmaker-odds disk cache only — the engine never touches the network
+    (the API layer and /admin/refresh keep the cache warm). {} on any miss."""
+    try:
+        from src import odds_client
+        return odds_client.market_difficulty_by_team(names_by_id, cache_only=True)
+    except Exception:
+        return {}
+
+
 def resolve_projection_difficulty_ratings(teams_short_map):
     """Build the xG ratings for the projections difficulty source, or None.
 
@@ -591,11 +602,30 @@ def project_elements_next_gws(
 
     horizon_total = pd.Series(0.0, index=df.index, dtype="float64")
 
+    # Market difficulty covers only the next fixture — blend it into the
+    # FIRST horizon GW at ODDS_DIFFICULTY_BLEND_WEIGHT; the xG ratings carry
+    # the rest of the horizon alone. The market prices team news, rotation
+    # and motivation that decayed xG can't see.
+    market_diff = {}
+    if xg_diff_ratings is not None and "team_name" in df.columns:
+        odds_w = float(getattr(config, "ODDS_DIFFICULTY_BLEND_WEIGHT", 0.5))
+        if odds_w > 0:
+            names_by_id = {}
+            for t, n in zip(pd.to_numeric(df["team"], errors="coerce"), df["team_name"]):
+                if pd.notna(t) and isinstance(n, str) and n:
+                    names_by_id[int(t)] = n
+            market_diff = resolve_market_difficulty(names_by_id) or {}
+
     for i, gw in enumerate(gws):
         xg_map = (
             xg_team_difficulty_for_gw(xg_diff_ratings, fixtures, int(gw))
             if xg_diff_ratings is not None else None
         )
+        if xg_map is not None and i == 0 and market_diff:
+            odds_w = float(getattr(config, "ODDS_DIFFICULTY_BLEND_WEIGHT", 0.5))
+            for t, d in market_diff.items():
+                if t in xg_map:
+                    xg_map[t] = odds_w * float(d) + (1.0 - odds_w) * xg_map[t]
         # diff_by_team also rewrites the (Dn) badge labels and gw_diff_avg, so
         # the multiplier, the published diff_avg_gw{n}, and what the user SEES
         # all come from the same difficulty source.

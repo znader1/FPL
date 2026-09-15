@@ -118,6 +118,24 @@ def build_chip_signals(bootstrap: dict, current_gw: int, model_horizon: int):
         {**s, "team": id_to_name.get(int(s.get("team_id", 0)), s.get("team_short"))}
         for s in compute_fixture_swings(ticker)
     ]
+
+    # Market difficulty covers only the next fixture — blend it into the
+    # CURRENT GW's map (feeds the TC haul multiplier and the FH tough gate);
+    # later GWs stay pure xG ratings. Never fatal: odds miss → unchanged map.
+    try:
+        from src import odds_client
+        odds_w = float(getattr(config, "ODDS_DIFFICULTY_BLEND_WEIGHT", 0.5))
+        if odds_w > 0:
+            market_diff = odds_client.market_difficulty_by_team(id_to_name)
+            gw_map = team_difficulty_by_gw.get(int(current_gw))
+            if market_diff and gw_map:
+                for tid, d in market_diff.items():
+                    name = id_to_name.get(tid)
+                    if name in gw_map:
+                        gw_map[name] = odds_w * float(d) + (1.0 - odds_w) * gw_map[name]
+    except Exception as e:  # noqa: BLE001
+        logger.warning("market difficulty blend unavailable: %s", e)
+
     return breaks, team_difficulty_by_gw, swings, xgi_per90
 
 

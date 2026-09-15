@@ -40,25 +40,19 @@ def _now():
     return time.time()
 
 
-def fetch_epl_odds(api_key=None, force=False):
-    """Return the raw odds-API event list for EPL, or None.
-
-    Serves the disk cache inside ODDS_CACHE_TTL_S; a fresh pull rewrites the
-    cache and drops a timestamped archive copy.
-    """
-    key = api_key or os.environ.get("ODDS_API_KEY") or ""
-    ttl = float(getattr(config, "ODDS_CACHE_TTL_S", 21600.0))
-
-    if not force and _CACHE_FILE.exists():
-        try:
-            blob = json.loads(_CACHE_FILE.read_text())
-            if _now() - float(blob.get("ts", 0)) < ttl:
-                return blob.get("data")
-        except Exception:
-            pass
-
-    if not key:
+def _read_cache(ttl):
+    if not _CACHE_FILE.exists():
         return None
+    try:
+        blob = json.loads(_CACHE_FILE.read_text())
+        if _now() - float(blob.get("ts", 0)) < ttl:
+            return blob.get("data")
+    except Exception:
+        pass
+    return None
+
+
+def _fetch_live(key):
     try:
         resp = requests.get(
             f"{ODDS_API_BASE}/sports/soccer_epl/odds",
@@ -74,7 +68,31 @@ def fetch_epl_odds(api_key=None, force=False):
         data = resp.json()
     except Exception:
         return None
-    if not isinstance(data, list):
+    return data if isinstance(data, list) else None
+
+
+def fetch_epl_odds(api_key=None, force=False, cache_only=False):
+    """Return the raw odds-API event list for EPL, or None.
+
+    Serves the disk cache inside ODDS_CACHE_TTL_S; a fresh pull rewrites the
+    cache and drops a timestamped archive copy. ``cache_only=True`` NEVER
+    touches the network — the projection engine uses this so odds can't add
+    latency or flakiness there; the API layer and /admin/refresh keep the
+    cache warm.
+    """
+    ttl = float(getattr(config, "ODDS_CACHE_TTL_S", 21600.0))
+    if not force:
+        cached = _read_cache(ttl)
+        if cached is not None:
+            return cached
+    if cache_only:
+        return None
+
+    key = api_key or os.environ.get("ODDS_API_KEY") or ""
+    if not key:
+        return None
+    data = _fetch_live(key)
+    if data is None:
         return None
 
     try:
@@ -155,13 +173,14 @@ def match_fpl_team(odds_name, fpl_names_by_id):
     return None
 
 
-def odds_lambda_by_team(fpl_names_by_id, api_key=None):
-    """Market-implied expected goals per FPL team id for upcoming fixtures.
+def odds_lambdas_by_team(fpl_names_by_id, api_key=None, cache_only=False):
+    """Market-implied expected goals per FPL team id for the next fixture.
 
-    Returns {team_id: lam_for}. Empty dict on any failure — callers blend
-    with the xG-ratings lambda and degrade gracefully.
+    Returns {team_id: {"lam_for": float, "lam_against": float}} — a team's
+    lam_against is its opponent's lam_for, which is all a clean-sheet
+    estimate needs (P(CS) = e^-lam_against). Empty dict on any failure.
     """
-    events = fetch_epl_odds(api_key=api_key)
+    events = fetch_epl_odds(api_key=api_key, cache_only=cache_only)
     if not events:
         return {}
     out = {}
@@ -176,7 +195,37 @@ def odds_lambda_by_team(fpl_names_by_id, api_key=None):
         aid = match_fpl_team(implied["away_team"], fpl_names_by_id)
         # First upcoming fixture per team wins (events are date-ordered).
         if hid is not None and hid not in out:
-            out[hid] = float(implied["lam_home"])
+            out[hid] = {"lam_for": float(implied["lam_home"]),
+                        "lam_against": float(implied["lam_away"])}
         if aid is not None and aid not in out:
-            out[aid] = float(implied["lam_away"])
+            out[aid] = {"lam_for": float(implied["lam_away"]),
+                        "lam_against": float(implied["lam_home"])}
+    return out
+
+
+def odds_lambda_by_team(fpl_names_by_id, api_key=None, cache_only=False):
+    """Back-compat: {team_id: lam_for} view of odds_lambdas_by_team."""
+    return {tid: v["lam_for"]
+            for tid, v in odds_lambdas_by_team(
+                fpl_names_by_id, api_key=api_key, cache_only=cache_only).items()}
+
+
+def market_difficulty_by_team(fpl_names_by_id, api_key=None, cache_only=False):
+    """Market-implied 1-5 attacking difficulty per FPL team id.
+
+    Mirrors fixture_difficulty.attack_difficulty's convention: difficulty
+    ~ 3 x league_avg / lam_for, clamped to 1..5 — a team the market expects
+    to score freely faces an easy fixture. Empty dict on any failure.
+    """
+    lams = odds_lambdas_by_team(fpl_names_by_id, api_key=api_key, cache_only=cache_only)
+    if not lams:
+        return {}
+    fors = [v["lam_for"] for v in lams.values()]
+    league = sum(fors) / len(fors)
+    if league <= 0:
+        return {}
+    out = {}
+    for tid, v in lams.items():
+        d = 3.0 * league / max(0.2, v["lam_for"])
+        out[tid] = float(min(5.0, max(1.0, d)))
     return out

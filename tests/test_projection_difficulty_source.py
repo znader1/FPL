@@ -100,3 +100,61 @@ def test_badge_label_follows_difficulty_override():
         elements, fixtures, 5, short, diff_by_team={1: 3.6})
     assert "(D4)" in over["gw_fixtures"].iloc[0]  # override rounds to 4
     assert abs(float(over["gw_diff_avg"].iloc[0]) - 3.6) < 1e-9  # continuous kept
+
+
+def test_market_difficulty_blends_first_gw_only(monkeypatch):
+    from src import config
+
+    monkeypatch.setattr(config, "PROJ_DIFFICULTY_SOURCE", "xg_ratings", raising=False)
+    monkeypatch.setattr(config, "ODDS_DIFFICULTY_BLEND_WEIGHT", 0.5, raising=False)
+    # xG ratings say difficulty 3.0 for team 1 in both GWs
+    monkeypatch.setattr(projections, "resolve_projection_difficulty_ratings",
+                        lambda tsm: {"_league": 1.4, 1: {"attack": 1.0, "defense": 1.0},
+                                     2: {"attack": 1.0, "defense": 1.0}})
+    monkeypatch.setattr(projections, "xg_team_difficulty_for_gw",
+                        lambda ratings, fixtures, gw: {1: 3.0, 2: 3.0})
+    # Market says team 1's next fixture is much easier (1.0)
+    monkeypatch.setattr(projections, "resolve_market_difficulty",
+                        lambda names: {1: 1.0})
+
+    elements = pd.DataFrame({
+        "id": [1], "web_name": ["P1"], "team": [1], "team_name": ["Alpha"],
+        "element_type": [3], "now_cost": [50], "points_per_game": [4.0],
+        "form": [4.0], "minutes": [900], "chance_of_playing_next_round": [100],
+        "status": ["a"], "total_points": [40],
+    })
+    fixtures = pd.DataFrame([(5, 1, 2, 3, 3), (6, 2, 1, 3, 3)],
+                            columns=["event", "team_h", "team_a",
+                                     "team_h_difficulty", "team_a_difficulty"])
+    proj = projections.project_elements_next_gws(
+        elements=elements, fixtures=fixtures, teams_short_map={1: "AAA", 2: "BBB"},
+        gw_start=5, horizon_gws=2)
+    r = proj.iloc[0]
+    assert abs(float(r["diff_avg_gw5"]) - 2.0) < 1e-9   # 0.5*1.0 + 0.5*3.0
+    assert abs(float(r["diff_avg_gw6"]) - 3.0) < 1e-9   # market never touches later GWs
+
+
+def test_no_market_data_leaves_difficulty_unchanged(monkeypatch):
+    from src import config
+
+    monkeypatch.setattr(config, "PROJ_DIFFICULTY_SOURCE", "xg_ratings", raising=False)
+    monkeypatch.setattr(projections, "resolve_projection_difficulty_ratings",
+                        lambda tsm: {"_league": 1.4, 1: {"attack": 1.0, "defense": 1.0},
+                                     2: {"attack": 1.0, "defense": 1.0}})
+    monkeypatch.setattr(projections, "xg_team_difficulty_for_gw",
+                        lambda ratings, fixtures, gw: {1: 3.0, 2: 3.0})
+    monkeypatch.setattr(projections, "resolve_market_difficulty", lambda names: {})
+
+    elements = pd.DataFrame({
+        "id": [1], "web_name": ["P1"], "team": [1], "team_name": ["Alpha"],
+        "element_type": [3], "now_cost": [50], "points_per_game": [4.0],
+        "form": [4.0], "minutes": [900], "chance_of_playing_next_round": [100],
+        "status": ["a"], "total_points": [40],
+    })
+    fixtures = pd.DataFrame([(5, 1, 2, 3, 3)],
+                            columns=["event", "team_h", "team_a",
+                                     "team_h_difficulty", "team_a_difficulty"])
+    proj = projections.project_elements_next_gws(
+        elements=elements, fixtures=fixtures, teams_short_map={1: "AAA", 2: "BBB"},
+        gw_start=5, horizon_gws=1)
+    assert abs(float(proj.iloc[0]["diff_avg_gw5"]) - 3.0) < 1e-9

@@ -47,3 +47,41 @@ def test_match_fpl_team_aliases_and_substrings():
     assert match_fpl_team("Hull City", fpl) == 4
     assert match_fpl_team("Arsenal", fpl) == 5
     assert match_fpl_team("Real Madrid", fpl) is None
+
+
+def _full_events():
+    ev = _event()
+    return [ev]
+
+
+def test_lambdas_by_team_for_and_against(monkeypatch):
+    from src import odds_client
+    monkeypatch.setattr(odds_client, "fetch_epl_odds", lambda **k: _full_events())
+    fpl = {1: "Man City", 4: "Hull"}
+    out = odds_client.odds_lambdas_by_team(fpl)
+    assert set(out) == {1, 4}
+    # City heavy favourites: their lam_for is Hull's lam_against and vice versa
+    assert out[1]["lam_for"] > out[4]["lam_for"]
+    assert abs(out[1]["lam_against"] - out[4]["lam_for"]) < 1e-9
+    assert abs(out[4]["lam_against"] - out[1]["lam_for"]) < 1e-9
+
+
+def test_market_difficulty_scale(monkeypatch):
+    from src import odds_client
+    monkeypatch.setattr(odds_client, "fetch_epl_odds", lambda **k: _full_events())
+    fpl = {1: "Man City", 4: "Hull"}
+    diff = odds_client.market_difficulty_by_team(fpl)
+    assert set(diff) == {1, 4}
+    # High expected goals = easy fixture (low difficulty); both clamped 1-5
+    assert 1.0 <= diff[1] < diff[4] <= 5.0
+
+
+def test_cache_only_mode_never_fetches(monkeypatch):
+    from src import odds_client
+
+    def boom(**k):
+        raise AssertionError("network fetch attempted in cache_only mode")
+
+    monkeypatch.setattr(odds_client, "_fetch_live", boom, raising=False)
+    monkeypatch.setattr(odds_client, "_read_cache", lambda ttl: None)
+    assert odds_client.odds_lambdas_by_team({1: "Arsenal"}, cache_only=True) == {}

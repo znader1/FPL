@@ -492,6 +492,10 @@ PROJ_GK_FIXTURE_DAMP = 0.5
 # are available for the fixture; 0 disables. Key: ODDS_API_KEY env var
 # (free tier ~500 credits/month — cache + archive protect the quota).
 ODDS_LAMBDA_BLEND_WEIGHT = 0.7
+# Market difficulty into the projections' FIRST horizon GW (and the chip
+# planner's current-GW difficulty map). Odds only cover the next fixture,
+# so later GWs stay pure xG ratings. 0 disables.
+ODDS_DIFFICULTY_BLEND_WEIGHT = 0.5
 ODDS_CACHE_TTL_S = 21600.0   # 6h — aligned with the data-refresh cadence
 ODDS_TEAM_ALIASES = {}       # extra {fpl_name: odds_api_name} fixes if naming drifts
 

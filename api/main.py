@@ -1664,6 +1664,14 @@ def admin_refresh(
     fixtures = get_fixtures_cached()
     next_ev = build_next_event_summary(bootstrap=bootstrap, fixtures=fixtures)
 
+    # Warm the bookmaker-odds disk cache so the projection engine (which
+    # reads cache-only, never the network) always has fresh market lambdas.
+    try:
+        from src import odds_client as _odds
+        _odds.fetch_epl_odds()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("odds cache refresh failed: %s", e)
+
     snapshot_info = None
     snapshot_error = None
     if run_snapshot:
