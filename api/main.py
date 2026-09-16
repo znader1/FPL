@@ -23,7 +23,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, projections, recommender, transfer_planner, transforms
+from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, projections, recommender, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key, require_user, authenticated_subject
 from src.ratelimit import (
     LLM_LIMIT, MAX_REQUEST_BYTES, _client_ip, _user_key, limiter,
@@ -1445,14 +1445,6 @@ def build_recommendations(payload):
             horizon_gws=int(display_horizon_gws),
         )
     timings["transfer_preview_ms"] = elapsed_ms(ts)
-    if include_transfers:
-        try:
-            annotate_moves_next_fixture(
-                transfer_preview, elements, fixtures, teams_short, int(optimize_event_id)
-            )
-        except Exception:
-            pass  # fixture labels are cosmetic — never block the response
-        out["transfers"] = transfer_preview
 
     # Additive: a multi-GW roll/bank plan across the horizon (the single-GW
     # `transfers` above never sequences GWs or accounts for the -4 hit). Uses
@@ -1495,6 +1487,22 @@ def build_recommendations(payload):
                 opponents_by_gw=_opps_by_gw)
         except Exception as e:  # noqa: BLE001 - planning must never fail the recommendation
             logger.warning("horizon transfer plan failed: %s", e)
+
+    if include_transfers:
+        # The plan is the recommendation: its first-GW moves lead the
+        # applyable list so "Apply" applies what the verdict says.
+        try:
+            plan_merge.merge_plan_moves_into_preview(
+                transfer_preview, out.get("transfer_plan_horizon"))
+        except Exception as e:  # noqa: BLE001 - alternatives still render
+            logger.warning("plan-move merge failed: %s", e)
+        try:
+            annotate_moves_next_fixture(
+                transfer_preview, elements, fixtures, teams_short, int(optimize_event_id)
+            )
+        except Exception:
+            pass  # fixture labels are cosmetic — never block the response
+        out["transfers"] = transfer_preview
 
     ts = time.perf_counter()
     moves = transfer_preview.get("moves") if isinstance(transfer_preview, dict) else []

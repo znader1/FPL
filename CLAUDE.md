@@ -111,6 +111,7 @@ Greedy per-GW walk across the projection horizon, separate from the single-GW be
 
 - **The headline plan is the product's ONE piece of advice**: at most `min(MAX_MOVES_PER_GW, banked FTs)` moves per GW (`MOVES_FOLLOW_FT`), never hit-funded (`ALLOW_HITS = False`); hits-allowed callers keep old semantics.
 - **Roll-vs-move counterfactual**: every first-GW spend is compared against banking the FT and playing a double next week (the alt walk gets its banked FT back); the verdict names the counterfactual's moves and quotes both nets. Injury urgency bypasses.
+- **Structured verdict** (2026-09-16): `verdict_detail` carries action, GW range, per-move `this_gw_gain`/`horizon_gain`, `plan_net`, the rejected `roll_alternative` and (on roll) `next_move`; `reasoning` is one clause. `src/plan_merge.py` then puts the plan's first-GW moves at the front of `transfers.moves` (`in_plan: true`) so `squad_with_transfers_steps[1]` applies the recommendation; beam survivors follow as alternatives.
 - **XI-aware**: a bench seller's swap only credits points the buyer adds by displacing the weakest same-position XI member — bench churn is worth 0.
 - **Positional bars**: GKP/DEF swaps need `POS_GAIN_MULT` × min_gain (2.0 / 2.25) — shared with the beam search.
 - **Head-to-head hedge nudge**: buys directly opposing an owned GKP/DEF↔attacker pair that GW get `TRANSFER_H2H_CONFLICT_PENALTY` (variance preference, deliberately small) and an `h2h_conflicts` warning on the move record.
