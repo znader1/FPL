@@ -143,21 +143,28 @@ def test_forced_injury_detail():
 
 
 def test_runner_ups_other_seller_swap_after_spend():
-    plan = tp.plan_transfers(_frame(_spend_market()), squad_ids=[1, 2], gws=[10, 11],
-                             itb_m=0.0, start_ft=1, allow_hits=False, min_gain=2.0,
-                             max_moves_per_gw=1)
+    # Seller 2's lower price rules out the shared best target (id 3), so its
+    # own best swap is a genuinely distinct buy (id 4) -- not a collapse onto
+    # the same target as the chosen move.
+    plan = tp.plan_transfers(_frame([
+        {"id": 1, "pos": "MID", "price": 5.0, "xpts": 2.0},
+        {"id": 2, "pos": "MID", "price": 3.0, "xpts": 2.0},
+        {"id": 3, "pos": "MID", "price": 5.0, "xpts": 9.0},
+        {"id": 4, "pos": "MID", "price": 3.0, "xpts": 7.0},
+    ]), squad_ids=[1, 2], gws=[10, 11], itb_m=0.0, start_ft=1, allow_hits=False,
+        min_gain=2.0, max_moves_per_gw=1)
     d = plan["verdict_detail"]
     assert d["action"] == "spend"
     chosen = d["moves"][0]
-    chosen_pair = (chosen["sell"]["id"], chosen["buy"]["id"])
+    assert chosen["sell"]["id"] == 1 and chosen["buy"]["id"] == 3
     ru = d["runner_ups"]
-    assert len(ru) >= 1
-    assert not any((r["sell"]["id"], r["buy"]["id"]) == chosen_pair for r in ru)
+    assert len(ru) == 1
     other = ru[0]
-    assert other["sell"]["id"] != chosen_pair[0]
-    assert other["buy"]["id"] == 3
+    assert other["sell"]["id"] == 2
+    assert other["buy"]["id"] == 4
+    assert other["buy"]["id"] != chosen["buy"]["id"]      # not the same pick restated
     assert other["clears_bar"] is True
-    assert other["horizon_gain"] == 14.0
+    assert other["horizon_gain"] == 10.0
 
 
 def test_runner_ups_roll_market_below_bar():
@@ -187,11 +194,13 @@ def test_runner_ups_len_at_most_n():
 
 
 def test_runner_ups_present_after_counterfactual_flip():
+    # Same price-gating as test_runner_ups_other_seller_swap_after_spend so
+    # the rejected spend plan's runner-ups aren't just the chosen buy again.
     plan = tp.plan_transfers(_frame([
-        {"id": 1, "pos": "MID", "xpts": 2.0},
-        {"id": 2, "pos": "MID", "xpts": 2.0},
-        {"id": 3, "pos": "MID", "xpts": {10: 1.0, 11: 9.0}},
-        {"id": 4, "pos": "MID", "xpts": {10: 1.0, 11: 9.0}},
+        {"id": 1, "pos": "MID", "price": 5.0, "xpts": 2.0},
+        {"id": 2, "pos": "MID", "price": 3.0, "xpts": 2.0},
+        {"id": 3, "pos": "MID", "price": 5.0, "xpts": {10: 1.0, 11: 9.0}},
+        {"id": 4, "pos": "MID", "price": 3.0, "xpts": {10: 1.0, 11: 9.0}},
     ]), squad_ids=[1, 2], gws=[10, 11], itb_m=0.0, start_ft=1, allow_hits=False,
         min_gain=2.0, max_moves_per_gw=1)
     assert plan["verdict"] == "roll"
@@ -199,6 +208,64 @@ def test_runner_ups_present_after_counterfactual_flip():
     assert "runner_ups" in d
     assert isinstance(d["runner_ups"], list)
     assert len(d["runner_ups"]) >= 1
+    assert all(r["buy"]["id"] != 3 for r in d["runner_ups"])  # not the chosen (rejected) buy restated
+
+
+def _min_info(entries):
+    """Minimal info dict for unit-testing `_ranked_swaps` directly, bypassing
+    `_frame`/`_build_info` (no xg/gws plumbing needed -- `hz` is passed in)."""
+    return {
+        pid: {"price": p.get("price", 5.0), "team": p.get("team", f"T{pid}"),
+              "pos": p.get("pos", "MID")}
+        for pid, p in entries.items()
+    }
+
+
+def test_ranked_swaps_dedupes_shared_target_keeps_higher_gain_seller():
+    # Two bench-ish sellers whose best buy is the same player (id 99) -- only
+    # the higher-gain seller's (20's) candidate should survive.
+    info = _min_info({10: {}, 20: {}, 99: {}})
+    hz = {10: 2.0, 20: 1.0, 99: 10.0}
+    ranked = tp._ranked_swaps({10, 20}, info, [99], hz, 0.0, {}, None, {}, 0.0, 1.0, {}, 5)
+    assert len(ranked) == 1
+    assert ranked[0]["sell"] == 20      # gain 9 (10-1) beats seller 10's gain 8 (10-2)
+    assert ranked[0]["buy"] == 99
+    assert ranked[0]["gain"] == 9.0
+
+
+def test_ranked_swaps_caps_two_per_position():
+    # Three DEF sellers, each price-gated to a distinct affordable ceiling so
+    # each has its own best target (101/102/103, price == value, ascending)
+    # -- plus one MID seller with an exclusive target. Without the position
+    # cap all 3 DEF candidates would survive; with it, the weakest is dropped.
+    info = _min_info({
+        1: {"pos": "DEF", "price": 5.0}, 2: {"pos": "DEF", "price": 6.0},
+        3: {"pos": "DEF", "price": 7.0}, 4: {"pos": "MID", "price": 5.0},
+        101: {"pos": "DEF", "price": 5.0}, 102: {"pos": "DEF", "price": 6.0},
+        103: {"pos": "DEF", "price": 7.0}, 201: {"pos": "MID", "price": 5.0},
+    })
+    hz = {1: 1.0, 2: 1.0, 3: 1.0, 4: 1.0, 101: 5.0, 102: 6.0, 103: 7.0, 201: 8.0}
+    ranked = tp._ranked_swaps({1, 2, 3, 4}, info, [101, 102, 103, 201], hz, 0.0, {},
+                              None, {}, 0.0, 1.0, {}, 5)
+    positions = [r["pos"] for r in ranked]
+    assert positions.count("DEF") <= 2
+    assert "MID" in positions
+    assert len(ranked) == 3            # the weakest-gain DEF (seller 1, buy 101) is dropped
+    assert not any(r["buy"] == 101 for r in ranked)
+
+
+def test_runner_ups_excludes_buy_equal_to_chosen_move():
+    plan = tp.plan_transfers(_frame([
+        {"id": 1, "pos": "MID", "price": 5.0, "xpts": 2.0},
+        {"id": 2, "pos": "MID", "price": 3.0, "xpts": 2.0},
+        {"id": 3, "pos": "MID", "price": 5.0, "xpts": 9.0},
+        {"id": 4, "pos": "MID", "price": 3.0, "xpts": 7.0},
+    ]), squad_ids=[1, 2], gws=[10, 11], itb_m=0.0, start_ft=1, allow_hits=False,
+        min_gain=2.0, max_moves_per_gw=1)
+    d = plan["verdict_detail"]
+    chosen_buy = d["moves"][0]["buy"]["id"]
+    assert d["runner_ups"]                       # sanity: fixture still yields a runner-up
+    assert all(r["buy"]["id"] != chosen_buy for r in d["runner_ups"])
 
 
 def test_runner_ups_skip_first_gw_recursion_key_present_and_empty():

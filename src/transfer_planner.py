@@ -135,10 +135,14 @@ def _best_swap(squad, info, unowned, hz, bank, team_counts, xi=None,
 
 def _ranked_swaps(squad, info, unowned, hz, bank, team_counts, xi, opps_gw, h2h_pen,
                   min_gain, pos_mult, n):
-    """One candidate swap per squad member (their own best like-for-like
-    upgrade), ranked by horizon gain, capped at `n`. Computed independently
-    per seller -- not a joint allocation, so two sellers may share the same
-    best buy. Feeds `verdict_detail.runner_ups` ("also considered")."""
+    """One best-swap candidate per squad member, ranked by horizon gain, then
+    walked to keep only DISTINCT buy targets (each player appears at most
+    once) and at most two candidates per position. Several sellers tying on
+    the same XI-floor-driven buy (e.g. two bench keepers both wanting the
+    same replacement) would otherwise collapse the list onto a couple of
+    targets and say nothing new -- computed independently per seller, so
+    ties are broken by rank (the higher-gain seller keeps the target).
+    Feeds `verdict_detail.runner_ups` ("also considered")."""
     cands = []
     for s in squad:
         best = _best_swap({s}, info, unowned, hz, bank, team_counts, xi=xi,
@@ -149,7 +153,17 @@ def _ranked_swaps(squad, info, unowned, hz, bank, team_counts, xi, opps_gw, h2h_
         best["clears_bar"] = bool(best["gain"] > bar)
         cands.append(best)
     cands.sort(key=lambda m: m["gain"], reverse=True)
-    return cands[:n]
+
+    ranked, seen_buys, pos_counts = [], set(), {}
+    for m in cands:
+        if m["buy"] in seen_buys:
+            continue
+        if pos_counts.get(m["pos"], 0) >= 2:
+            continue
+        seen_buys.add(m["buy"])
+        pos_counts[m["pos"]] = pos_counts.get(m["pos"], 0) + 1
+        ranked.append(m)
+    return ranked[:n]
 
 
 def _move_record(m, info, gw=None):
@@ -400,10 +414,13 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
         ft = ft_after
 
         if gi == 0:
-            chosen_pairs = {(m["sell"], m["buy"]) for m in moves}
+            # Drop by buy id, not just the exact (sell, buy) pair: a runner-up
+            # naming a player you already just bought (via a different sell)
+            # is not "also considered" -- it's the same pick restated.
+            chosen_buys = {m["buy"] for m in moves}
             runner_ups = []
             for m in runner_up_cands:
-                if (m["sell"], m["buy"]) in chosen_pairs:
+                if m["buy"] in chosen_buys:
                     continue
                 dm = _detail_move(_move_record(m, info, gw=g))
                 dm["clears_bar"] = bool(m["clears_bar"])
