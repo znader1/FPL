@@ -40,13 +40,14 @@ def test_one_move_per_gw_cap():
         assert len(g["moves"]) <= 1
 
 
-def test_spend_reasoning_quotes_roll_alternative():
+def test_spend_carries_roll_alternative_detail():
     plan = tp.plan_transfers(_proj_frame(_two_upgrade_market()), squad_ids=[1, 2],
                              gws=[10, 11], itb_m=0.0, start_ft=1,
                              allow_hits=False, min_gain=2.0, max_moves_per_gw=1)
     assert plan["verdict"] == "spend"
-    assert "roll" in plan["reasoning"].lower()
-    assert "vs" in plan["reasoning"].lower() or "beats" in plan["reasoning"].lower()
+    alt = plan["verdict_detail"]["roll_alternative"]
+    assert alt is not None
+    assert alt["net"] == plan["roll_alternative_net_gain"]
 
 
 def test_roll_alternative_is_computed_and_attached():
@@ -75,13 +76,15 @@ def test_roll_alternative_gets_to_spend_the_banked_double():
     assert plan["roll_alternative_net_gain"] == 14.0
 
 
-def test_reasoning_names_the_counterfactual_double():
+def test_detail_names_the_counterfactual_double():
     plan = tp.plan_transfers(_proj_frame(_two_upgrade_market()), squad_ids=[1, 2],
                              gws=[10, 11], itb_m=0.0, start_ft=1,
                              allow_hits=False, min_gain=2.0, max_moves_per_gw=1)
     assert plan["verdict"] == "spend"
-    # The counterfactual's actual moves appear in the reasoning, not just a net.
-    assert "->" in plan["reasoning"].split("rolling", 1)[1]
+    # The counterfactual's actual moves are reported, not just a net.
+    alt_moves = plan["verdict_detail"]["roll_alternative"]["moves"]
+    assert len(alt_moves) == 2
+    assert {m["buy"]["id"] for m in alt_moves} == {3, 4}
 
 
 def test_cap_follows_available_free_transfers():

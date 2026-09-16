@@ -153,6 +153,68 @@ def _move_record(m, info, gw=None):
     return rec
 
 
+def _detail_move(m):
+    """Compact move for verdict_detail from a `_move_record` output."""
+    return {
+        "sell": m["sell"],
+        "buy": m["buy"],
+        "position": m.get("position"),
+        "this_gw_gain": round(float(m.get("this_gw_gain", 0.0)), 2),
+        "horizon_gain": round(float(m["score_gain"]), 2),
+        "forced_injury": bool(m.get("forced_injury", False)),
+        "h2h_conflicts": list(m.get("h2h_conflicts") or []),
+    }
+
+
+def _verdict_detail(result, min_gain, rejected=None):
+    """Structured twin of `reasoning`, built from the finished plan.
+
+    `rejected` is the plan the roll-vs-move counterfactual lost: the roll
+    walk when the verdict is spend, or the spend walk when the verdict was
+    flipped to roll. None when no comparison ran (injury urgency, roll with
+    nothing to compare, single-GW horizon)."""
+    plan = result.get("plan") or []
+    gws = list(result.get("gws") or [])
+    first = plan[0] if plan else None
+    moves = ([_detail_move(m) for m in first["moves"]]
+             if first and first["action"] == "transfer" else [])
+    detail = {
+        "action": result["verdict"],
+        "horizon": {
+            "start_gw": gws[0] if gws else None,
+            "end_gw": gws[-1] if gws else None,
+            "n": len(gws),
+        },
+        "ft_before": int(result["first_gw_ft_before"]),
+        "ft_after": int(result["first_gw_ft_after"]),
+        "threshold": float(min_gain),
+        "moves": moves,
+        "this_gw_gain": round(sum(m["this_gw_gain"] for m in moves), 2),
+        "horizon_gain": round(sum(m["horizon_gain"] for m in moves), 2),
+        "hit_cost": float(first["hit_cost"]) if first else 0.0,
+        "plan_net": float(result["total_net_gain"]),
+        "roll_alternative": None,
+        "next_move": None,
+    }
+    if result["verdict"] == "roll":
+        later = next((p for p in plan[1:] if p["action"] == "transfer"), None)
+        if later is not None:
+            detail["next_move"] = {
+                "gw": int(later["gw"]),
+                "moves": [_detail_move(m) for m in later["moves"]],
+                "horizon_gain": round(float(later["gw_gain"]), 2),
+            }
+    if rejected is not None:
+        alt_first = next((p for p in (rejected.get("plan") or [])
+                          if p["action"] == "transfer"), None)
+        detail["roll_alternative"] = {
+            "net": float(rejected["total_net_gain"]),
+            "gw": int(alt_first["gw"]) if alt_first else None,
+            "moves": [_detail_move(m) for m in alt_first["moves"]] if alt_first else [],
+        }
+    return detail
+
+
 def _note(moves, ft_before, info, gw=None):
     if not moves:
         return f"Roll — no move above the bar; bank the free transfer (had {ft_before})."
@@ -302,7 +364,7 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
         })
         ft = ft_after
 
-    verdict, reasoning = _verdict_and_reasoning(plan, min_gain, ft_cap)
+    verdict, reasoning = _verdict_and_reasoning(plan, min_gain, ft_cap, gws)
 
     result = {
         "gws": list(gws),
@@ -323,6 +385,7 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
             else plan[0]["free_transfers_after"] if plan else int(start_ft)
         ),
     }
+    result["verdict_detail"] = _verdict_detail(result, min_gain)
 
     # The user's decision framework, made explicit: a first-GW spend must beat
     # the counterfactual of rolling and having an extra transfer next week.
@@ -349,24 +412,29 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
             alt["roll_alternative_net_gain"] = float(alt_net)
             alt["verdict"] = "roll"
             alt["reasoning"] = (
-                f"Roll — banking for next week's {alt_moves_txt} projects net "
-                f"+{alt_net} over the horizon vs +{result['total_net_gain']} moving now."
+                f"Roll: banking beats moving now (+{alt_net} vs "
+                f"+{result['total_net_gain']} over {_gw_range(gws)}); "
+                f"next move {alt_moves_txt} in GW{alt_first['gw'] if alt_first else gws[-1]}."
             )
+            alt["verdict_detail"] = _verdict_detail(alt, min_gain, rejected=result)
             return alt
-        base_reasoning = result["reasoning"].rstrip(".")
-        result["reasoning"] = (
-            f"{base_reasoning} — beats rolling for next week's {alt_moves_txt} "
-            f"(net +{result['total_net_gain']} vs +{alt_net})."
-        )
+        result["verdict_detail"] = _verdict_detail(result, min_gain, rejected=alt)
 
     return result
 
 
-def _verdict_and_reasoning(plan, min_gain, ft_cap):
+def _gw_range(gws):
+    if not gws:
+        return "the horizon"
+    return f"GW{gws[0]}" if gws[0] == gws[-1] else f"GW{gws[0]}-{gws[-1]}"
+
+
+def _verdict_and_reasoning(plan, min_gain, ft_cap, gws):
     """Top-level verdict for the first horizon GW: an injury-forced sell always
     wins (it isn't optional), otherwise it's whichever the greedy walk chose
-    (spend now vs roll the FT), with a plain-English reason a user can act on."""
+    (spend now vs roll the FT). One clause; the numbers live in verdict_detail."""
     first = plan[0] if plan else None
+    rng = _gw_range(gws)
     forced_moves = [m for m in first["moves"] if m.get("forced_injury")] if first else []
     if forced_moves:
         flagged = ", ".join(m["sell"]["name"] for m in forced_moves)
@@ -376,22 +444,25 @@ def _verdict_and_reasoning(plan, min_gain, ft_cap):
 
     if first and first["action"] == "transfer":
         names = ", ".join(f"{m['sell']['name']} -> {m['buy']['name']}" for m in first["moves"])
+        this_gw = round(sum(float(m.get("this_gw_gain", 0.0)) for m in first["moves"]), 1)
         if first.get("hits"):
-            # Quote what the user actually banks — the raw sum before hit
-            # costs reads as a bigger promise than the plan delivers.
-            reasoning = (f"Move now: {names} (net +{first['net_gain']} xPts "
-                         f"after -{first['hit_cost']:g} in hits; bar {min_gain}).")
+            reasoning = (f"Move now: {names} (net +{first['net_gain']} over {rng} "
+                         f"after -{first['hit_cost']:g} in hits).")
         else:
-            reasoning = f"Move now: {names} (+{first['gw_gain']} xPts >= {min_gain} threshold)."
+            reasoning = (f"Move now: {names} (+{this_gw} this GW, "
+                         f"+{first['gw_gain']} over {rng}).")
         return "spend", reasoning
 
     if first:
+        ft_after = min(int(ft_cap), first["free_transfers_before"] + 1)
         nxt = next((p for p in plan[1:] if p["action"] == "transfer"), None)
-        follow = (f" -- GW{nxt['gw']} the plan makes {len(nxt['moves'])} move(s) for +{nxt['gw_gain']}."
-                  if nxt else ".")
-        reasoning = (f"No move gains >= {min_gain} xPts this GW. Roll the FT "
-                     f"({first['free_transfers_before']}->"
-                     f"{min(int(ft_cap), first['free_transfers_before'] + 1)}){follow}")
+        if nxt:
+            names = ", ".join(f"{m['sell']['name']} -> {m['buy']['name']}" for m in nxt["moves"])
+            follow = f" Next planned move: {names} in GW{nxt['gw']} (+{nxt['gw_gain']})."
+        else:
+            follow = f" No move clears +{min_gain} over {rng}."
+        reasoning = (f"Roll: bank the FT ({first['free_transfers_before']}->{ft_after})."
+                     f"{follow}")
         return "roll", reasoning
 
     return "roll", "No horizon GWs."
