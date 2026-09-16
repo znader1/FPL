@@ -163,4 +163,6 @@ Free transfers for the target GW are derived from `entry_history.event_transfers
 
 **Fly.io is the production backend.** `fly.toml` + `Dockerfile` (slim Python) define the Fly.io app (`fpl-assistant-api`, region `lhr`); `master` auto-deploys via `.github/workflows/fly-deploy.yml`. The machine auto-suspends when idle (free tier) — the refresh workflow wakes it with retry.
 
+The tracked `data/models/*.json` seeds (ratings + knowledge discount) ship in the image at `/app/seed/models` (staged by the Dockerfile, since `/app/data` is a volume mount that shadows the image); `src/seed_models.py`'s `ensure_seed_models()` runs at `api/main.py` import and copies any seed missing from the volume into `data/models` — it never overwrites a file already there, so runtime writes (e.g. `knowledge_discount.json`) win.
+
 Legacy/alternative: an Azure Container App path also exists in the repo (`.github/workflows/deploy-azure-containerapp.yml`, `docs/production_azure.md`, app `fpl-refresh-app`). It is **not** the intended backend — treat it as deprecated. Note: the frontend's `.env.production` (`VITE_FPL_API_BASE_URL`) still points at the Azure URL, so pointing production at Fly.io requires updating that value to the Fly.io URL.

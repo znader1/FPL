@@ -23,7 +23,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, projections, recommender, transfer_planner, transforms
+from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, projections, recommender, seed_models, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key, require_user, authenticated_subject
 from src.ratelimit import (
     LLM_LIMIT, MAX_REQUEST_BYTES, _client_ip, _user_key, limiter,
@@ -64,6 +64,12 @@ app = FastAPI(
     openapi_url="/openapi.json" if _docs_on else None,
 )
 logger = logging.getLogger(__name__)
+
+# Fly's persistent volume mounts at /app/data, shadowing the image's data/models
+# seeds. Copy any seed missing from the volume (never overwriting a runtime-written
+# file) before anything below reads data/models/*.json.
+_seed_models_result = seed_models.ensure_seed_models()
+logger.info("ensure_seed_models: %s", _seed_models_result)
 
 # --- personal GW replay (local-only; never enabled in production) ---
 if os.environ.get("REPLAY_MODE") == "1":
