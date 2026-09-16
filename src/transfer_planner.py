@@ -133,6 +133,25 @@ def _best_swap(squad, info, unowned, hz, bank, team_counts, xi=None,
     return best
 
 
+def _ranked_swaps(squad, info, unowned, hz, bank, team_counts, xi, opps_gw, h2h_pen,
+                  min_gain, pos_mult, n):
+    """One candidate swap per squad member (their own best like-for-like
+    upgrade), ranked by horizon gain, capped at `n`. Computed independently
+    per seller -- not a joint allocation, so two sellers may share the same
+    best buy. Feeds `verdict_detail.runner_ups` ("also considered")."""
+    cands = []
+    for s in squad:
+        best = _best_swap({s}, info, unowned, hz, bank, team_counts, xi=xi,
+                          squad_all=squad, opps_gw=opps_gw, h2h_pen=h2h_pen)
+        if best is None:
+            continue
+        bar = float(min_gain) * float(pos_mult.get(best["pos"], 1.0))
+        best["clears_bar"] = bool(best["gain"] > bar)
+        cands.append(best)
+    cands.sort(key=lambda m: m["gain"], reverse=True)
+    return cands[:n]
+
+
 def _move_record(m, info, gw=None):
     s, b = info[m["sell"]], info[m["buy"]]
     rec = {
@@ -166,13 +185,17 @@ def _detail_move(m):
     }
 
 
-def _verdict_detail(result, min_gain, rejected=None):
+def _verdict_detail(result, min_gain, rejected=None, runner_ups=None):
     """Structured twin of `reasoning`, built from the finished plan.
 
     `rejected` is the plan the roll-vs-move counterfactual lost: the roll
     walk when the verdict is spend, or the spend walk when the verdict was
     flipped to roll. None when no comparison ran (injury urgency, roll with
-    nothing to compare, single-GW horizon)."""
+    nothing to compare, single-GW horizon).
+
+    `runner_ups` is the pre-converted "also considered" list (see
+    `_ranked_swaps` / `plan_transfers`); the key is always present, empty
+    when nothing was computed (e.g. the `_skip_first_gw` counterfactual leg)."""
     plan = result.get("plan") or []
     gws = list(result.get("gws") or [])
     first = plan[0] if plan else None
@@ -195,6 +218,7 @@ def _verdict_detail(result, min_gain, rejected=None):
         "plan_net": float(result["total_net_gain"]),
         "roll_alternative": None,
         "next_move": None,
+        "runner_ups": list(runner_ups) if runner_ups else [],
     }
     if result["verdict"] == "roll":
         later = next((p for p in plan[1:] if p["action"] == "transfer"), None)
@@ -236,6 +260,7 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
     bank = float(itb_m)
     ft = int(start_ft)
     plan, total_net = [], 0.0
+    runner_ups = []
 
     # Injury gate: a red-flagged player in the LIKELY first-GW XI (top 11 of
     # the squad by that GW's projection) gets force-sold ahead of the normal
@@ -280,6 +305,19 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
             t = info[pid]["team"]
             team_counts[t] = team_counts.get(t, 0) + 1
 
+        pos_mult = getattr(config, "TRANSFER_PLAN_POS_GAIN_MULT", {}) or {}
+        opps_gw = (opponents_by_gw or {}).get(g) or {}
+        h2h_pen = float(getattr(config, "TRANSFER_H2H_CONFLICT_PENALTY", 0.0) or 0.0)
+
+        if gi == 0:
+            # Runner-ups: the best swap for each OTHER squad member, scored
+            # on the same pre-move state as the chosen move — before any
+            # forced sell or greedy move mutates squad/bank/team_counts.
+            unowned0 = [x for x in info if x not in squad]
+            runner_up_cands = _ranked_swaps(
+                squad, info, unowned0, hz, bank, team_counts, xi, opps_gw, h2h_pen,
+                min_gain, pos_mult, int(getattr(config, "TRANSFER_PLAN_RUNNER_UPS", 5)))
+
         moves, hits = [], 0
 
         if gi == 0:
@@ -299,7 +337,6 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
                 best["forced_injury"] = True
                 moves.append(best)
 
-        pos_mult = getattr(config, "TRANSFER_PLAN_POS_GAIN_MULT", {}) or {}
         # The cap follows the free transfers actually available this GW: 2 FT
         # banked → up to 2 moves may be recommended (each still clears its own
         # bar, and the whole plan still has to beat the roll counterfactual).
@@ -319,8 +356,6 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
             # instead of giving up on the first miss.
             pool = set(squad)
             best = None
-            opps_gw = (opponents_by_gw or {}).get(g) or {}
-            h2h_pen = float(getattr(config, "TRANSFER_H2H_CONFLICT_PENALTY", 0.0) or 0.0)
             while pool:
                 cand = _best_swap(pool, info, unowned, hz, bank, team_counts, xi=xi,
                                   squad_all=squad, opps_gw=opps_gw, h2h_pen=h2h_pen)
@@ -364,6 +399,16 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
         })
         ft = ft_after
 
+        if gi == 0:
+            chosen_pairs = {(m["sell"], m["buy"]) for m in moves}
+            runner_ups = []
+            for m in runner_up_cands:
+                if (m["sell"], m["buy"]) in chosen_pairs:
+                    continue
+                dm = _detail_move(_move_record(m, info, gw=g))
+                dm["clears_bar"] = bool(m["clears_bar"])
+                runner_ups.append(dm)
+
     verdict, reasoning = _verdict_and_reasoning(plan, min_gain, ft_cap, gws)
 
     result = {
@@ -385,7 +430,7 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
             else plan[0]["free_transfers_after"] if plan else int(start_ft)
         ),
     }
-    result["verdict_detail"] = _verdict_detail(result, min_gain)
+    result["verdict_detail"] = _verdict_detail(result, min_gain, runner_ups=runner_ups)
 
     # The user's decision framework, made explicit: a first-GW spend must beat
     # the counterfactual of rolling and having an extra transfer next week.
@@ -417,8 +462,10 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
                 f"next move {alt_moves_txt} in GW{alt_first['gw'] if alt_first else gws[-1]}."
             )
             alt["verdict_detail"] = _verdict_detail(alt, min_gain, rejected=result)
+            alt["verdict_detail"]["runner_ups"] = result["verdict_detail"]["runner_ups"]
             return alt
-        result["verdict_detail"] = _verdict_detail(result, min_gain, rejected=alt)
+        result["verdict_detail"] = _verdict_detail(result, min_gain, rejected=alt,
+                                                    runner_ups=runner_ups)
 
     return result
 

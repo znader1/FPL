@@ -142,6 +142,74 @@ def test_forced_injury_detail():
     assert d["roll_alternative"] is None       # urgency skips the comparison
 
 
+def test_runner_ups_other_seller_swap_after_spend():
+    plan = tp.plan_transfers(_frame(_spend_market()), squad_ids=[1, 2], gws=[10, 11],
+                             itb_m=0.0, start_ft=1, allow_hits=False, min_gain=2.0,
+                             max_moves_per_gw=1)
+    d = plan["verdict_detail"]
+    assert d["action"] == "spend"
+    chosen = d["moves"][0]
+    chosen_pair = (chosen["sell"]["id"], chosen["buy"]["id"])
+    ru = d["runner_ups"]
+    assert len(ru) >= 1
+    assert not any((r["sell"]["id"], r["buy"]["id"]) == chosen_pair for r in ru)
+    other = ru[0]
+    assert other["sell"]["id"] != chosen_pair[0]
+    assert other["buy"]["id"] == 3
+    assert other["clears_bar"] is True
+    assert other["horizon_gain"] == 14.0
+
+
+def test_runner_ups_roll_market_below_bar():
+    plan = tp.plan_transfers(_frame([
+        {"id": 1, "pos": "DEF", "price": 4.0, "xpts": 3.0},
+        {"id": 2, "pos": "DEF", "price": 4.0, "xpts": 3.5},
+    ]), squad_ids=[1], gws=[10, 11], itb_m=0.0, start_ft=1, min_gain=2.0)
+    d = plan["verdict_detail"]
+    assert d["action"] == "roll"
+    ru = d["runner_ups"]
+    assert len(ru) == 1
+    r = ru[0]
+    assert r["clears_bar"] is False
+    assert r["horizon_gain"] < d["threshold"]
+    assert r["sell"]["id"] == 1
+    assert r["buy"]["id"] == 2
+
+
+def test_runner_ups_len_at_most_n():
+    squad = [{"id": i, "pos": "MID", "xpts": 2.0} for i in range(1, 7)]
+    market = squad + [{"id": 11, "pos": "MID", "xpts": 9.0}]
+    plan = tp.plan_transfers(_frame(market), squad_ids=list(range(1, 7)), gws=[10, 11],
+                             itb_m=0.0, start_ft=1, allow_hits=False, min_gain=2.0,
+                             max_moves_per_gw=1)
+    d = plan["verdict_detail"]
+    assert len(d["runner_ups"]) <= 5
+
+
+def test_runner_ups_present_after_counterfactual_flip():
+    plan = tp.plan_transfers(_frame([
+        {"id": 1, "pos": "MID", "xpts": 2.0},
+        {"id": 2, "pos": "MID", "xpts": 2.0},
+        {"id": 3, "pos": "MID", "xpts": {10: 1.0, 11: 9.0}},
+        {"id": 4, "pos": "MID", "xpts": {10: 1.0, 11: 9.0}},
+    ]), squad_ids=[1, 2], gws=[10, 11], itb_m=0.0, start_ft=1, allow_hits=False,
+        min_gain=2.0, max_moves_per_gw=1)
+    assert plan["verdict"] == "roll"
+    d = plan["verdict_detail"]
+    assert "runner_ups" in d
+    assert isinstance(d["runner_ups"], list)
+    assert len(d["runner_ups"]) >= 1
+
+
+def test_runner_ups_skip_first_gw_recursion_key_present_and_empty():
+    plan = tp.plan_transfers(_frame(_spend_market()), squad_ids=[1, 2], gws=[10, 11],
+                             itb_m=0.0, start_ft=1, allow_hits=False, min_gain=2.0,
+                             max_moves_per_gw=1, _skip_first_gw=True)
+    d = plan["verdict_detail"]
+    assert "runner_ups" in d
+    assert d["runner_ups"] == []
+
+
 def test_hits_detail_quotes_hit_cost():
     players = [{"id": i, "pos": "MID", "xpts": 2.0} for i in range(1, 13)]
     market = players + [

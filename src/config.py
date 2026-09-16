@@ -205,6 +205,12 @@ TRANSFER_PLAN_ALLOW_HITS = False
 TRANSFER_PLAN_MAX_MOVES_PER_GW = 2
 TRANSFER_PLAN_MOVES_FOLLOW_FT = True
 
+# Runner-ups (2026-09-16): how many "next best swap per other squad player"
+# candidates verdict_detail.runner_ups keeps, ranked by horizon gain. Purely
+# informational (the "Also considered" list) -- never changes which move the
+# planner recommends.
+TRANSFER_PLAN_RUNNER_UPS = 5
+
 # Head-to-head hedge nudge: buying a player who faces one of your own
 # GKP/DEF<->attacker pairs that gameweek caps the pair's joint ceiling (your
 # striker scoring kills your defender's clean sheet). Expected points don't
