@@ -211,6 +211,24 @@ def test_runner_ups_present_after_counterfactual_flip():
     assert all(r["buy"]["id"] != 3 for r in d["runner_ups"])  # not the chosen (rejected) buy restated
 
 
+def test_runner_ups_excludes_negative_gain_seller():
+    # Seller 2 owns a 9.0-xpts player; their only same-position, affordable
+    # buy is worse (2.0) -- a losing swap is not "also considered". Seller 5
+    # (a different position, genuinely positive gain) still shows.
+    plan = tp.plan_transfers(_frame([
+        {"id": 1, "pos": "DEF", "price": 4.0, "xpts": 1.0},
+        {"id": 2, "pos": "MID", "price": 9.0, "xpts": 9.0},
+        {"id": 5, "pos": "FWD", "price": 5.0, "xpts": 3.0},
+        {"id": 3, "pos": "DEF", "price": 4.0, "xpts": 8.0},
+        {"id": 4, "pos": "MID", "price": 5.0, "xpts": 2.0},
+        {"id": 6, "pos": "FWD", "price": 5.0, "xpts": 6.0},
+    ]), squad_ids=[1, 2, 5], gws=[10, 11], itb_m=0.0, start_ft=1, allow_hits=False,
+        min_gain=2.0, max_moves_per_gw=1)
+    d = plan["verdict_detail"]
+    assert not any(r["sell"]["id"] == 2 for r in d["runner_ups"])
+    assert any(r["sell"]["id"] == 5 for r in d["runner_ups"])  # sanity: positive-gain seller still shows
+
+
 def _min_info(entries):
     """Minimal info dict for unit-testing `_ranked_swaps` directly, bypassing
     `_frame`/`_build_info` (no xg/gws plumbing needed -- `hz` is passed in)."""

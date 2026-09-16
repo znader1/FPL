@@ -142,12 +142,18 @@ def _ranked_swaps(squad, info, unowned, hz, bank, team_counts, xi, opps_gw, h2h_
     same replacement) would otherwise collapse the list onto a couple of
     targets and say nothing new -- computed independently per seller, so
     ties are broken by rank (the higher-gain seller keeps the target).
+    A candidate that loses points (gain <= 0 -- the seller's best available
+    buy is still worse than what they already own) is never a real
+    alternative, so it's dropped before ranking rather than shown "below
+    bar": below-bar is for swaps that gain something but not enough,
+    negative-gain swaps gain nothing at all.
+
     Feeds `verdict_detail.runner_ups` ("also considered")."""
     cands = []
     for s in squad:
         best = _best_swap({s}, info, unowned, hz, bank, team_counts, xi=xi,
                           squad_all=squad, opps_gw=opps_gw, h2h_pen=h2h_pen)
-        if best is None:
+        if best is None or best["gain"] <= 0:
             continue
         bar = float(min_gain) * float(pos_mult.get(best["pos"], 1.0))
         best["clears_bar"] = bool(best["gain"] > bar)
