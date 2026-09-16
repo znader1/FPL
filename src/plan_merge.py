@@ -5,7 +5,9 @@
 `squad_with_transfers_steps`) and the multi-GW plan (`transfer_plan_horizon`,
 the actual recommendation). Putting the plan's first-GW moves at the front of
 the beam list makes "Apply" apply the recommendation; the beam survivors follow
-as alternatives. Pure, no network, never raises on malformed input.
+as alternatives. The beam's own diagnostics (`transfer_plan.transfer_count_built`,
+`remaining_itb`) are left untouched — they describe the beam, not the plan. Pure,
+no network, never raises on malformed input.
 """
 
 
@@ -64,15 +66,4 @@ def merge_plan_moves_into_preview(preview, plan_horizon):
         pos = m.get("position") or "UNK"
         by_pos[pos] = by_pos.get(pos, 0) + 1
     preview["moves_by_position"] = by_pos
-
-    tp = preview.get("transfer_plan")
-    if isinstance(tp, dict):
-        tp["transfer_count_built"] = len(merged)
-
-    first = next((p for p in (plan_horizon.get("plan") or []) if isinstance(p, dict)), None)
-    if first is not None and first.get("bank_after") is not None:
-        try:
-            preview["remaining_itb"] = round(float(first["bank_after"]), 1)
-        except (TypeError, ValueError):
-            pass
     return preview

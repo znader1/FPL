@@ -1,5 +1,8 @@
 """verdict_detail: the structured twin of the prose `reasoning`."""
+import re
+
 import pandas as pd
+import pytest
 
 from src import transfer_planner as tp
 
@@ -60,6 +63,18 @@ def test_spend_detail_carries_both_gains_and_horizon():
     assert "beats rolling" not in plan["reasoning"]
     assert "threshold" not in plan["reasoning"]
     assert "this GW" in plan["reasoning"] and "GW10-11" in plan["reasoning"]
+    assert "+14.0 over GW10-11" in plan["reasoning"]
+
+
+def test_reasoning_numbers_are_one_decimal():
+    plan = tp.plan_transfers(_frame([
+        {"id": 1, "pos": "MID", "xpts": 2.13},
+        {"id": 2, "pos": "MID", "xpts": 2.13},
+        {"id": 3, "pos": "MID", "xpts": 9.07},
+        {"id": 4, "pos": "MID", "xpts": 8.01},
+    ]), squad_ids=[1, 2], gws=[10, 11], itb_m=0.0, start_ft=1, allow_hits=False,
+        min_gain=2.0, max_moves_per_gw=1)
+    assert not re.search(r"\d\.\d{2,}", plan["reasoning"]), plan["reasoning"]
 
 
 def test_roll_detail_when_nothing_clears_the_bar():
@@ -138,7 +153,7 @@ def test_hits_detail_quotes_hit_cost():
     first = plan["plan"][0]
     d = plan["verdict_detail"]
     assert d["hit_cost"] == first["hit_cost"]
-    assert d["horizon_gain"] == first["gw_gain"]
+    assert d["horizon_gain"] == pytest.approx(first["gw_gain"], abs=0.02)
     assert len(d["moves"]) == len(first["moves"])
     if first["hits"] > 0:
         assert "hit" in plan["reasoning"]

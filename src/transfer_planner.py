@@ -412,8 +412,8 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
             alt["roll_alternative_net_gain"] = float(alt_net)
             alt["verdict"] = "roll"
             alt["reasoning"] = (
-                f"Roll: banking beats moving now (+{alt_net} vs "
-                f"+{result['total_net_gain']} over {_gw_range(gws)}); "
+                f"Roll: banking beats moving now (+{round(float(alt_net), 1)} vs "
+                f"+{round(float(result['total_net_gain']), 1)} over {_gw_range(gws)}); "
                 f"next move {alt_moves_txt} in GW{alt_first['gw'] if alt_first else gws[-1]}."
             )
             alt["verdict_detail"] = _verdict_detail(alt, min_gain, rejected=result)
@@ -446,11 +446,11 @@ def _verdict_and_reasoning(plan, min_gain, ft_cap, gws):
         names = ", ".join(f"{m['sell']['name']} -> {m['buy']['name']}" for m in first["moves"])
         this_gw = round(sum(float(m.get("this_gw_gain", 0.0)) for m in first["moves"]), 1)
         if first.get("hits"):
-            reasoning = (f"Move now: {names} (net +{first['net_gain']} over {rng} "
-                         f"after -{first['hit_cost']:g} in hits).")
+            reasoning = (f"Move now: {names} (net +{round(float(first['net_gain']), 1)} "
+                         f"over {rng} after -{first['hit_cost']:g} in hits).")
         else:
             reasoning = (f"Move now: {names} (+{this_gw} this GW, "
-                         f"+{first['gw_gain']} over {rng}).")
+                         f"+{round(float(first['gw_gain']), 1)} over {rng}).")
         return "spend", reasoning
 
     if first:
@@ -458,7 +458,8 @@ def _verdict_and_reasoning(plan, min_gain, ft_cap, gws):
         nxt = next((p for p in plan[1:] if p["action"] == "transfer"), None)
         if nxt:
             names = ", ".join(f"{m['sell']['name']} -> {m['buy']['name']}" for m in nxt["moves"])
-            follow = f" Next planned move: {names} in GW{nxt['gw']} (+{nxt['gw_gain']})."
+            follow = (f" Next planned move: {names} in GW{nxt['gw']} "
+                      f"(+{round(float(nxt['gw_gain']), 1)}).")
         else:
             follow = f" No move clears +{min_gain} over {rng}."
         reasoning = (f"Roll: bank the FT ({first['free_transfers_before']}->{ft_after})."

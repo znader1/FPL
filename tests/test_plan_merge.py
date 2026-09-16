@@ -45,8 +45,8 @@ def test_spend_plan_moves_lead_and_beam_survivors_follow():
     assert preview["moves"][0]["this_gw_gain"] == 0.9
     assert preview["moves"][0]["position"] == "DEF"
     assert preview["moves_by_position"] == {"DEF": 1, "MID": 2}
-    assert preview["transfer_plan"]["transfer_count_built"] == 3
-    assert preview["remaining_itb"] == 1.2
+    assert preview["transfer_plan"]["transfer_count_built"] == 2   # beam diagnostic, untouched
+    assert preview["remaining_itb"] == 0.3                         # beam diagnostic, untouched
 
 
 def test_duplicate_pair_reuses_the_beam_record():
