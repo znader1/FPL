@@ -67,20 +67,53 @@ def chips_plan(
         return result
 
 
-def build_chip_signals(bootstrap: dict, current_gw: int, model_horizon: int):
-    """Build the breaks / team_difficulty_by_gw / swings / xgi_per90 strategy
-    signals from an already-fetched bootstrap payload.
+SIGNAL_KEYS = ("breaks", "team_difficulty_by_gw", "swings", "xgi_per90",
+               "player_priors", "euro_by_gw", "cup_clashes", "events", "team_labels")
 
-    Shared by `_build_plan_response` and `scripts/spotcheck_chip_plan.py` so
-    the two never drift out of sync. Raises on any failure — callers wrap
-    this in their own fail-soft try/except (signals must never fail the plan)
-    and reset all four to None on error, rather than handing the engine a
-    mix of populated and missing signals.
+
+def build_chip_signals(bootstrap: dict, current_gw: int, model_horizon: int,
+                       calendar_path: str | None = None) -> dict:
+    """Build the strategy signals from an already-fetched bootstrap payload.
+
+    Returns a dict keyed by SIGNAL_KEYS: breaks, team_difficulty_by_gw,
+    swings, xgi_per90 (the 2026-09-08 set) plus player_priors (per-GW points
+    distributions), euro_by_gw / cup_clashes (from the user-maintained
+    data/models/european_calendar.json), events and team_labels (calendar
+    rows). Shared by `_build_plan_response` and
+    `scripts/spotcheck_chip_plan.py` so the two never drift out of sync.
+    Raises on any failure — callers wrap this in their own fail-soft
+    try/except (signals must never fail the plan) and drop ALL signals on
+    error, rather than handing the engine a mix of populated and missing ones.
     """
     from src.breaks import international_break_gws
-    breaks = international_break_gws(bootstrap.get("events", []))
+    from src import chip_distribution, european
+
+    events = list(bootstrap.get("events", []))
+    breaks = international_break_gws(events)
 
     id_to_name = {int(t["id"]): t["name"] for t in bootstrap.get("teams", [])}
+
+    # Per-player shape priors for the TC/BB distributions. finished_gws turns
+    # `starts` into a start rate; pre-season the position prior carries it.
+    finished_gws = sum(1 for e in events if e.get("finished"))
+    player_priors = chip_distribution.player_priors_from_elements(
+        bootstrap.get("elements", []), finished_gws=finished_gws)
+
+    # European midweeks + domestic-cup clashes. Calendar keys may be full
+    # names, short names or ids — normalize to the full names the markets use.
+    aliases: dict[str, str] = {}
+    for t in bootstrap.get("teams", []):
+        name = t.get("name")
+        if not name:
+            continue
+        aliases[str(name)] = name
+        if t.get("short_name"):
+            aliases[str(t["short_name"])] = name
+        aliases[str(t.get("id"))] = name
+    calendar = european.normalize_calendar_teams(
+        european.load_european_calendar(calendar_path), aliases)
+    euro_by_gw = european.european_weeks_by_gw(events, calendar)
+    cup_clashes = european.cup_clashes_by_gw(events, calendar)
     el = pd.DataFrame(bootstrap.get("elements", []))
     xgi_per90 = None
     if not el.empty and "expected_goals_per_90" in el.columns:
@@ -136,7 +169,17 @@ def build_chip_signals(bootstrap: dict, current_gw: int, model_horizon: int):
     except Exception as e:  # noqa: BLE001
         logger.warning("market difficulty blend unavailable: %s", e)
 
-    return breaks, team_difficulty_by_gw, swings, xgi_per90
+    return {
+        "breaks": breaks,
+        "team_difficulty_by_gw": team_difficulty_by_gw,
+        "swings": swings,
+        "xgi_per90": xgi_per90,
+        "player_priors": player_priors,
+        "euro_by_gw": euro_by_gw,
+        "cup_clashes": cup_clashes,
+        "events": events,
+        "team_labels": id_to_name,
+    }
 
 
 def _build_plan_response(entry_id: int, current_gw: int, model_horizon: int):
@@ -159,11 +202,9 @@ def _build_plan_response(entry_id: int, current_gw: int, model_horizon: int):
     except Exception as e:  # noqa: BLE001
         logger.warning("transfer plan baseline failed: %s", e)
 
-    # --- strategy signals: breaks, fixture difficulty, swings, per-player xGI ---
-    breaks = None
-    team_difficulty_by_gw = None
-    swings = None
-    xgi_per90 = None
+    # --- strategy signals: breaks, fixture difficulty, swings, per-player xGI,
+    # points-distribution priors, European weeks, cup clashes, calendar ---
+    signals: dict = {}
     try:
         # _build_context_for_entry above already fetched a bootstrap; use the
         # shared TTL cache instead of another raw HTTPS GET. Lazy import:
@@ -171,13 +212,12 @@ def _build_plan_response(entry_id: int, current_gw: int, model_horizon: int):
         # here would be circular; importing at request time avoids the cycle.
         from api.main import get_bootstrap_cached
         bootstrap = get_bootstrap_cached()
-        breaks, team_difficulty_by_gw, swings, xgi_per90 = build_chip_signals(
-            bootstrap, current_gw, model_horizon)
+        signals = build_chip_signals(bootstrap, current_gw, model_horizon)
     except Exception as e:  # noqa: BLE001 — signals must never fail the plan
         # All-or-nothing: a failure part-way through (e.g. the ticker call,
         # after breaks/xGI were already assigned) must not hand the engine a
         # mix of populated and missing signals — reset to the no-signals path.
-        breaks = team_difficulty_by_gw = swings = xgi_per90 = None
+        signals = {}
         logger.warning("chip strategy signals unavailable: %s", e)
 
     plan = build_chip_plan(
@@ -189,9 +229,6 @@ def _build_plan_response(entry_id: int, current_gw: int, model_horizon: int):
         fixtures=ctx.get("fixtures"),
         transfer_plan=transfer_plan,
         horizon_gws=model_horizon,
-        breaks=breaks,
-        team_difficulty_by_gw=team_difficulty_by_gw,
-        swings=swings,
-        xgi_per90=xgi_per90,
+        **{k: signals.get(k) for k in SIGNAL_KEYS},
     )
     return {"entry_id": entry_id, **plan}
