@@ -90,10 +90,15 @@ def test_load_calendar_missing_or_malformed_is_empty(tmp_path):
     assert european.load_european_calendar(str(ok))["teams"]["Arsenal"] == "ucl"
 
 
-def test_shipped_seed_calendar_parses_and_has_no_teams_by_default():
+def test_shipped_seed_calendar_parses_and_names_known_competitions():
     cal = european.load_european_calendar()
     assert cal, "data/models/european_calendar.json must ship"
-    assert cal["teams"] == {}, "the seed ships with an empty team map (user fills it in)"
+    # The team map is user-maintained per season: every entry must name a
+    # known competition, and the file must say which season it describes.
+    assert isinstance(cal["teams"], dict)
+    assert cal["teams"], "2026-27 qualifiers filled in on 2026-09-17"
+    assert set(cal["teams"].values()) <= {"ucl", "uel", "uecl"}
+    assert cal.get("season") == "2026-27"
     assert any(m["competition"] == "ucl" for m in cal["matchdays"])
     assert any(r.get("likely_blank") for r in cal["cup_rounds"])
 

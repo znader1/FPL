@@ -3,61 +3,420 @@
   "_workflow": "Season checklist: (1) after the previous season ends, fill `teams` with the PL sides that qualified (UCL 4-6, UEL 1-2, UECL 0-1) — an EMPTY `teams` map switches the European signal off entirely; (2) when UEFA publishes the season calendar, verify every matchday span below and the knockout rounds; (3) when the FA Cup / EFL Cup rounds are drawn, set `cup_rounds` dates; (4) delete a team once it is knocked out (its remaining matchdays no longer apply); (5) bump `as_of` on every edit.",
   "season": "2026-27",
   "as_of": "2026-09-17",
-  "teams": {},
-  "_example_teams": {"Arsenal": "ucl", "Liverpool": "ucl", "Man City": "ucl", "Chelsea": "ucl", "Newcastle": "ucl", "Spurs": "ucl", "Aston Villa": "uel", "Nott'm Forest": "uel", "Crystal Palace": "uecl"},
+  "teams": {
+    "Arsenal": "ucl",
+    "Man City": "ucl",
+    "Man Utd": "ucl",
+    "Aston Villa": "ucl",
+    "Liverpool": "ucl",
+    "Bournemouth": "uel",
+    "Sunderland": "uel",
+    "Crystal Palace": "uel",
+    "Brighton": "uecl"
+  },
+  "_example_teams": {
+    "Arsenal": "ucl",
+    "Liverpool": "ucl",
+    "Man City": "ucl",
+    "Chelsea": "ucl",
+    "Newcastle": "ucl",
+    "Spurs": "ucl",
+    "Aston Villa": "uel",
+    "Nott'm Forest": "uel",
+    "Crystal Palace": "uecl"
+  },
   "matchdays": [
-    {"competition": "ucl", "label": "MD1", "dates": ["2026-09-15", "2026-09-16", "2026-09-17"]},
-    {"competition": "ucl", "label": "MD2", "dates": ["2026-09-29", "2026-09-30", "2026-10-01"]},
-    {"competition": "ucl", "label": "MD3", "dates": ["2026-10-20", "2026-10-21", "2026-10-22"]},
-    {"competition": "ucl", "label": "MD4", "dates": ["2026-11-03", "2026-11-04", "2026-11-05"]},
-    {"competition": "ucl", "label": "MD5", "dates": ["2026-11-24", "2026-11-25", "2026-11-26"]},
-    {"competition": "ucl", "label": "MD6", "dates": ["2026-12-08", "2026-12-09", "2026-12-10"]},
-    {"competition": "ucl", "label": "MD7", "dates": ["2027-01-19", "2027-01-20", "2027-01-21"]},
-    {"competition": "ucl", "label": "MD8", "dates": ["2027-01-27"]},
-    {"competition": "ucl", "label": "KO playoff 1st leg", "dates": ["2027-02-16", "2027-02-17"]},
-    {"competition": "ucl", "label": "KO playoff 2nd leg", "dates": ["2027-02-23", "2027-02-24"]},
-    {"competition": "ucl", "label": "R16 1st leg", "dates": ["2027-03-09", "2027-03-10"]},
-    {"competition": "ucl", "label": "R16 2nd leg", "dates": ["2027-03-16", "2027-03-17"]},
-    {"competition": "ucl", "label": "QF 1st leg", "dates": ["2027-04-06", "2027-04-07"]},
-    {"competition": "ucl", "label": "QF 2nd leg", "dates": ["2027-04-13", "2027-04-14"]},
-    {"competition": "ucl", "label": "SF 1st leg", "dates": ["2027-04-27", "2027-04-28"]},
-    {"competition": "ucl", "label": "SF 2nd leg", "dates": ["2027-05-04", "2027-05-05"]},
-    {"competition": "uel", "label": "MD1", "dates": ["2026-09-24"]},
-    {"competition": "uel", "label": "MD2", "dates": ["2026-10-01"]},
-    {"competition": "uel", "label": "MD3", "dates": ["2026-10-22"]},
-    {"competition": "uel", "label": "MD4", "dates": ["2026-11-05"]},
-    {"competition": "uel", "label": "MD5", "dates": ["2026-11-26"]},
-    {"competition": "uel", "label": "MD6", "dates": ["2026-12-10"]},
-    {"competition": "uel", "label": "MD7", "dates": ["2027-01-21"]},
-    {"competition": "uel", "label": "MD8", "dates": ["2027-01-28"]},
-    {"competition": "uel", "label": "KO playoff 1st leg", "dates": ["2027-02-18"]},
-    {"competition": "uel", "label": "KO playoff 2nd leg", "dates": ["2027-02-25"]},
-    {"competition": "uel", "label": "R16 1st leg", "dates": ["2027-03-11"]},
-    {"competition": "uel", "label": "R16 2nd leg", "dates": ["2027-03-18"]},
-    {"competition": "uel", "label": "QF 1st leg", "dates": ["2027-04-08"]},
-    {"competition": "uel", "label": "QF 2nd leg", "dates": ["2027-04-15"]},
-    {"competition": "uel", "label": "SF 1st leg", "dates": ["2027-04-29"]},
-    {"competition": "uel", "label": "SF 2nd leg", "dates": ["2027-05-06"]},
-    {"competition": "uecl", "label": "MD1", "dates": ["2026-10-01"]},
-    {"competition": "uecl", "label": "MD2", "dates": ["2026-10-22"]},
-    {"competition": "uecl", "label": "MD3", "dates": ["2026-11-05"]},
-    {"competition": "uecl", "label": "MD4", "dates": ["2026-11-26"]},
-    {"competition": "uecl", "label": "MD5", "dates": ["2026-12-10"]},
-    {"competition": "uecl", "label": "MD6", "dates": ["2026-12-17"]},
-    {"competition": "uecl", "label": "KO playoff 1st leg", "dates": ["2027-02-18"]},
-    {"competition": "uecl", "label": "KO playoff 2nd leg", "dates": ["2027-02-25"]},
-    {"competition": "uecl", "label": "R16 1st leg", "dates": ["2027-03-11"]},
-    {"competition": "uecl", "label": "R16 2nd leg", "dates": ["2027-03-18"]},
-    {"competition": "uecl", "label": "QF 1st leg", "dates": ["2027-04-08"]},
-    {"competition": "uecl", "label": "QF 2nd leg", "dates": ["2027-04-15"]},
-    {"competition": "uecl", "label": "SF 1st leg", "dates": ["2027-04-29"]},
-    {"competition": "uecl", "label": "SF 2nd leg", "dates": ["2027-05-06"]}
+    {
+      "competition": "ucl",
+      "label": "MD1",
+      "dates": [
+        "2026-09-15",
+        "2026-09-16",
+        "2026-09-17"
+      ]
+    },
+    {
+      "competition": "ucl",
+      "label": "MD2",
+      "dates": [
+        "2026-09-29",
+        "2026-09-30",
+        "2026-10-01"
+      ]
+    },
+    {
+      "competition": "ucl",
+      "label": "MD3",
+      "dates": [
+        "2026-10-20",
+        "2026-10-21",
+        "2026-10-22"
+      ]
+    },
+    {
+      "competition": "ucl",
+      "label": "MD4",
+      "dates": [
+        "2026-11-03",
+        "2026-11-04",
+        "2026-11-05"
+      ]
+    },
+    {
+      "competition": "ucl",
+      "label": "MD5",
+      "dates": [
+        "2026-11-24",
+        "2026-11-25",
+        "2026-11-26"
+      ]
+    },
+    {
+      "competition": "ucl",
+      "label": "MD6",
+      "dates": [
+        "2026-12-08",
+        "2026-12-09",
+        "2026-12-10"
+      ]
+    },
+    {
+      "competition": "ucl",
+      "label": "MD7",
+      "dates": [
+        "2027-01-19",
+        "2027-01-20",
+        "2027-01-21"
+      ]
+    },
+    {
+      "competition": "ucl",
+      "label": "MD8",
+      "dates": [
+        "2027-01-27"
+      ]
+    },
+    {
+      "competition": "ucl",
+      "label": "KO playoff 1st leg",
+      "dates": [
+        "2027-02-16",
+        "2027-02-17"
+      ]
+    },
+    {
+      "competition": "ucl",
+      "label": "KO playoff 2nd leg",
+      "dates": [
+        "2027-02-23",
+        "2027-02-24"
+      ]
+    },
+    {
+      "competition": "ucl",
+      "label": "R16 1st leg",
+      "dates": [
+        "2027-03-09",
+        "2027-03-10"
+      ]
+    },
+    {
+      "competition": "ucl",
+      "label": "R16 2nd leg",
+      "dates": [
+        "2027-03-16",
+        "2027-03-17"
+      ]
+    },
+    {
+      "competition": "ucl",
+      "label": "QF 1st leg",
+      "dates": [
+        "2027-04-06",
+        "2027-04-07"
+      ]
+    },
+    {
+      "competition": "ucl",
+      "label": "QF 2nd leg",
+      "dates": [
+        "2027-04-13",
+        "2027-04-14"
+      ]
+    },
+    {
+      "competition": "ucl",
+      "label": "SF 1st leg",
+      "dates": [
+        "2027-04-27",
+        "2027-04-28"
+      ]
+    },
+    {
+      "competition": "ucl",
+      "label": "SF 2nd leg",
+      "dates": [
+        "2027-05-04",
+        "2027-05-05"
+      ]
+    },
+    {
+      "competition": "uel",
+      "label": "MD1",
+      "dates": [
+        "2026-09-24"
+      ]
+    },
+    {
+      "competition": "uel",
+      "label": "MD2",
+      "dates": [
+        "2026-10-01"
+      ]
+    },
+    {
+      "competition": "uel",
+      "label": "MD3",
+      "dates": [
+        "2026-10-22"
+      ]
+    },
+    {
+      "competition": "uel",
+      "label": "MD4",
+      "dates": [
+        "2026-11-05"
+      ]
+    },
+    {
+      "competition": "uel",
+      "label": "MD5",
+      "dates": [
+        "2026-11-26"
+      ]
+    },
+    {
+      "competition": "uel",
+      "label": "MD6",
+      "dates": [
+        "2026-12-10"
+      ]
+    },
+    {
+      "competition": "uel",
+      "label": "MD7",
+      "dates": [
+        "2027-01-21"
+      ]
+    },
+    {
+      "competition": "uel",
+      "label": "MD8",
+      "dates": [
+        "2027-01-28"
+      ]
+    },
+    {
+      "competition": "uel",
+      "label": "KO playoff 1st leg",
+      "dates": [
+        "2027-02-18"
+      ]
+    },
+    {
+      "competition": "uel",
+      "label": "KO playoff 2nd leg",
+      "dates": [
+        "2027-02-25"
+      ]
+    },
+    {
+      "competition": "uel",
+      "label": "R16 1st leg",
+      "dates": [
+        "2027-03-11"
+      ]
+    },
+    {
+      "competition": "uel",
+      "label": "R16 2nd leg",
+      "dates": [
+        "2027-03-18"
+      ]
+    },
+    {
+      "competition": "uel",
+      "label": "QF 1st leg",
+      "dates": [
+        "2027-04-08"
+      ]
+    },
+    {
+      "competition": "uel",
+      "label": "QF 2nd leg",
+      "dates": [
+        "2027-04-15"
+      ]
+    },
+    {
+      "competition": "uel",
+      "label": "SF 1st leg",
+      "dates": [
+        "2027-04-29"
+      ]
+    },
+    {
+      "competition": "uel",
+      "label": "SF 2nd leg",
+      "dates": [
+        "2027-05-06"
+      ]
+    },
+    {
+      "competition": "uecl",
+      "label": "MD1",
+      "dates": [
+        "2026-10-01"
+      ]
+    },
+    {
+      "competition": "uecl",
+      "label": "MD2",
+      "dates": [
+        "2026-10-22"
+      ]
+    },
+    {
+      "competition": "uecl",
+      "label": "MD3",
+      "dates": [
+        "2026-11-05"
+      ]
+    },
+    {
+      "competition": "uecl",
+      "label": "MD4",
+      "dates": [
+        "2026-11-26"
+      ]
+    },
+    {
+      "competition": "uecl",
+      "label": "MD5",
+      "dates": [
+        "2026-12-10"
+      ]
+    },
+    {
+      "competition": "uecl",
+      "label": "MD6",
+      "dates": [
+        "2026-12-17"
+      ]
+    },
+    {
+      "competition": "uecl",
+      "label": "KO playoff 1st leg",
+      "dates": [
+        "2027-02-18"
+      ]
+    },
+    {
+      "competition": "uecl",
+      "label": "KO playoff 2nd leg",
+      "dates": [
+        "2027-02-25"
+      ]
+    },
+    {
+      "competition": "uecl",
+      "label": "R16 1st leg",
+      "dates": [
+        "2027-03-11"
+      ]
+    },
+    {
+      "competition": "uecl",
+      "label": "R16 2nd leg",
+      "dates": [
+        "2027-03-18"
+      ]
+    },
+    {
+      "competition": "uecl",
+      "label": "QF 1st leg",
+      "dates": [
+        "2027-04-08"
+      ]
+    },
+    {
+      "competition": "uecl",
+      "label": "QF 2nd leg",
+      "dates": [
+        "2027-04-15"
+      ]
+    },
+    {
+      "competition": "uecl",
+      "label": "SF 1st leg",
+      "dates": [
+        "2027-04-29"
+      ]
+    },
+    {
+      "competition": "uecl",
+      "label": "SF 2nd leg",
+      "dates": [
+        "2027-05-06"
+      ]
+    }
   ],
   "cup_rounds": [
-    {"competition": "fa_cup", "label": "3rd round", "dates": ["2027-01-09", "2027-01-10"], "likely_blank": false},
-    {"competition": "fa_cup", "label": "4th round", "dates": ["2027-02-06", "2027-02-07"], "likely_blank": false},
-    {"competition": "fa_cup", "label": "5th round", "dates": ["2027-02-27", "2027-02-28"], "likely_blank": false},
-    {"competition": "fa_cup", "label": "quarter-final", "dates": ["2027-03-20", "2027-03-21"], "likely_blank": true},
-    {"competition": "fa_cup", "label": "semi-final", "dates": ["2027-04-24", "2027-04-25"], "likely_blank": false}
-  ]
+    {
+      "competition": "fa_cup",
+      "label": "3rd round",
+      "dates": [
+        "2027-01-09",
+        "2027-01-10"
+      ],
+      "likely_blank": false
+    },
+    {
+      "competition": "fa_cup",
+      "label": "4th round",
+      "dates": [
+        "2027-02-06",
+        "2027-02-07"
+      ],
+      "likely_blank": false
+    },
+    {
+      "competition": "fa_cup",
+      "label": "5th round",
+      "dates": [
+        "2027-02-27",
+        "2027-02-28"
+      ],
+      "likely_blank": false
+    },
+    {
+      "competition": "fa_cup",
+      "label": "quarter-final",
+      "dates": [
+        "2027-03-20",
+        "2027-03-21"
+      ],
+      "likely_blank": true
+    },
+    {
+      "competition": "fa_cup",
+      "label": "semi-final",
+      "dates": [
+        "2027-04-24",
+        "2027-04-25"
+      ],
+      "likely_blank": false
+    }
+  ],
+  "_source": "Premier League 2025-26 final standings; verified 2026-09-17 via premierleague.com / Sky Sports race-for-Europe pages. UCL: ARS MCI MUN AVL LIV; UEL: BOU SUN CRY; UECL: BHA. Delete a team when knocked out."
 }
