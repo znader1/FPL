@@ -225,6 +225,13 @@ TRANSFER_H2H_CONFLICT_PENALTY = 0.75  # xPts per directly-opposed own player
 # for this week" and a 3-GW ranking contradicted the "+x this GW" number.
 TRANSFER_PLAN_MIN_HORIZON_GWS = 1
 
+# The planner's gain bar (min_gain) was tuned as "+2.0 xPts over a 3-GW
+# horizon". Gains scale with the number of GWs summed, so the bar must too:
+# effective bar = MIN_GAIN × horizon / REF_GWS. 3-GW default unchanged (2.0);
+# 1 GW → 0.67; 8 GW → 5.3. Positional multipliers still apply on top.
+TRANSFER_PLAN_MIN_GAIN = 2.0
+TRANSFER_PLAN_MIN_GAIN_REF_GWS = 3
+
 # -----------------------------
 # Strategy recommendation tuning
 # -----------------------------

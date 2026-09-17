@@ -272,6 +272,16 @@ def _note(moves, ft_before, info, gw=None):
     return "; ".join(parts)
 
 
+def scaled_min_gain(n_gws, base=None, ref_gws=None):
+    """Gain bar for a plan spanning `n_gws`: the configured bar is defined over
+    TRANSFER_PLAN_MIN_GAIN_REF_GWS gameweeks and scales linearly with the
+    number of GWs whose gains are summed (a 1-GW plan needs a third of the
+    3-GW bar). Never below 0.1 so a degenerate horizon can't fire on noise."""
+    base = float(getattr(config, "TRANSFER_PLAN_MIN_GAIN", 2.0) if base is None else base)
+    ref = float(getattr(config, "TRANSFER_PLAN_MIN_GAIN_REF_GWS", 3) if ref_gws is None else ref_gws)
+    return max(0.1, round(base * max(1, int(n_gws)) / max(1.0, ref), 3))
+
+
 def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
                    hit_penalty=4.0, allow_hits=True, min_gain=2.0, max_moves_per_gw=3,
                    opponents_by_gw=None, _skip_first_gw=False):

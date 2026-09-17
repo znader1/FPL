@@ -159,3 +159,4 @@ This file explains every parameter in `src/config.py`, what it controls, and whe
 - In `api/main.py`, switch `score_col` used by optimizer/recommender from rule-based to model-based.
 - Keep all strategy thresholds (`STRATEGY_*`) active as guardrails until model calibration is stable.
 | `TRANSFER_PLAN_MIN_HORIZON_GWS` | 1 | Planner horizon floor (GWs); the display slider sets the planner horizon (`api/main.py` plan_horizon_gws) |
+| `TRANSFER_PLAN_MIN_GAIN` / `TRANSFER_PLAN_MIN_GAIN_REF_GWS` | 2.0 / 3 | Planner gain bar defined over REF GWs; `transfer_planner.scaled_min_gain(n)` scales it to the plan horizon |

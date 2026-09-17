@@ -225,3 +225,11 @@ def test_single_gw_plan_ranks_this_week_and_skips_the_roll_comparison():
     assert d["moves"][0]["this_gw_gain"] == d["moves"][0]["horizon_gain"] == 5.0
     assert d["roll_alternative"] is None
     assert "roll_alternative_net_gain" not in out
+
+
+def test_min_gain_scales_with_the_plan_horizon():
+    assert tp.scaled_min_gain(3) == 2.0          # reference horizon unchanged
+    assert tp.scaled_min_gain(1) == 0.667
+    assert tp.scaled_min_gain(8) == 5.333
+    assert tp.scaled_min_gain(0) == 0.667        # degenerate → treated as 1 GW
+    assert tp.scaled_min_gain(1, base=0.0) == 0.1

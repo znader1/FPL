@@ -1490,6 +1490,7 @@ def build_recommendations(payload):
                 start_ft=int(free_transfers_value), ft_cap=5,
                 allow_hits=bool(getattr(config, "TRANSFER_PLAN_ALLOW_HITS", False)),
                 max_moves_per_gw=int(getattr(config, "TRANSFER_PLAN_MAX_MOVES_PER_GW", 1)),
+                min_gain=transfer_planner.scaled_min_gain(len(plan_gws)),
                 opponents_by_gw=_opps_by_gw)
         except Exception as e:  # noqa: BLE001 - planning must never fail the recommendation
             logger.warning("horizon transfer plan failed: %s", e)
