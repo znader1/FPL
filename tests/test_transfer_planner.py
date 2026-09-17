@@ -285,3 +285,30 @@ def test_min_gain_scales_with_the_plan_horizon():
     assert tp.scaled_min_gain(8) == 5.333
     assert tp.scaled_min_gain(0) == 0.667        # degenerate → treated as 1 GW
     assert tp.scaled_min_gain(1, base=0.0) == 0.1
+def test_h2h_penalty_prefers_the_clean_alternative():
+    # Squad: own GK (team GK1) + a weak MID. Two upgrades: buy 3 faces the own
+    # keeper this GW (team OPP plays GK1) and projects 1.0 higher than buy 4,
+    # which faces nobody we own. With a 3-pt penalty the clean buy must win.
+    proj = _proj_frame([
+        _player(1, "GKP", price=4.5, xpts=4.0, team="GK1"),
+        _player(2, "MID", price=5.0, xpts=2.0, team="MIDT"),
+        _player(3, "MID", price=5.0, xpts=8.0, team="OPP"),
+        _player(4, "MID", price=5.0, xpts=7.0, team="OTH"),
+    ], gws=(10, 11))
+    opps = {10: {"OPP": {"GK1"}, "GK1": {"OPP"}}, 11: {}}
+    out = tp.plan_transfers(proj, squad_ids=[1, 2], gws=[10, 11], itb_m=0.0,
+                            start_ft=1, min_gain=2.0, opponents_by_gw=opps)
+    first = out["plan"][0]
+    assert first["action"] == "transfer"
+    assert first["moves"][0]["buy"]["id"] == 4
+    assert not first["moves"][0].get("h2h_conflicts")
+    # And the conflict is what decided it: with the penalty off, 3 wins.
+    from src import config
+    saved = config.TRANSFER_H2H_CONFLICT_PENALTY
+    try:
+        config.TRANSFER_H2H_CONFLICT_PENALTY = 0.0
+        out0 = tp.plan_transfers(proj, squad_ids=[1, 2], gws=[10, 11], itb_m=0.0,
+                                 start_ft=1, min_gain=2.0, opponents_by_gw=opps)
+    finally:
+        config.TRANSFER_H2H_CONFLICT_PENALTY = saved
+    assert out0["plan"][0]["moves"][0]["buy"]["id"] == 3
