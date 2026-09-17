@@ -70,10 +70,12 @@ The xPts model blends a season PPG baseline with a recency-weighted recent avera
 5. **DGW**: second fixture counts at `DGW_EXTRA_FIXTURE_DISCOUNT` (0.65) of a normal fixture
 6. **Late season** (GW > `LATE_SEASON_GW_THRESHOLD`): window shrinks to 3 GWs so recent form dominates
 7. **ep_next removed**: FPL's own ep_next is opaque and slow-reacting; own blended model used for all GWs (`EP_NEXT_BLEND_WEIGHT = 0.0`)
+8. **Early-season shrinkage** (2026-09): the blended baseline is pulled toward a price×position prior (`PROJ_SHRINKAGE_GAMES`, `PROJ_PRICE_PRIOR_SLOPE`), weighted by finished GWs — a 4.1m defender with two clean sheets no longer projects like a premium. Pre-season (0 finished GWs) untouched. First-choice penalty takers get `PROJ_PENALTY_TAKER_UPLIFT` (+0.45/GW) after shrinkage.
+9. Known open issue: promoted-team small-sample clusters still inflate (shrinkage+`CHIP_PLAN_XPTS_CLAMP` are stopgaps); root fix + per-player home/away splits are backlogged pending an SP3 backtest.
 
-### xG expected-points stack (shadow model — currently OFF)
+### xG expected-points stack (ON at 0.5 blend since 2026-08-24)
 
-A parallel, per-player, per-GW expected-points table (`xpts_model_*`) that `projections.project_elements_next_gws` blends into its baseline via `PROJ_MODEL_BLEND_WEIGHT` (**default 0.0** — baseline unchanged until raised). Three composable modules combined by `src/expected_points.py`:
+A parallel, per-player, per-GW expected-points table (`xpts_model_*`) that `projections.project_elements_next_gws` blends into its baseline via `PROJ_MODEL_BLEND_WEIGHT` (**0.5** — displayed xPts is half probability-model, half ppg/form baseline). Backtest evidence: 2025-26 sweep won on every metric; the 2026-09-10 extended sweep (0.5..1.0) confirmed 0.5-0.6 as the interior optimum — do not raise past 0.6 without new evidence (`scripts/backtest_blend_sweep.py`). Three composable modules combined by `src/expected_points.py`:
 
 - **`src/fixture_difficulty.py`** — turns per-match xG into per-team **attack/defense** ratings (multipliers vs league avg) with exponential time decay (`FDR_XG_HALFLIFE_DAYS`) and shrinkage (`FDR_XG_SHRINKAGE_MATCHES`). A user-maintained `data/models/knowledge_discount.json` nudges teams for info xG can't see yet (signings, injuries, manager change).
 - **`src/minutes_model.py`** — P(start), P(≥60), E[minutes] per player from decayed start/minutes history with a position prior (`MINUTES_*` tunables).
@@ -101,16 +103,35 @@ All loaders return empty frames when data is missing → model degrades graceful
 
 ### Transfer recommender (`src/recommender.py`)
 
-Beam search over sell/buy combinations. Guardrails: min score-gain threshold, no captain sell unless large gain, position attack bonus, set-piece order bonuses. Weights in `config.py` under `TRANSFER_*`.
+Beam search over sell/buy combinations — feeds the frontend's collapsed "Quick options" list (the horizon planner is the advice). Guardrails: min score-gain threshold, no captain sell unless large gain, position attack bonus, set-piece order bonuses, the shared `TRANSFER_PLAN_POS_GAIN_MULT` bars, and bench-seller discipline (`swap_gain`: bench swaps compete on raw `base_score` — a set-piece taker is worthless on the bench). Weights in `config.py` under `TRANSFER_*`.
 
 ### Horizon transfer planner (`src/transfer_planner.py`)
 
-Greedy per-GW walk across the projection horizon, separate from the single-GW beam search above. Accrues one FT per GW (cap 5, 2026-27 banking rule), makes like-for-like swaps only when gain exceeds `min_gain` (else rolls), optionally takes -4 hits when gain exceeds `hit_penalty`. Emitted by `build_recommendations` as `transfer_plan_horizon` (additive, never breaks the response); rendered by the frontend's `HorizonTransferPlan` component.
+Greedy per-GW walk across the projection horizon, separate from the single-GW beam search above. Accrues one FT per GW (cap 5, 2026-27 banking rule), like-for-like swaps only. Emitted by `build_recommendations` as `transfer_plan_horizon`; rendered by the frontend's `HorizonTransferPlan`. The 2026-09 discipline layer (all config-gated, `TRANSFER_PLAN_*`):
+
+- **The headline plan is the product's ONE piece of advice**: at most `min(MAX_MOVES_PER_GW, banked FTs)` moves per GW (`MOVES_FOLLOW_FT`), never hit-funded (`ALLOW_HITS = False`); hits-allowed callers keep old semantics.
+- **Roll-vs-move counterfactual**: every first-GW spend is compared against banking the FT and playing a double next week (the alt walk gets its banked FT back); the verdict names the counterfactual's moves and quotes both nets. Injury urgency bypasses.
+- **Structured verdict** (2026-09-16): `verdict_detail` carries action, GW range, per-move `this_gw_gain`/`horizon_gain`, `plan_net`, the rejected `roll_alternative` and (on roll) `next_move`; `reasoning` is one clause. `src/plan_merge.py` then puts the plan's first-GW moves at the front of `transfers.moves` (`in_plan: true`) so `squad_with_transfers_steps[1]` applies the recommendation; beam survivors follow as alternatives.
+- **XI-aware**: a bench seller's swap only credits points the buyer adds by displacing the weakest same-position XI member — bench churn is worth 0.
+- **Positional bars**: GKP/DEF swaps need `POS_GAIN_MULT` × min_gain (2.0 / 2.25) — shared with the beam search.
+- **Head-to-head hedge nudge**: buys directly opposing an owned GKP/DEF↔attacker pair that GW get `TRANSFER_H2H_CONFLICT_PENALTY` (variance preference, deliberately small) and an `h2h_conflicts` warning on the move record.
+- **Horizon floor**: the planner always evaluates ≥ `MIN_HORIZON_GWS` (3) regardless of the display slider — roll-vs-move never runs blind.
 
 ### Chip optimizer (`src/optimizer.py` + chip logic in `api/main.py`)
 
 - `free_hit`: optimize for next GW only, ignore sell prices
 - `wildcard`: blend of next-fixture xPts, multi-GW horizon, DGW upside, premium captaincy coverage. Weights under `CHIP_WILDCARD_*`.
+- `normalize_chip_strategy` also accepts `bench_boost`/`triple_captain` — they mark the chip in the response without changing squad optimization.
+
+### Chip timing planner (`src/chip_advisor.py`, 2026-09)
+
+`build_chip_plan()` answers "which chip, which GW": per-chip EV per candidate GW (TC = captain's extra ×1; BB = bench-4 sum; FH = budget-constrained rebuilt XI vs own, gated on ≥`CHIP_PLAN_FH_MIN_BLANKING` blanking starters OR ≥`CHIP_PLAN_FH_MIN_TOUGH` starters facing difficulty ≥`CHIP_PLAN_FH_TOUGH_DIFFICULTY` (tough-pileup gate); WC = budget/team-cap-constrained optimizer squad summed over the horizon, net of the transfer plan), expiry-aware chip windows (phase 1/2 via `chip_windows`, FPL names normalized there), min-EV thresholds with an expiry urgency ramp (`effective_min_ev`), a structural zone beyond the model horizon (announced DGW/BGW → `provisional` recs), and a next-GW `nudge`. Dream-squad sides clamp xpts position-aware via `CHIP_PLAN_XPTS_CLAMP_BY_POS` (flat `CHIP_PLAN_XPTS_CLAMP` fallback when a market has no `pos` column). Optional strategy signals sharpen the picture further: a rec targeting a post-international-break GW gets a confidence haircut (`CHIP_PLAN_BREAK_CONFIDENCE_MULT`) and the next-GW nudge sets `wait_for_team_news`; WC/TC recs near an easier fixture-difficulty swing get a reasons entry (TC only when the swing is the recommended captain's own team); and TC carries a Poisson-derived `haul_prob` from the captain's per-90 xGI and upcoming fixture difficulty. All tunables `CHIP_PLAN_*`; thresholds are live-tuned, backtest pending.
+
+- **Fixture context + distributions (2026-09-17):** `src/european.py` reads the user-maintained `data/models/european_calendar.json` (PL teams → `ucl|uel|uecl`, competition matchday dates, FA Cup rounds with `likely_blank`) and flags each GW's European weeks (tie inside the GW window = `after`, within `CHIP_PLAN_EURO_WINDOW_BEFORE_DAYS` before the deadline = `before`). `build_chip_plan` scales `xpts` of every exposed player by `CHIP_PLAN_EURO_XPTS_MULT` (0.95) on BOTH the squad and market side, cuts TC/BB confidence for an exposed captain / bench (`CHIP_PLAN_EURO_CONFIDENCE_MULT`), and turns an unannounced `likely_blank` cup clash beyond the horizon into a `provisional` FH rec with `likelihood` (`CHIP_PLAN_CUP_CLASH_BLANK_PROB`). **The seed ships with an empty `teams` map — the signal is off until the qualified sides are filled in on the volume.** `src/chip_distribution.py` gives TC/BB recs the distribution of the chip's extra points (`distribution`: `modal/p80_low/p80_high/p_beats_bar/mean`, plus `p_return/p_haul/p_blank` for TC only — those thresholds are per-player and say nothing about a bench-4 sum; `ev_curve[].p_beats_bar`; `nudge.p_beats_bar`) from `points_distribution.player_points_pmf` with bootstrap priors, lambdas bisected so **the pmf mean matches the engine's xPts MINUS the continuous share** (`CHIP_PLAN_DIST_CONTINUOUS_SHARE` — bonus, saves, goals conceded, which the pmf excludes). Anything compared against that pmf has to live on the same axis: `summarize(bar=...)` scales the full-xPts bar by `1 - share` before computing `p_beats_bar`. Every pmf is built on an axis wide enough for what it represents (fixtures x 30 for a player, the full convolution for a bench-4 sum), so `modal`/`p80_high` never read as the folded ceiling; `p80_open` marks a band that still runs off the axis. EV ranking is untouched, FH/WC have no distribution. The payload also carries a per-GW `calendar` (deadline, post_break, european, squad_european, DGW/BGW teams, cup_clash) and a `signals` presence map. `api/chips.build_chip_signals` returns a dict keyed by `SIGNAL_KEYS`; all-or-nothing fail-soft is unchanged.
+- **`GET /chips/plan?entry_id=&horizon=`** (require_user) — the frozen contract the frontend Chips tab consumes.
+- **`GET /admin/chip-plan?entry_id=`** (admin key) — same plan + season/deadline/model_meta for the snapshot job.
+- **`chip_plan_snapshots`** (Supabase): pre-deadline recommendations + post-GW chip actuals per entry (`scripts/chip_snapshot_to_db.py`, entries from `CHIP_SNAPSHOT_ENTRY_IDS` secret, runs in `snapshot-db.yml`). This is the training set for a future ML chip advisor and the substrate for the expert-article benchmark.
+- Chat chip agent + orchestrator are grounded on the same `build_chip_plan` payload (bank/fixtures/chips_played threaded; single entry-history fetch).
 
 ### Data refresh & snapshots
 
@@ -133,7 +154,8 @@ Free transfers for the target GW are derived from `entry_history.event_transfers
 | Branch | Purpose |
 |--------|---------|
 | `master` | Production (auto-deploys to Fly.io) |
-| `feature/weekly-db` | Current: weekly `player_gw_snapshots` Supabase table + snapshot job |
+| `feature/xpts-components` | Current integration branch (chip planner + 2026-09 model discipline landed here, then fast-forwarded to master) |
+| `feature/weekly-db` | Weekly `player_gw_snapshots` Supabase table + snapshot job (merged) |
 | `feature/xg-expected-points` | xG shadow model + SP1 minutes / SP2 ownership-EV / SP3 backtest |
 | `feature/smarter-projections` | Improved xPts model (blank-GW exclusion, recency weighting, ep_next removal) |
 | `feature/backtest` | Backtest experiments |
@@ -141,5 +163,7 @@ Free transfers for the target GW are derived from `entry_history.event_transfers
 ### Deployment
 
 **Fly.io is the production backend.** `fly.toml` + `Dockerfile` (slim Python) define the Fly.io app (`fpl-assistant-api`, region `lhr`); `master` auto-deploys via `.github/workflows/fly-deploy.yml`. The machine auto-suspends when idle (free tier) — the refresh workflow wakes it with retry.
+
+The tracked `data/models/*.json` seeds (ratings, knowledge discount, European calendar) ship in the image at `/app/seed/models` (staged by the Dockerfile, since `/app/data` is a volume mount that shadows the image); `src/seed_models.py`'s `ensure_seed_models()` runs at `api/main.py` import and copies any seed missing from the volume into `data/models` — it never overwrites a file already there, so runtime writes (e.g. `knowledge_discount.json`) win.
 
 Legacy/alternative: an Azure Container App path also exists in the repo (`.github/workflows/deploy-azure-containerapp.yml`, `docs/production_azure.md`, app `fpl-refresh-app`). It is **not** the intended backend — treat it as deprecated. Note: the frontend's `.env.production` (`VITE_FPL_API_BASE_URL`) still points at the Azure URL, so pointing production at Fly.io requires updating that value to the Fly.io URL.

@@ -19,7 +19,7 @@ from pathlib import Path
 import pandas as pd
 from anthropic import Anthropic
 
-from src.chip_advisor import recommend_chips
+from src.chip_advisor import build_chip_plan
 
 
 MODEL = "claude-haiku-4-5-20251001"  # fast specialist; Sonnet is overkill here
@@ -30,9 +30,12 @@ TOOLS = [
     {
         "name": "get_chip_recommendations",
         "description": (
-            "Returns the top-ranked chip recommendations from the deterministic "
-            "engine. Each item has: chip name, target gameweek, expected_value "
-            "(extra pts vs not playing), confidence (0-1), reasoning facts."
+            "Returns the full chip plan from the deterministic engine: model-zone "
+            "EV recommendations (chip, target gameweek, ev_gain, reasons, ev_curve), "
+            "structural provisional windows for chips beyond the model horizon "
+            "(e.g. a known double gameweek), each chip's expiry deadline (phase 1 "
+            "vs phase 2), a nudge flagging if a chip should be played THIS gameweek, "
+            "and transfer_context. Grounds chip advice in the same plan the UI shows."
         ),
         "input_schema": {
             "type": "object",
@@ -59,17 +62,40 @@ def _handle_tool_call(
     squad: pd.DataFrame,
     gw_projections: dict,
     chips_remaining: list[str],
-) -> list[dict]:
-    """Route tool calls to the deterministic advisor."""
+    chips_played: list | None = None,
+    bank_m: float = 0.0,
+    fixtures: pd.DataFrame | None = None,
+    breaks: dict[int, dict] | None = None,
+) -> dict:
+    """Route tool calls to the deterministic advisor.
+
+    bank_m / fixtures ground the tool call the same way the REST /chips/plan
+    route does (itb_m for wildcard/free-hit budget, fixtures for the
+    structural DGW/BGW zone) — without them the chat agent was silently
+    working off a bank_m=0 / no-fixtures plan that could disagree with what
+    the UI shows for the same entry.
+
+    breaks: {event_id: {"gap_days", "prev_event"}} for GWs right after an
+    international break (src.breaks.international_break_gws). Threaded into
+    build_chip_plan so its confidence haircut / "wait_for_team_news" nudge
+    flag apply here too, and surfaced (stringified keys, for JSON) directly
+    in the payload so the agent can cite it even when the affected GW isn't
+    the top-ranked recommendation.
+    """
     if name == "get_chip_recommendations":
-        recs = recommend_chips(
+        result = build_chip_plan(
             squad=squad,
             current_gw=int(args["current_gw"]),
             gw_projections=gw_projections,
-            chips_remaining=chips_remaining,
-            gws_ahead=int(args.get("gws_ahead", 5)),
+            chips_played=chips_played or [],
+            itb_m=float(bank_m or 0.0),
+            fixtures=fixtures,
+            horizon_gws=int(args.get("gws_ahead", 5)) + 1,
+            breaks=breaks,
         )
-        return [r.to_dict() for r in recs[:10]]
+        if breaks:
+            result["breaks"] = {str(k): v for k, v in breaks.items()}
+        return result
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -80,6 +106,10 @@ def run_chip_agent(
     chips_remaining: list[str],
     verbose: bool = False,
     extra_context: str | None = None,
+    chips_played: list | None = None,
+    bank_m: float = 0.0,
+    fixtures: pd.DataFrame | None = None,
+    breaks: dict[int, dict] | None = None,
 ) -> str:
     """
     Entry point. Returns a natural-language recommendation string.
@@ -87,6 +117,18 @@ def run_chip_agent(
     squad: DataFrame with player_id, name, pos, team, price_m
     gw_projections: dict {gw: market_df}
     chips_remaining: list like ["wildcard", "free_hit", "bench_boost", "triple_captain"]
+        (still used for the user-message text below)
+    chips_played: raw chip-play records (as returned by the FPL entry-history
+        endpoint's "chips" key) — threaded to the tool so it can derive
+        per-chip availability/expiry windows via build_chip_plan.
+    bank_m: in-the-bank cash (itb_m) — threaded to the tool so WC/FH budget
+        matches the REST /chips/plan route instead of defaulting to 0.
+    fixtures: fixtures DataFrame — threaded to the tool so the structural
+        DGW/BGW zone beyond the model horizon is available to the agent too.
+    breaks: international-break map ({event_id: {"gap_days", "prev_event"}})
+        — threaded to the tool so the chat agent's advice reflects the same
+        break-aware confidence haircut and post-break "hold for team news"
+        nudge as the REST /chips/plan route.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -126,6 +168,10 @@ def run_chip_agent(
                 result = _handle_tool_call(
                     tu.name, dict(tu.input),
                     squad, gw_projections, chips_remaining,
+                    chips_played,
+                    bank_m=bank_m,
+                    fixtures=fixtures,
+                    breaks=breaks,
                 )
                 tool_results.append({
                     "type": "tool_result",

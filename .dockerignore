@@ -9,7 +9,15 @@ __pycache__
 *.pyd
 .DS_Store
 
-data
+# Exclude data/ (runtime cache/output, gitignored) from the image, but ship
+# the tracked model seeds in data/models — mirrors .gitignore lines 15-30.
+# A fully-excluded parent dir can never have children un-excluded, so exclude
+# data/* (not data/) and re-include data/models before excluding its contents
+# again and re-including the *.json seeds.
+data/*
+!data/models
+data/models/*
+!data/models/*.json
 cache
 logs
 kb

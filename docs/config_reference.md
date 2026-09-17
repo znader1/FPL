@@ -124,6 +124,7 @@ This file explains every parameter in `src/config.py`, what it controls, and whe
 | `TRANSFER_BEAM_WIDTH` | Number of candidate transfer paths kept at each search step. | `src/recommender.py` (`suggest_transfers`, beam search loop). |
 | `TRANSFER_BEAM_SELLERS` | Number of top seller candidates expanded per state. | `src/recommender.py` (`pick_sellers_for_state`). |
 | `TRANSFER_BEAM_BUYERS` | Number of top buy candidates expanded per seller. | `src/recommender.py` (`pick_buy_candidates`). |
+| `TRANSFER_PLAN_RUNNER_UPS` | Max entries in `verdict_detail.runner_ups` (best swap per other squad player, ranked). | `src/transfer_planner.py` (`_ranked_swaps`). |
 
 ## 7) Strategy recommendation output
 

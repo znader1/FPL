@@ -39,6 +39,75 @@ def clamp(value, low, high):
     return float(v)
 
 
+def difficulty_multiplier_smooth(diff_avg):
+    """Continuous version of ``difficulty_multiplier``: piecewise-linear
+    between the integer anchors of DIFFICULTY_MULTIPLIER, clamped to 1..5.
+    Used for the xG-ratings difficulty source, whose 1-5 scale is a float —
+    integer rounding would throw away most of its resolution."""
+    if pd.isna(diff_avg):
+        return 1.0
+    try:
+        d = float(diff_avg)
+    except Exception:
+        return 1.0
+    d = max(1.0, min(5.0, d))
+    lo = int(d)
+    hi = min(5, lo + 1)
+    frac = d - lo
+    m_lo = float(DIFFICULTY_MULTIPLIER.get(lo, 1.0))
+    m_hi = float(DIFFICULTY_MULTIPLIER.get(hi, 1.0))
+    return m_lo + (m_hi - m_lo) * frac
+
+
+def xg_team_difficulty_for_gw(ratings, fixtures, gw):
+    """Per-team continuous difficulty (1-5) for one GW from the xG ratings —
+    ``attack_difficulty`` per fixture, averaged on a DGW. Teams with no
+    fixture are absent (same convention as the FPL-FDR path's missing rows)."""
+    from src import fixture_difficulty as _fd
+
+    by_team = transforms.fixtures_by_team_for_gw(fixtures, int(gw))
+    out = {}
+    for team_id, lst in by_team.items():
+        vals = []
+        for it in lst:
+            opp = it.get("opp")
+            if opp is None:
+                continue
+            vals.append(_fd.attack_difficulty(ratings, int(team_id), int(opp),
+                                              bool(it.get("is_home"))))
+        if vals:
+            out[int(team_id)] = float(sum(vals) / len(vals))
+    return out
+
+
+def resolve_market_difficulty(names_by_id):
+    """Market-implied 1-5 difficulty per team for the NEXT fixture, from the
+    bookmaker-odds disk cache only — the engine never touches the network
+    (the API layer and /admin/refresh keep the cache warm). {} on any miss."""
+    try:
+        from src import odds_client
+        return odds_client.market_difficulty_by_team(names_by_id, cache_only=True)
+    except Exception:
+        return {}
+
+
+def resolve_projection_difficulty_ratings(teams_short_map):
+    """Build the xG ratings for the projections difficulty source, or None.
+
+    Reuses the same loaders the blend leg patches in backtests, so the
+    leak-safety of the harness carries over. Any failure degrades to None →
+    the caller falls back to the FPL-FDR path.
+    """
+    try:
+        from src import fixture_difficulty as _fd
+        match_df = _fd.load_match_history()
+        team_xg = _fd.build_team_match_xg(match_df)
+        ratings = _fd.resolve_team_ratings(team_xg, teams_short_map=teams_short_map)
+        return _fd.apply_knowledge_discount(ratings, teams_short_map=teams_short_map)
+    except Exception:
+        return None
+
+
 def difficulty_multiplier(diff_avg):
     """Map FPL difficulty (1..5) to a simple multiplier."""
     if pd.isna(diff_avg):
@@ -88,6 +157,44 @@ def baseline_points_per_gw(
     n = max(config.PROJ_LATEST_N_MIN, min(config.PROJ_LATEST_N_MAX, int(latest_n_matches or config.PROJ_DEFAULT_LATEST_N_MATCHES)))
     form_scale = 1.0 + (float(n) - float(config.PROJ_FORM_SCALE_BASE_MATCHES)) * float(config.PROJ_FORM_SCALE_PER_MATCH)
     return float(ppg_weight) * ppg + float(form_weight) * form * form_scale
+
+
+def shrink_toward_price_prior(blended_base, now_cost, element_type, gw_start):
+    """Empirical-Bayes shrink of the per-player baseline toward a price×position prior.
+
+    Early season, FPL's ppg/form cover 1-3 games and get taken at face value: a
+    4.1m defender with two clean sheets projects like a premium, and a quiet
+    premium gets buried. Shrink toward `slope[pos] × price_m` weighted by how
+    many gameweeks of evidence the season has produced; the effect fades as
+    games accumulate. PROJ_SHRINKAGE_GAMES = 0 disables entirely.
+    """
+    shrink_k = float(getattr(config, "PROJ_SHRINKAGE_GAMES", 0.0) or 0.0)
+    season_games = max(0, int(gw_start) - 1)
+    # Pre-season (0 finished GWs) the ppg/form columns carry curated or
+    # last-season signal, not small-sample noise — leave them alone. The
+    # failure mode this fixes needs at least one over-trusted game.
+    if shrink_k <= 0 or season_games == 0:
+        return blended_base
+    if now_cost is None or element_type is None:
+        return blended_base
+    slopes = getattr(config, "PROJ_PRICE_PRIOR_SLOPE", {}) or {}
+    price_m = pd.to_numeric(now_cost, errors="coerce")
+    if not isinstance(price_m, pd.Series):
+        return blended_base
+    price_m = price_m.fillna(0.0) / 10.0
+    etype = pd.to_numeric(element_type, errors="coerce")
+    slope = etype.map(lambda t: float(slopes.get(int(t), 0.45)) if pd.notna(t) else 0.45)
+    prior = price_m * slope
+    return (season_games * blended_base + shrink_k * prior) / (season_games + shrink_k)
+
+
+def penalty_taker_uplift(penalties_order, index=None):
+    """Additive xPts/GW for first-choice penalty takers (see config note)."""
+    uplift = float(getattr(config, "PROJ_PENALTY_TAKER_UPLIFT", 0.0) or 0.0)
+    order = pd.to_numeric(penalties_order, errors="coerce")
+    if not isinstance(order, pd.Series):
+        order = pd.Series(order, index=index)
+    return (order == 1.0).astype(float) * uplift
 
 
 def team_recent_ppg_map(fixtures, gw_start, latest_n_matches=config.PROJ_DEFAULT_LATEST_N_MATCHES):
@@ -442,6 +549,11 @@ def project_elements_next_gws(
         recent_player_base * float(recent_blend_weight)
         + base_fallback * float(1.0 - recent_blend_weight)
     ).where(has_recent_history, base_fallback)
+    blended_base = shrink_toward_price_prior(
+        blended_base, df.get("now_cost"), df.get("element_type"), gw_start
+    )
+    if "penalties_order" in df.columns:
+        blended_base = blended_base + penalty_taker_uplift(df["penalties_order"])
 
     df["baseline_long_term_xpts"] = base_fallback.round(3)
     df["baseline_recent_gw_xpts"] = recent_avg_points.round(3)
@@ -478,13 +590,52 @@ def project_elements_next_gws(
 
     team_recent_ppg = team_recent_ppg_map(fixtures, gw_start=gw_start, latest_n_matches=latest_n_matches)
 
+    # One-difficulty-truth switch: with "xg_ratings" the baseline leg's
+    # multiplier (and the published diff_avg_gw{n}) come from our own xG
+    # attack/defence ratings instead of FPL's official FDR. Fail-soft: no
+    # usable ratings → the legacy FPL-FDR path below runs unchanged.
+    diff_source = str(getattr(config, "PROJ_DIFFICULTY_SOURCE", "fpl"))
+    xg_diff_ratings = (
+        resolve_projection_difficulty_ratings(teams_short_map)
+        if diff_source == "xg_ratings" else None
+    )
+
     horizon_total = pd.Series(0.0, index=df.index, dtype="float64")
 
+    # Market difficulty covers only the next fixture — blend it into the
+    # FIRST horizon GW at ODDS_DIFFICULTY_BLEND_WEIGHT; the xG ratings carry
+    # the rest of the horizon alone. The market prices team news, rotation
+    # and motivation that decayed xG can't see.
+    market_diff = {}
+    if xg_diff_ratings is not None and "team_name" in df.columns:
+        odds_w = float(getattr(config, "ODDS_DIFFICULTY_BLEND_WEIGHT", 0.5))
+        if odds_w > 0:
+            names_by_id = {}
+            for t, n in zip(pd.to_numeric(df["team"], errors="coerce"), df["team_name"]):
+                if pd.notna(t) and isinstance(n, str) and n:
+                    names_by_id[int(t)] = n
+            market_diff = resolve_market_difficulty(names_by_id) or {}
+
     for i, gw in enumerate(gws):
-        ann = transforms.annotate_elements_with_gw_fixtures(df, fixtures, int(gw), teams_short_map)
+        xg_map = (
+            xg_team_difficulty_for_gw(xg_diff_ratings, fixtures, int(gw))
+            if xg_diff_ratings is not None else None
+        )
+        if xg_map is not None and i == 0 and market_diff:
+            odds_w = float(getattr(config, "ODDS_DIFFICULTY_BLEND_WEIGHT", 0.5))
+            for t, d in market_diff.items():
+                if t in xg_map:
+                    xg_map[t] = odds_w * float(d) + (1.0 - odds_w) * xg_map[t]
+        # diff_by_team also rewrites the (Dn) badge labels and gw_diff_avg, so
+        # the multiplier, the published diff_avg_gw{n}, and what the user SEES
+        # all come from the same difficulty source.
+        ann = transforms.annotate_elements_with_gw_fixtures(
+            df, fixtures, int(gw), teams_short_map, diff_by_team=xg_map)
         fixture_count = pd.to_numeric(ann["gw_fixture_count"], errors="coerce").fillna(0.0)
         diff_avg = pd.to_numeric(ann["gw_diff_avg"], errors="coerce").fillna(0.0)
-        diff_mult = diff_avg.apply(difficulty_multiplier)
+        diff_mult = diff_avg.apply(
+            difficulty_multiplier_smooth if xg_map is not None else difficulty_multiplier
+        )
         if fdr_strength != 1.0:
             # Scale only the fixture-difficulty multiplier's deviation from 1.0 —
             # home/away and team-form multipliers below are untouched.
@@ -510,6 +661,22 @@ def project_elements_next_gws(
             if pd.notna(t)
             else 1.0
         )
+
+        # Combined fixture-context multiplier. For GOALKEEPERS its deviation
+        # from 1.0 is damped by PROJ_GK_FIXTURE_DAMP: a keeper's floor
+        # (appearance + save points) barely moves with the fixture — only the
+        # clean-sheet share is fixture-elastic — so the full stack overstates
+        # GK fixture sensitivity and inflates GK transfer gains.
+        ctx_mult = diff_mult * home_away_mult * opp_form_mult * team_form_mult
+        gk_damp = float(getattr(config, "PROJ_GK_FIXTURE_DAMP", 1.0))
+        if gk_damp != 1.0:
+            if "element_type" in df.columns:
+                is_gk = pd.to_numeric(df["element_type"], errors="coerce") == 1
+            elif "pos" in df.columns:
+                is_gk = df["pos"].astype(str) == "GKP"
+            else:
+                is_gk = pd.Series(False, index=df.index)
+            ctx_mult = (1.0 + (ctx_mult - 1.0) * gk_damp).where(is_gk, ctx_mult)
 
         minutes_mult = None
         if apply_minutes:
@@ -540,8 +707,8 @@ def project_elements_next_gws(
             # For players where ep_next is available, treat base_gw0 as a per-GW total
             # and only apply difficulty/home/form context multipliers, not fixture scaling.
             has_ep = ep_next.notna()
-            xpts_with_ep = base_gw0 * diff_mult * home_away_mult * opp_form_mult * team_form_mult
-            xpts_no_ep = blended_base * effective_fixtures * diff_mult * home_away_mult * opp_form_mult * team_form_mult
+            xpts_with_ep = base_gw0 * ctx_mult
+            xpts_no_ep = blended_base * effective_fixtures * ctx_mult
             xpts = xpts_with_ep.where(has_ep, xpts_no_ep)
             # Zero out blanks for non-ep players
             xpts = xpts.where(has_ep | (fixture_count > 0), 0.0)
@@ -551,7 +718,7 @@ def project_elements_next_gws(
                 xpts = xpts * play_prob
         else:
             base = blended_base
-            xpts = base * effective_fixtures * diff_mult * home_away_mult * opp_form_mult * team_form_mult
+            xpts = base * effective_fixtures * ctx_mult
             if minutes_mult is not None:
                 xpts = xpts * minutes_mult
             elif i <= 2:
@@ -643,10 +810,26 @@ def project_elements_next_gws(
     keep.append("xpts_horizon")
     if "xpts_model_horizon" in df.columns:
         keep.append("xpts_model_horizon")
+    # Component probabilities and the points distribution from the xG model, for
+    # the first GW only. Without these the payload can show a mean and nothing
+    # else -- the whole point of the component model is that it can explain the
+    # number it produces. Absent when the blend is off or xG history is missing.
+    keep.extend([c for c in _MODEL_COMPONENT_COLS if c in df.columns])
 
     out = df[[c for c in keep if c in df.columns]].copy()
     out = out.sort_values("xpts_horizon", ascending=False)
     return out
+
+
+# Carried through from expected_points/_attach_components. Kept in one place so
+# adding a component there does not silently get filtered out here.
+_MODEL_COMPONENT_COLS = [
+    "p_goal", "p_assist", "p_clean_sheet", "p_appear", "p_60", "p_dc",
+    "exp_goals", "exp_assists", "exp_minutes", "exp_clean_sheets", "n_fixtures",
+    "ep_appearance", "ep_goals", "ep_assists", "ep_clean_sheet",
+    "ep_conceded", "ep_saves", "ep_bonus", "ep_dc", "model_exp_points",
+    "modal_points", "p_return_6", "p_haul_10", "p80_low", "p80_high",
+]
 
 
 def add_wildcard_scores(projections_df, gw_start, horizon_gws):

@@ -9,20 +9,25 @@ try:
 except ImportError:
     pass
 
+from pathlib import Path
+
 import pandas as pd
-from fastapi import Body, Depends, FastAPI, Header, HTTPException
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exception_handlers import http_exception_handler
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, manual_squad, optimizer, projections, recommender, transfer_planner, transforms
-from src.auth import check_api_key, check_admin_key, require_user
+from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, projections, recommender, seed_models, transfer_planner, transforms
+from src.auth import check_api_key, check_admin_key, require_user, authenticated_subject
+from src.ratelimit import (
+    LLM_LIMIT, MAX_REQUEST_BYTES, _client_ip, _user_key, limiter,
+)
 from src.insights import (
     build_chip_profile,
     build_scoring_guide,
@@ -60,6 +65,12 @@ app = FastAPI(
 )
 logger = logging.getLogger(__name__)
 
+# Fly's persistent volume mounts at /app/data, shadowing the image's data/models
+# seeds. Copy any seed missing from the volume (never overwriting a runtime-written
+# file) before anything below reads data/models/*.json.
+_seed_models_result = seed_models.ensure_seed_models()
+logger.info("ensure_seed_models: %s", _seed_models_result)
+
 # --- personal GW replay (local-only; never enabled in production) ---
 if os.environ.get("REPLAY_MODE") == "1":
     from api.replay_router import router as replay_router
@@ -77,6 +88,13 @@ try:
     app.include_router(chat_router, dependencies=[Depends(require_user)])
 except Exception as e:
     logger.warning(f"Chat router not loaded: {e}")
+
+# Mount /chips/plan endpoint (chip timing recommendations) — login required.
+try:
+    from api.chips import router as chips_router
+    app.include_router(chips_router, dependencies=[Depends(require_user)])
+except Exception as e:
+    logger.warning(f"Chips router not loaded: {e}")
 
 
 def _csv_env(name):
@@ -122,20 +140,26 @@ app.add_middleware(
 )
 
 
-# --- per-IP rate limiting (defense-in-depth against LLM cost / DoS abuse) ---
-def _client_ip(request):
-    # Fly (and most proxies) put the real client IP first in X-Forwarded-For.
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[0].strip()
-    return get_remote_address(request)
-
-
-_rl_default = _csv_env("FPL_RATE_LIMITS") or ["90/minute", "1500/hour"]
-limiter = Limiter(key_func=_client_ip, default_limits=_rl_default, headers_enabled=True)
+# --- rate limiting + request-size ceiling (see src/ratelimit.py) -----------
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
+
+
+@app.middleware("http")
+async def _cap_request_body(request, call_next):
+    """Refuse oversized bodies before Starlette buffers them into 512MB of RAM.
+
+    See docs/prelaunch_audit_2026-09-12.md (C3).
+    """
+    declared = request.headers.get("content-length")
+    if declared:
+        try:
+            if int(declared) > MAX_REQUEST_BYTES:
+                return JSONResponse(status_code=413, content={"detail": "Request body too large."})
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length."})
+    return await call_next(request)
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -161,6 +185,8 @@ async def _scrub_server_errors(request, exc):
 
 _bootstrap_cache = {"ts": 0.0, "data": None}
 _fixtures_cache = {"ts": 0.0, "data": None}
+# Keyed by event id: live scores move during matches, so each GW caches separately.
+_event_live_cache = {}
 
 
 def _cache_get(cache, ttl_s):
@@ -191,6 +217,64 @@ def get_fixtures_cached():
         return hit
     fx = transforms.fixtures_df(fpl_client.get_fixtures())
     return _cache_set(_fixtures_cache, fx)
+
+
+def get_event_live_cached(event_id):
+    """
+    Live per-player stats for a GW, on a short TTL — scores move during matches,
+    so this cannot ride the 5-minute bootstrap TTL.
+
+    Never raises: live scores are additive detail, and a squad must still render
+    when the upstream call fails.
+    """
+    if event_id is None:
+        return {}
+    key = int(event_id)
+    ttl = int(getattr(config, "EVENT_LIVE_TTL", 60) or 60)
+    cache = _event_live_cache.setdefault(key, {"ts": 0.0, "data": None})
+    hit = _cache_get(cache, ttl)
+    if hit is not None:
+        return hit
+    try:
+        return _cache_set(cache, fpl_client.get_event_live(key))
+    except Exception as e:
+        logger.warning("Live stats fetch failed for GW %s: %s", key, e)
+        return cache.get("data") or {}
+
+
+# Keyed by (gw_start, horizon): the squad view and the recommendation view ask
+# for different horizons and must not evict each other.
+_projections_cache = {}
+
+
+def get_projections_cached(gw_start, horizon_gws, finished_gw_max=None):
+    """
+    Projections for one gameweek window, cached on the fixtures TTL.
+
+    The squad view needs xPts so a gameweek that hasn't happened shows a
+    projection rather than a dash, but it must not pay the full model cost on
+    every squad load.
+    """
+    key = (int(gw_start), int(horizon_gws))
+    ttl = int(getattr(config, "PROJECTIONS_TTL", 1800) or 1800)
+    cache = _projections_cache.setdefault(key, {"ts": 0.0, "data": None})
+    hit = _cache_get(cache, ttl)
+    if hit is not None:
+        return hit
+
+    bootstrap = get_bootstrap_cached()
+    fixtures = get_fixtures_cached()
+    elements, teams, _ = transforms.tables_from_bootstrap(bootstrap)
+    proj = projections.project_elements_next_gws(
+        elements=elements,
+        fixtures=fixtures,
+        teams_short_map=teams.set_index("id")["short_name"].to_dict(),
+        gw_start=int(gw_start),
+        horizon_gws=int(horizon_gws),
+        latest_n_matches=getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3),
+        finished_gw_max=finished_gw_max,
+    )
+    return _cache_set(cache, proj)
 
 
 _team_ratings_cache = {"ts": 0.0, "data": None}
@@ -254,6 +338,7 @@ def build_next_event_summary(bootstrap=None, fixtures=None):
     if events.empty or "id" not in events.columns:
         return {
             "event_id": None,
+            "current_event_id": None,
             "deadline_time_utc": None,
             "first_fixture_time_utc": None,
             "hours_to_deadline": None,
@@ -292,11 +377,49 @@ def build_next_event_summary(bootstrap=None, fixtures=None):
 
     return {
         "event_id": int(event_id),
+        # The GW currently in progress, straight from bootstrap's `is_current`.
+        # Clients previously derived this as `event_id - 1`, which misreports a
+        # finished GW as live in the window before the next one is flagged
+        # `is_next`, and is wrong at season boundaries.
+        "current_event_id": _event_id(bootstrap, "is_current"),
         "deadline_time_utc": to_iso_utc(deadline_value),
         "first_fixture_time_utc": to_iso_utc(first_fixture),
         "hours_to_deadline": hours_until_utc(deadline_value),
         "hours_to_first_fixture": hours_until_utc(first_fixture),
         "fixture_count": fixture_count,
+    }
+
+
+def build_entry_identity(entry_id):
+    """
+    Public identity of an FPL entry: who this team belongs to right now.
+
+    FPL reissues entry IDs each season, so a stored id silently resolves to a
+    different manager after the August rollover. `joined_time` is the strongest
+    tell -- it changes when the id is handed to someone new -- with the manager
+    name and `years_active` as corroboration.
+    """
+    eid = safe_int(entry_id)
+    if not eid or eid <= 0:
+        raise HTTPException(status_code=400, detail="A positive entry_id is required.")
+    try:
+        data = fpl_client.get_entry(eid) or {}
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Entry {eid} not found: {e}")
+
+    first = (data.get("player_first_name") or "").strip()
+    last = (data.get("player_last_name") or "").strip()
+    return {
+        "entry_id": eid,
+        "manager_name": (f"{first} {last}").strip() or None,
+        "team_name": data.get("name"),
+        "joined_time": data.get("joined_time"),
+        "started_event": safe_int(data.get("started_event")),
+        "years_active": safe_int(data.get("years_active")),
+        "region_name": data.get("player_region_name"),
+        "overall_rank": safe_int(data.get("summary_overall_rank")),
+        "overall_points": safe_int(data.get("summary_overall_points")),
+        "current_event": safe_int(data.get("current_event")),
     }
 
 
@@ -612,6 +735,49 @@ def build_squad(payload):
 
     records = attach_media(df_records(picks), teams_code)
 
+    # Live/actual scores for the GW being rendered. Sourced from
+    # /api/event/{gw}/live/ rather than bootstrap's `event_points`, which always
+    # reports the *current* GW and would show GW-N scores on a GW-1 squad.
+    # `event_points` is the raw player score: the captain multiplier lives in
+    # `multiplier` on the pick, so the client applies it and the number under a
+    # player still matches the official app.
+    live_stats = get_event_live_cached(ctx["squad_event_id"])
+    for r in records:
+        st = live_stats.get(safe_int(r.get("player_id"))) or {}
+        r["event_points"] = safe_int(st.get("total_points"))
+        r["live_minutes"] = safe_int(st.get("minutes"))
+        r["live_bonus"] = safe_int(st.get("bonus"))
+        r["live_bps"] = safe_int(st.get("bps"))
+
+    # Projected points for the gameweek the manager asked for. Without this the
+    # squad view has nothing to show for a gameweek that hasn't happened -- the
+    # picks endpoint substitutes the latest squad, its actual points belong to an
+    # earlier gameweek, and every shirt renders a dash.
+    #
+    # Projected for the REQUESTED event, not the substituted one: asking about
+    # GW3 and being shown GW2's projection would be the same lie in a new place.
+    requested_ev = safe_int(payload.get("event_id")) or ctx["squad_event_id"]
+    projection_event_id = int(min(38, max(1, int(requested_ev))))
+    try:
+        proj = get_projections_cached(projection_event_id, 1, ctx.get("finished_gw_max"))
+        xpts_col = f"xpts_gw{projection_event_id}"
+        if proj is not None and not proj.empty and xpts_col in proj.columns:
+            xpts_by_id = dict(zip(
+                pd.to_numeric(proj["id"], errors="coerce"),
+                pd.to_numeric(proj[xpts_col], errors="coerce"),
+            ))
+            for r in records:
+                value = xpts_by_id.get(safe_int(r.get("player_id")))
+                r["xpts"] = round(float(value), 2) if value is not None and pd.notna(value) else None
+            if projection_event_id != ctx["squad_event_id"]:
+                # The squad is a substitution; say which GW the numbers describe.
+                ctx.setdefault("notes", []).append(
+                    f"Projected points shown for GW{projection_event_id}."
+                )
+    except Exception as e:
+        # Projections are additive; a squad must still render without them.
+        logger.warning("Squad projections unavailable for GW %s: %s", projection_event_id, e)
+
     starting = []
     bench = []
     for r in records:
@@ -630,9 +796,19 @@ def build_squad(payload):
         if r.get("is_vice_captain") is True:
             vice_id = safe_int(r.get("player_id"))
 
+    # Identity of the entry these picks belong to. Without it the client cannot
+    # tell that a stored entry_id has rolled over to a different manager -- the
+    # fetch succeeds and a stranger's squad renders cleanly.
+    try:
+        entry_identity = build_entry_identity(ctx["entry_id"])
+    except Exception as e:
+        logger.warning("Entry identity lookup failed for %s: %s", ctx["entry_id"], e)
+        entry_identity = None
+
     return {
         "entry_id": ctx["entry_id"],
         "event_id": ctx["squad_event_id"],
+        "entry": entry_identity,
         "notes": ctx.get("notes") or [],
         "captain_player_id": captain_id,
         "vice_player_id": vice_id,
@@ -643,7 +819,7 @@ def build_squad(payload):
     }
 
 
-def optimize_squad(payload):
+def optimize_squad(payload, owner=None):
     """
     "Improve my team" optimizer for the pre-deadline window (unlimited free
     transfers, no hits). Repeatedly applies the best beneficial free swaps until
@@ -764,7 +940,7 @@ def optimize_squad(payload):
         cap = ranked[0] if ranked else None
         vice = ranked[1] if len(ranked) > 1 else None
     if apply_result and len(set(final_ids)) == 15:
-        manual_squad.save_manual_squad(entry_id, final_ids, captain_id=cap, vice_id=vice)
+        manual_squad.save_manual_squad(entry_id, final_ids, captain_id=cap, vice_id=vice, owner=owner)
         applied = True
 
     return {
@@ -798,6 +974,7 @@ def build_recommendations(payload):
     chip_play_event_id_raw = payload.get("chip_play_event_id")
     chip_strategy_raw = payload.get("chip_strategy")
     chip_strategy = normalize_chip_strategy(chip_strategy_raw)
+    chip_differential = parse_bool(payload.get("differential"), default=False)
     latest_n_matches_raw = payload.get("latest_n_matches", getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3))
     apply_transfer_count_raw = payload.get("apply_transfer_count")
 
@@ -950,6 +1127,16 @@ def build_recommendations(payload):
     if wildcard_is_active:
         projection_start_event_id = min(int(optimize_event_id), int(wildcard_play_event_id))
     projection_end_event_id = int(optimize_event_id) + int(display_horizon_gws) - 1
+    # The transfer planner never runs blind: it needs at least
+    # TRANSFER_PLAN_MIN_HORIZON_GWS of projections even when the display
+    # horizon is 1, or roll-vs-move has no next week to compare against.
+    plan_horizon_gws = max(
+        int(display_horizon_gws),
+        max(1, int(getattr(config, "TRANSFER_PLAN_MIN_HORIZON_GWS", 3))),
+    )
+    projection_end_event_id = max(
+        int(projection_end_event_id), int(optimize_event_id) + plan_horizon_gws - 1
+    )
     if wildcard_is_active:
         projection_end_event_id = max(
             int(projection_end_event_id),
@@ -1033,11 +1220,25 @@ def build_recommendations(payload):
             else 0
         )
         if chip_strategy == "free_hit":
+            # H2H hedge input: which team faces which this GW, so the draft
+            # avoids own GK/DEF vs own attackers. Fail-soft — no map, no penalty.
+            fh_opponents = None
+            try:
+                by_team = transforms.fixtures_by_team_for_gw(
+                    get_fixtures_cached(), int(optimize_event_id))
+                fh_opponents = {
+                    int(t): {int(it["opp"]) for it in lst if it.get("opp") is not None}
+                    for t, lst in by_team.items()
+                }
+            except Exception as e:  # noqa: BLE001
+                logger.warning("free-hit opponents map unavailable: %s", e)
             chip_build = optimizer.build_free_hit_squad(
                 elements_all=proj_all,
                 score_col=chip_objective_col,
                 budget_m=budget_m,
                 max_per_team=int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3),
+                opponents=fh_opponents,
+                differential=chip_differential,
             )
         else:
             chip_build = optimizer.build_chip_squad(
@@ -1048,6 +1249,7 @@ def build_recommendations(payload):
                 min_premium_attackers=min_premium_attackers,
                 premium_floor=premium_floor,
                 premium_positions=premium_positions,
+                differential=chip_differential,
             )
         timings["chip_draft_ms"] = elapsed_ms(ts)
 
@@ -1102,6 +1304,45 @@ def build_recommendations(payload):
     if not res:
         raise HTTPException(status_code=500, detail="Could not optimize lineup for this squad.")
     timings["optimize_base_ms"] = elapsed_ms(ts)
+
+    # Stack odds: joint return/blank probabilities for same-team attacker
+    # stacks in a chip-draft XI — a mean-xPts sum is blind to the correlation
+    # (three attackers vs one tight defence can all blank on a single 0-0).
+    if chip_info.get("is_active"):
+        try:
+            from src import stack_odds as stack_odds_mod
+            ratings = get_team_ratings_cached(teams_short)
+            fdt = fixture_difficulty.fixture_difficulty_table(
+                ratings, get_fixtures_cached(), int(optimize_event_id))
+            lam_by_team = {int(r["team_id"]): float(r["xg_for"]) for _, r in fdt.iterrows()}
+            # Blend in market-implied expected goals where the odds API covers
+            # the fixture — the market prices team news our xG can't see.
+            # Fail-soft: no key/odds → pure xG lambdas as before.
+            try:
+                from src import odds_client
+                odds_w = float(getattr(config, "ODDS_LAMBDA_BLEND_WEIGHT", 0.7))
+                if odds_w > 0:
+                    fpl_names = {int(t["id"]): t["name"]
+                                 for t in get_bootstrap_cached().get("teams", [])}
+                    odds_lam = odds_client.odds_lambda_by_team(fpl_names)
+                    for tid, lam in odds_lam.items():
+                        if tid in lam_by_team:
+                            lam_by_team[tid] = odds_w * lam + (1.0 - odds_w) * lam_by_team[tid]
+            except Exception as e:  # noqa: BLE001 — odds must never fail the response
+                logger.warning("odds lambda unavailable: %s", e)
+            xgi_map = {}
+            if "expected_goals_per_90" in proj_all.columns:
+                xg = pd.to_numeric(proj_all["expected_goals_per_90"], errors="coerce").fillna(0.0)
+                if "expected_assists_per_90" in proj_all.columns:
+                    xg = xg + pd.to_numeric(proj_all["expected_assists_per_90"], errors="coerce").fillna(0.0)
+                xgi_map = dict(zip(proj_all["id"].astype(int), xg.astype(float)))
+            rows = stack_odds_mod.stack_odds_for_xi(
+                res["starting_xi"].to_dict("records"), lam_by_team, xgi_map)
+            for r0 in rows:
+                r0["team_short"] = teams_short.get(r0["team"], "?")
+            chip_info["stack_odds"] = rows
+        except Exception as e:  # noqa: BLE001 — annotation must never fail the response
+            logger.warning("stack odds unavailable: %s", e)
 
     gws = [int(optimize_event_id) + i for i in range(int(display_horizon_gws))]
     chip_profile_gws = gws
@@ -1210,14 +1451,6 @@ def build_recommendations(payload):
             horizon_gws=int(display_horizon_gws),
         )
     timings["transfer_preview_ms"] = elapsed_ms(ts)
-    if include_transfers:
-        try:
-            annotate_moves_next_fixture(
-                transfer_preview, elements, fixtures, teams_short, int(optimize_event_id)
-            )
-        except Exception:
-            pass  # fixture labels are cosmetic — never block the response
-        out["transfers"] = transfer_preview
 
     # Additive: a multi-GW roll/bank plan across the horizon (the single-GW
     # `transfers` above never sequences GWs or accounts for the -4 hit). Uses
@@ -1235,12 +1468,47 @@ def build_recommendations(payload):
                 if "chance_of_playing_next_round" in _elements_df.columns:
                     _status_cols.append("chance_of_playing_next_round")
                 _plan_proj = _plan_proj.merge(_elements_df[_status_cols], on="id", how="left")
+            # Opponent map per GW (team_short <-> team_short) for the
+            # head-to-head hedge nudge.
+            plan_gws = [int(optimize_event_id) + i for i in range(int(plan_horizon_gws))]
+            _opps_by_gw = {}
+            try:
+                for _g in plan_gws:
+                    _m = {}
+                    for _, _fx in fixtures[fixtures["event"] == _g].iterrows():
+                        _th = teams_short.get(int(_fx["team_h"]))
+                        _ta = teams_short.get(int(_fx["team_a"]))
+                        if _th and _ta:
+                            _m.setdefault(_th, set()).add(_ta)
+                            _m.setdefault(_ta, set()).add(_th)
+                    _opps_by_gw[_g] = _m
+            except Exception:  # noqa: BLE001 - the nudge is optional context
+                _opps_by_gw = None
             out["transfer_plan_horizon"] = transfer_planner.plan_transfers(
-                _plan_proj, _squad_ids, gws,
+                _plan_proj, _squad_ids, plan_gws,
                 itb_m=safe_float(itb_m, default=0.0) or 0.0,
-                start_ft=int(free_transfers_value), ft_cap=5, allow_hits=True)
+                start_ft=int(free_transfers_value), ft_cap=5,
+                allow_hits=bool(getattr(config, "TRANSFER_PLAN_ALLOW_HITS", False)),
+                max_moves_per_gw=int(getattr(config, "TRANSFER_PLAN_MAX_MOVES_PER_GW", 1)),
+                opponents_by_gw=_opps_by_gw)
         except Exception as e:  # noqa: BLE001 - planning must never fail the recommendation
             logger.warning("horizon transfer plan failed: %s", e)
+
+    if include_transfers:
+        # The plan is the recommendation: its first-GW moves lead the
+        # applyable list so "Apply" applies what the verdict says.
+        try:
+            plan_merge.merge_plan_moves_into_preview(
+                transfer_preview, out.get("transfer_plan_horizon"))
+        except Exception as e:  # noqa: BLE001 - alternatives still render
+            logger.warning("plan-move merge failed: %s", e)
+        try:
+            annotate_moves_next_fixture(
+                transfer_preview, elements, fixtures, teams_short, int(optimize_event_id)
+            )
+        except Exception:
+            pass  # fixture labels are cosmetic — never block the response
+        out["transfers"] = transfer_preview
 
     ts = time.perf_counter()
     moves = transfer_preview.get("moves") if isinstance(transfer_preview, dict) else []
@@ -1402,10 +1670,21 @@ def admin_refresh(
     _fixtures_cache["data"] = None
     _team_ratings_cache["ts"] = 0.0
     _team_ratings_cache["data"] = None
+    # Live GW scores are cached per event id; a manual refresh should drop them
+    # too, otherwise /squad keeps serving scores up to EVENT_LIVE_TTL old.
+    _event_live_cache.clear()
 
     bootstrap = get_bootstrap_cached()
     fixtures = get_fixtures_cached()
     next_ev = build_next_event_summary(bootstrap=bootstrap, fixtures=fixtures)
+
+    # Warm the bookmaker-odds disk cache so the projection engine (which
+    # reads cache-only, never the network) always has fresh market lambdas.
+    try:
+        from src import odds_client as _odds
+        _odds.fetch_epl_odds()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("odds cache refresh failed: %s", e)
 
     snapshot_info = None
     snapshot_error = None
@@ -1415,13 +1694,93 @@ def admin_refresh(
         except Exception as exc:
             snapshot_error = str(exc)
 
+    # Keep the xG model's input current. Without this the file only ever came
+    # from a CLI run on a developer's machine, so a deployed server started with
+    # an empty volume and the whole xG stack silently disabled.
+    match_history_info = None
+    match_history_error = None
+    if run_snapshot:
+        try:
+            match_history_info = refresh_match_history(bootstrap, fixtures)
+        except Exception as exc:
+            match_history_error = str(exc)
+            logger.warning("Match-history refresh failed: %s", exc)
+
+    # New history invalidates every projection, and rebuilding one costs seconds
+    # on a shared-cpu machine. Pay that here, on a scheduled job, rather than
+    # making the next person to open the app wait for it.
+    _projections_cache.clear()
+    warmed = []
+    next_gw = safe_int((next_ev or {}).get("event_id"))
+    if next_gw:
+        finished_max = max(
+            [safe_int(e.get("id")) for e in bootstrap.get("events", []) if e.get("finished")] or [0]
+        ) or None
+        for horizon in (1, int(getattr(config, "PROJ_DEFAULT_HORIZON_GWS", 3) or 3)):
+            try:
+                get_projections_cached(next_gw, horizon, finished_max)
+                warmed.append({"gw": next_gw, "horizon": horizon})
+            except Exception as exc:
+                logger.warning("Projection warm failed for GW%s h%s: %s", next_gw, horizon, exc)
+
     return JSONResponse(content=jsonable_encoder({
         "ok": True,
         "next_event": next_ev,
         "cache_refreshed_at_utc": datetime.utcnow().isoformat() + "Z",
         "snapshot_info": snapshot_info,
         "snapshot_error": snapshot_error,
+        "match_history": match_history_info,
+        "match_history_error": match_history_error,
+        "projections_warmed": warmed,
     }))
+
+
+def refresh_match_history(bootstrap, fixtures):
+    """
+    Append any finished gameweek missing from the xG model's history file.
+
+    One upstream call per missing gameweek and none once caught up, so this is
+    cheap enough to run on every refresh. Returns a summary for the response so
+    an empty model is visible rather than silent.
+    """
+    season = season_label_from_bootstrap(bootstrap)
+    out_dir = Path("data/processed/fpl") / str(season)
+    out_path = out_dir / f"player_match_history_{season}.csv"
+
+    existing = None
+    if out_path.exists():
+        try:
+            existing = pd.read_csv(out_path)
+        except Exception:
+            existing = None
+
+    missing = live_history.missing_event_ids(existing, bootstrap)
+    if not missing:
+        return {
+            "path": str(out_path),
+            "appended_events": [],
+            "rows": int(len(existing)) if existing is not None else 0,
+            "note": "already current",
+        }
+
+    updated, added = live_history.append_events(existing, bootstrap, fixtures, missing)
+    if updated.empty:
+        return {"path": str(out_path), "appended_events": [], "rows": 0,
+                "note": "no rows returned for the missing gameweeks"}
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    updated.to_csv(out_path, index=False)
+    # The model reads the newest file by mtime; drop the caches that derive from it.
+    _team_ratings_cache["ts"] = 0.0
+    _team_ratings_cache["data"] = None
+    return {
+        "path": str(out_path),
+        "appended_events": added,
+        "rows": int(len(updated)),
+        "events_on_file": sorted(
+            pd.to_numeric(updated["event"], errors="coerce").dropna().astype(int).unique().tolist()
+        ),
+    }
 
 
 def build_model_snapshot():
@@ -1436,16 +1795,9 @@ def build_model_snapshot():
     finished = [safe_int(e.get("id")) for e in bootstrap.get("events", []) if e.get("finished")]
     finished_gw_max = max([e for e in finished if e], default=None)
 
-    elements_df = pd.DataFrame(bootstrap.get("elements", []))
-    proj = projections.project_elements_next_gws(
-        elements=elements_df,
-        fixtures=fixtures,
-        teams_short_map=teams_short,
-        gw_start=gw,
-        horizon_gws=1,
-        latest_n_matches=getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3),
-        finished_gw_max=finished_gw_max,
-    )
+    # Share the cache with the squad view rather than forcing a cold build: this
+    # is a diagnostic endpoint and has no business costing seconds of CPU.
+    proj = get_projections_cached(gw, 1, finished_gw_max)
     xpts_col = f"xpts_gw{gw}"
     xpts_by_id = {}
     if proj is not None and not proj.empty and xpts_col in proj.columns:
@@ -1496,6 +1848,41 @@ def admin_model_snapshot(
     return build_model_snapshot()
 
 
+@app.get("/admin/chip-plan")
+def admin_chip_plan(
+    entry_id: int,
+    api_key=None,
+    x_api_key=Header(None),
+    authorization=Header(None),
+):
+    err = check_admin_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
+    if err:
+        return err
+    from api.chips import chips_plan, _resolve_current_gw
+    from src.season_history import season_label_from_bootstrap
+    from src import config as _config
+
+    bootstrap = fpl_client.get_bootstrap()
+    next_gw = _resolve_current_gw()
+    deadline = next(
+        (e.get("deadline_time") for e in bootstrap.get("events", []) if int(e["id"]) == next_gw),
+        None,
+    )
+    body = chips_plan(entry_id=entry_id, horizon=None)
+    return {
+        "season": season_label_from_bootstrap(bootstrap),
+        "next_gw": next_gw,
+        "deadline_utc": deadline,
+        "entry_id": entry_id,
+        "plan": {k: v for k, v in body.items() if k != "entry_id"},
+        "model_meta": {
+            "horizon": getattr(_config, "CHIP_PLAN_HORIZON_GWS", 8),
+            "min_ev": getattr(_config, "CHIP_PLAN_MIN_EV", {}),
+            "expiry_ramp_gws": getattr(_config, "CHIP_PLAN_EXPIRY_RAMP_GWS", 5),
+        },
+    }
+
+
 @app.get("/squad")
 def squad_get(
     entry_id=None, event_id=None,
@@ -1506,6 +1893,34 @@ def squad_get(
         return err
     out = build_squad({"entry_id": entry_id, "event_id": event_id})
     return JSONResponse(content=jsonable_encoder(out))
+
+
+@app.get("/entry/identity")
+def entry_identity_get(
+    entry_id=None,
+    api_key=None, x_api_key=Header(None), authorization=Header(None),
+):
+    """
+    Confirm who an entry id belongs to before linking it.
+
+    A browser cannot ask FPL directly -- fantasy.premierleague.com sends no CORS
+    header for our origin -- so the lookup is proxied here.
+    """
+    err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
+    if err:
+        return err
+    return JSONResponse(content=jsonable_encoder(build_entry_identity(entry_id)))
+
+
+def _owner_of(x_api_key, authorization):
+    """Ownership key for per-user writes: the Supabase `sub`, or None.
+
+    None means the caller presented the static service key (scripts, the refresh
+    cron) and is trusted server-to-server. Client-supplied entry_id must never be
+    treated as proof of ownership — see docs/prelaunch_audit_2026-09-12.md (C4).
+    """
+    subject = authenticated_subject(x_api_key=x_api_key, authorization=authorization)
+    return (subject or {}).get("sub")
 
 
 @app.post("/squad")
@@ -1539,6 +1954,13 @@ def squad_manual_post(
     entry_id = safe_int(payload.get("entry_id"))
     if not entry_id:
         raise HTTPException(status_code=400, detail="Missing/invalid entry_id.")
+
+    owner = _owner_of(x_api_key, authorization)
+    try:
+        manual_squad.assert_can_write(entry_id, owner)
+    except manual_squad.OwnershipError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
     player_ids = payload.get("player_ids") or []
     captain_id = payload.get("captain_id")
     vice_id = payload.get("vice_id")
@@ -1556,7 +1978,7 @@ def squad_manual_post(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    manual_squad.save_manual_squad(entry_id, player_ids, captain_id=captain_id, vice_id=vice_id)
+    manual_squad.save_manual_squad(entry_id, player_ids, captain_id=captain_id, vice_id=vice_id, owner=owner)
     out = build_squad({"entry_id": entry_id})
     return JSONResponse(content=jsonable_encoder(out))
 
@@ -1573,7 +1995,12 @@ def squad_manual_delete(
     entry_id = safe_int(entry_id)
     if not entry_id:
         raise HTTPException(status_code=400, detail="Missing/invalid entry_id.")
-    removed = manual_squad.clear_manual_squad(entry_id)
+    try:
+        removed = manual_squad.clear_manual_squad(
+            entry_id, owner=_owner_of(x_api_key, authorization)
+        )
+    except manual_squad.OwnershipError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     return JSONResponse(content={"entry_id": int(entry_id), "removed": bool(removed)})
 
 
@@ -1591,7 +2018,10 @@ def squad_optimize_post(
     err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key or payload.get("api_key"))
     if err:
         return err
-    out = optimize_squad(payload)
+    try:
+        out = optimize_squad(payload, owner=_owner_of(x_api_key, authorization))
+    except manual_squad.OwnershipError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     return JSONResponse(content=jsonable_encoder(out))
 
 
@@ -1706,7 +2136,9 @@ def league_strategy_post(
 
 
 @app.post("/explain")
+@limiter.limit(LLM_LIMIT, key_func=_user_key)
 def explain_post(
+    request: Request,
     payload=Body(None),
     api_key=None, x_api_key=Header(None), authorization=Header(None),
 ):

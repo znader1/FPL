@@ -23,12 +23,14 @@ from __future__ import annotations
 import pandas as pd
 
 try:
-    from . import config, fixture_difficulty, minutes_model, output_model
+    from . import (config, fixture_difficulty, minutes_model, output_model,
+                   points_distribution)
 except Exception:  # pragma: no cover - flat script usage
     import config  # type: ignore
     import fixture_difficulty  # type: ignore
     import minutes_model  # type: ignore
     import output_model  # type: ignore
+    import points_distribution  # type: ignore
 
 
 def build_ratings(asof=None, match_df=None, teams_short_map=None,
@@ -37,7 +39,9 @@ def build_ratings(asof=None, match_df=None, teams_short_map=None,
     if match_df is None:
         match_df = fixture_difficulty.load_match_history(base_dir=base_dir)
     team_match_xg = fixture_difficulty.build_team_match_xg(match_df)
-    ratings = fixture_difficulty.compute_team_ratings(team_match_xg, asof=asof)
+    ratings = fixture_difficulty.resolve_team_ratings(
+        team_match_xg, teams_short_map=teams_short_map, asof=asof
+    )
     ratings = fixture_difficulty.apply_knowledge_discount(
         ratings, teams_short_map=teams_short_map, path=knowledge_path
     )
@@ -81,7 +85,18 @@ def build_expected_points(
     if team_match_xg.empty:
         return pd.DataFrame({"id": pd.to_numeric(elements["id"], errors="coerce").dropna().astype(int)})
 
-    ratings = fixture_difficulty.compute_team_ratings(team_match_xg, asof=asof)
+    # Carryover-seeded ratings, not live-only. With one gameweek played, raw
+    # current-season ratings come off a single match per team: one 4-0 win makes
+    # a side look world-beating and inflates every player on it. resolve_* blends
+    # in the regressed prior-season seed with FDR_CARRYOVER_PRIOR_MATCHES worth of
+    # weight, so the live signal only takes over as matches accrue.
+    #
+    # This also made the projections disagree with /fixtures/difficulty, which has
+    # always used resolve_team_ratings — the same team rated two different ways in
+    # the same app.
+    ratings = fixture_difficulty.resolve_team_ratings(
+        team_match_xg, teams_short_map=teams_short_map, asof=asof
+    )
     ratings = fixture_difficulty.apply_knowledge_discount(
         ratings, teams_short_map=teams_short_map, path=knowledge_path
     )
@@ -90,10 +105,33 @@ def build_expected_points(
     out = out[out["id"].notna()].copy()
     out["id"] = out["id"].astype(int)
 
+    # Both rate builders filter history to `event < gw`, so every gameweek at or
+    # beyond the last one on file sees identical input and returns an identical
+    # frame. Over a 3-GW horizon that was the same ~245ms of work three times.
+    # Minutes are NOT memoised: their decay is measured relative to the gameweek
+    # being projected, so each one genuinely differs.
+    max_event_on_file = None
+    if match_df is not None and not match_df.empty:
+        gw_col = "event" if "event" in match_df.columns else (
+            "round" if "round" in match_df.columns else None)
+        if gw_col:
+            events = pd.to_numeric(match_df[gw_col], errors="coerce").dropna()
+            if not events.empty:
+                max_event_on_file = int(events.max())
+
+    def _effective_gw(gw):
+        return gw if max_event_on_file is None else min(int(gw), max_event_on_file + 1)
+
+    rates_memo, dc_memo = {}, {}
+
     horizon_total = pd.Series(0.0, index=out.index, dtype="float64")
     for gw in gws:
-        player_rates = output_model.compute_player_rates(match_df, gw)
-        dc_rates = output_model.compute_dc_rates(match_df, gw)
+        key = _effective_gw(gw)
+        if key not in rates_memo:
+            rates_memo[key] = output_model.compute_player_rates(match_df, key)
+            dc_memo[key] = output_model.compute_dc_rates(match_df, key)
+        player_rates = rates_memo[key]
+        dc_rates = dc_memo[key]
         mins = minutes_model.minutes_projection(elements, minutes_history, gw)
         ep = output_model.expected_points(
             elements, fixtures, ratings, player_rates, mins, gw, dc_rates=dc_rates)
@@ -104,9 +142,85 @@ def build_expected_points(
         else:
             mapped = out["id"].map(ep["exp_points"]).fillna(0.0)
             out[col] = mapped.values
+            # Components and the points distribution are carried for the first GW
+            # only -- that is the one a player card shows, and repeating them
+            # across the horizon would bloat every payload for nothing.
+            if gw == gw_start:
+                out = _attach_components(out, ep)
         horizon_total = horizon_total + out[col].fillna(0.0)
 
     out["xpts_model_horizon"] = horizon_total.values
+    return out
+
+
+# Below this appearance probability a player's points distribution is a spike at
+# zero, so the convolution is skipped and the answer written directly.
+MIN_APPEAR_FOR_PMF = 0.02
+
+# Component columns carried from output_model onto the first-GW row.
+_COMPONENT_COLS = [
+    "p_goal", "p_assist", "p_clean_sheet", "p_appear", "p_60", "p_dc",
+    "exp_goals", "exp_assists", "exp_minutes", "exp_clean_sheets", "n_fixtures",
+    "ep_appearance", "ep_goals", "ep_assists", "ep_clean_sheet",
+    "ep_conceded", "ep_saves", "ep_bonus", "ep_dc",
+]
+
+
+def _attach_components(out, ep):
+    """
+    Carry the model's component probabilities and a points distribution onto the
+    per-player row.
+
+    The blended ``xpts`` is half ppg-baseline (``PROJ_MODEL_BLEND_WEIGHT``), so
+    these components explain the model half only. ``model_exp_points`` is exposed
+    alongside them so the UI can show a breakdown that actually adds up, instead
+    of decomposing a number the components do not fully describe.
+    """
+    for c in _COMPONENT_COLS:
+        if c in ep.columns:
+            out[c] = out["id"].map(ep[c]).values
+    out["model_exp_points"] = out["id"].map(ep["exp_points"]).values
+
+    if "pos" not in ep.columns:
+        return out
+
+    pos_by_id = out["id"].map(ep["pos"])
+    modal, p_return, p_haul, p80_low, p80_high = [], [], [], [], []
+    for i, pid in enumerate(out["id"].values):
+        pos = pos_by_id.iloc[i]
+        if pid not in ep.index or not isinstance(pos, str):
+            modal.append(None); p_return.append(None); p_haul.append(None)
+            p80_low.append(None); p80_high.append(None)
+            continue
+        row = ep.loc[pid]
+        # Someone who will not appear scores 0 with near-certainty. Say so
+        # directly rather than convolving five distributions to find it out.
+        if float(row.get("p_appear", 0.0) or 0.0) < MIN_APPEAR_FOR_PMF:
+            modal.append(0); p_return.append(0.0); p_haul.append(0.0)
+            p80_low.append(0); p80_high.append(0)
+            continue
+        pmf = points_distribution.player_points_pmf(
+            pos=pos,
+            prob_appear=float(row.get("p_appear", 0.0) or 0.0),
+            prob_60=float(row.get("p_60", 0.0) or 0.0),
+            exp_goals=float(row.get("exp_goals", 0.0) or 0.0),
+            exp_assists=float(row.get("exp_assists", 0.0) or 0.0),
+            exp_clean_sheets=float(row.get("exp_clean_sheets", 0.0) or 0.0),
+            n_fixtures=int(row.get("n_fixtures", 1) or 1),
+            p_dc=float(row.get("p_dc", 0.0) or 0.0),
+        )
+        summary = points_distribution.summarize(pmf)
+        modal.append(summary["modal_points"])
+        p_return.append(summary["p_return_6"])
+        p_haul.append(summary["p_haul_10"])
+        p80_low.append(summary["p80_low"])
+        p80_high.append(summary["p80_high"])
+
+    out["modal_points"] = modal
+    out["p_return_6"] = p_return
+    out["p_haul_10"] = p_haul
+    out["p80_low"] = p80_low
+    out["p80_high"] = p80_high
     return out
 
 

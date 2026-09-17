@@ -77,6 +77,10 @@ def normalize_chip_strategy(value):
         return "wildcard"
     if s in ("free_hit", "freehit", "fh"):
         return "free_hit"
+    if s in ("bench_boost", "bboost", "bb"):
+        return "bench_boost"
+    if s in ("triple_captain", "3xc", "tc"):
+        return "triple_captain"
     return "none"
 
 

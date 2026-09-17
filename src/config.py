@@ -7,6 +7,12 @@ REQUESTS_CA_BUNDLE_ENV = "REQUESTS_CA_BUNDLE"
 
 # Caching / API
 BOOTSTRAP_TTL = 300  # seconds
+EVENT_LIVE_TTL = 60  # live GW scores move during matches, so cache far shorter
+# Projections only change when the history is refreshed or bootstrap moves
+# (prices, injuries), so they can outlive the fixtures cache by a long way. On a
+# shared-cpu Fly machine a cold build is seconds, and this is what keeps a squad
+# load off that path.
+PROJECTIONS_TTL = 1800
 FIXTURES_TTL  = 300
 
 # Elements features you care about
@@ -89,6 +95,10 @@ CAPTAIN_PREMIUM_PRICE_FLOOR = 9.0
 CAPTAIN_PREMIUM_PRICE_BONUS_PER_M = 0.10
 CAPTAIN_FORM_CEILING_WEIGHT = 0.04
 CAPTAIN_SET_PIECE_PENALTY_WEIGHT = 0.55
+# Armband tilt per FDR step from neutral 3: captaincy is a ceiling game — a
+# D4/D5 fixture crushes haul probability more than mean xPts, so a near-tie
+# resolves toward the easier fixture. ±0.35/step only flips close calls.
+CAPTAIN_FIXTURE_DIFFICULTY_WEIGHT = 0.35
 
 # -----------------------------
 # Transfer recommender tuning
@@ -157,6 +167,63 @@ TRANSFER_PLANNER_RED_FLAG_STATUSES = ("i", "s", "u")
 # chance_of_playing_next_round at/below this also forces a sell (e.g. 0 == ruled out).
 TRANSFER_PLANNER_RED_FLAG_MAX_CHANCE = 0.0
 
+# --- Early-season shrinkage (src/projections.py) ---
+# FPL's ppg/form over 1-3 games otherwise get taken at face value: a 4.1m
+# defender with two clean sheets (ppg 10.0) projects like a premium and the
+# transfer planner chases him instead of rolling. Shrink each player's blended
+# baseline toward slope[element_type] × price_m, weighted by finished
+# gameweeks; fades as the season accumulates evidence. 0 disables.
+PROJ_SHRINKAGE_GAMES = 5.0
+PROJ_PRICE_PRIOR_SLOPE = {1: 0.55, 2: 0.50, 3: 0.45, 4: 0.42}  # element_type -> prior ppg per £1m
+
+# First-choice penalty takers are worth ~a penalty every 3 games on top of
+# open play; ppg/form only sees that historically and shrinkage dilutes it
+# early season. Applied AFTER shrinkage so the duty survives a quiet sample.
+# The xG shadow model prices this properly — this is the baseline's stand-in
+# until that model earns its backtest win.
+PROJ_PENALTY_TAKER_UPLIFT = 0.45  # xPts/GW for penalties_order == 1; 0 disables
+
+# --- Positional bar for spending a free transfer (src/transfer_planner.py) ---
+# A GKP/DEF swap must clear a higher multiple of min_gain before it beats
+# rolling: back-line moves swing fewer real points, and a banked FT is worth
+# more than a sideways defender trade. Injury-forced sells bypass this.
+TRANSFER_PLAN_POS_GAIN_MULT = {"GKP": 2.0, "DEF": 2.25, "MID": 1.0, "FWD": 1.0}
+
+# XI-aware horizon planning (src/transfer_planner.py): a bench seller's swap
+# only credits the points the buyer would add by displacing the weakest
+# same-position XI member — upgrading a player who stays on the bench is
+# worth nothing, so the planner stops burning transfers (or hits) on subs.
+TRANSFER_PLAN_XI_AWARE = True
+
+# One clear recommendation (user product rule, 2026-09-04): the headline plan
+# names at most one move per GW and never funds moves with hits. The verdict
+# explicitly compares moving now vs rolling for an extra transfer next week;
+# injury urgency is the only bypass.
+TRANSFER_PLAN_ALLOW_HITS = False
+# Upper bound per GW; with MOVES_FOLLOW_FT the effective cap is the free
+# transfers actually banked that week (2 FT -> up to 2 moves, never hits).
+TRANSFER_PLAN_MAX_MOVES_PER_GW = 2
+TRANSFER_PLAN_MOVES_FOLLOW_FT = True
+
+# Runner-ups (2026-09-16): how many "next best swap per other squad player"
+# candidates verdict_detail.runner_ups keeps, ranked by horizon gain. Purely
+# informational (the "Also considered" list) -- never changes which move the
+# planner recommends.
+TRANSFER_PLAN_RUNNER_UPS = 5
+
+# Head-to-head hedge nudge: buying a player who faces one of your own
+# GKP/DEF<->attacker pairs that gameweek caps the pair's joint ceiling (your
+# striker scoring kills your defender's clean sheet). Expected points don't
+# change — this is a variance preference, so the nudge is small: it breaks
+# ties toward the non-conflicting candidate, nothing more. 0 disables.
+TRANSFER_H2H_CONFLICT_PENALTY = 0.75  # xPts per directly-opposed own player
+
+# The roll-vs-move verdict is meaningless with no next week to roll into, and
+# a 1-GW display slider kept producing exactly that. The planner always
+# evaluates at least this many GWs regardless of the display horizon; the
+# slider still controls the pitch/optimization view (1 GW remains available).
+TRANSFER_PLAN_MIN_HORIZON_GWS = 3
+
 # -----------------------------
 # Strategy recommendation tuning
 # -----------------------------
@@ -167,9 +234,128 @@ STRATEGY_CHIP_TRIPLE_CAPTAIN_MIN_XPTS = 10.0
 STRATEGY_MAX_BENCH_MOVES = 6
 
 # -----------------------------
+# Chip plan tuning (src/chip_advisor.py — chip timing planner)
+# -----------------------------
+CHIP_PLAN_CACHE_TTL_S = 900.0   # /chips/plan result cache; a build costs minutes of CPU
+CHIP_PLAN_PHASE_SPLIT_GW = 19   # last GW of the first-half chip set
+CHIP_PLAN_SEASON_END_GW = 38
+CHIP_PLAN_HORIZON_GWS = 8       # model zone: full EV math over this many GWs
+CHIP_PLAN_MIN_EV = {            # below this, "hold" beats playing the chip
+    # Live spot-check (2026-09-02, entry 107342, GW3-10, no DGWs announced):
+    # captain xPts clustered 9.9-13.5 and bench xPts clustered 5.2-6.4 every
+    # single week with no DGW in sight — the old 3.0/5.0 floors cleared on
+    # nearly every candidate GW, which isn't "hold absent a DGW." Raised both
+    # well above the observed no-DGW ceiling so a flat threshold does the
+    # DGW-detection job the scoring functions don't do themselves.
+    "triple_captain": 15.0,
+    "bench_boost": 10.0,
+    # free_hit: unchanged. The real fix for FH firing on every ordinary week
+    # was CHIP_PLAN_FH_MIN_BLANKING (structural — suppresses non-blank GWs
+    # before this floor is even checked), not this number. No live blank-GW
+    # data was available this session to re-validate 8.0 specifically; it's a
+    # reasonable secondary floor for a genuine blank week and is flagged for
+    # a follow-up backtest rather than guessed at here.
+    "free_hit": 8.0,
+    # wildcard: re-tuned after making score_wildcard budget-aware (was
+    # comparing against an unbudgeted top-15, no team cap — live spot-check
+    # showed a squad-value-blind "optimal" of +281.7 xPts/5GW that included
+    # e.g. 4 Hull players). The budget-constrained rebuild against the same
+    # entry roughly halved that to +109.56 xPts/5GW — real progress, but the
+    # corrected number is still visibly contaminated by a residual
+    # projections-engine outlier: CHIP_PLAN_XPTS_CLAMP (9.0/GW) caps the
+    # worst offenders, but several genuinely strong players are *also*
+    # clamped to that same ceiling, so a clearly-wrong cheap cluster (3 Hull
+    # City defenders, all pinned at the clamp) reads as equally valuable as
+    # Haaland/Saka and gets picked on price alone. That's a data-quality bug
+    # (tracked separately, needs an upstream projections fix), not a real
+    # 31%-of-squad edge. Raised well above the observed (still-noisy) ceiling
+    # so WC reads "hold" rather than nudging "play now" off a contaminated
+    # GW3 number, while staying reachable for a genuinely severe gap once
+    # the projections bug is fixed and/or a real one shows up later.
+    "wildcard": 120.0,
+}
+CHIP_PLAN_EXPIRY_RAMP_GWS = 5   # threshold decays linearly to 0 over the last N GWs
+CHIP_PLAN_NUDGE_MIN_EV = 4.0    # floor for the next-GW nudge surface
+CHIP_PLAN_FH_MIN_BLANKING = 3   # FH model-zone rec suppressed below this many squad blanks
+CHIP_PLAN_XPTS_CLAMP = 9.0      # stopgap clip on WC/FH dream-squad market xPts (outlier projections bug)
+# Position-aware dream-squad clamp. The flat CHIP_PLAN_XPTS_CLAMP treated a
+# promoted-team DEF outlier pinned at 9.0 as equal to a genuinely elite FWD
+# also pinned at 9.0, so WC drafts picked the junk on price. Legit single-GW
+# ceilings differ sharply by position; flat clamp remains the fallback when a
+# market has no `pos` column.
+CHIP_PLAN_XPTS_CLAMP_BY_POS = {"GKP": 7.0, "DEF": 8.0, "MID": 12.0, "FWD": 13.0}
+CHIP_PLAN_BLANK_TEAM_THRESHOLD = 14  # structural zone: <= this many teams playing = blank-heavy GW
+BREAK_GAP_DAYS = 10.0           # deadline-to-deadline gap marking a post-international-break GW
+CHIP_PLAN_BREAK_CONFIDENCE_MULT = 0.85  # confidence haircut on recs targeting a post-break GW
+CHIP_PLAN_FH_MIN_TOUGH = 6      # squad players on tough fixtures that open the FH gate
+CHIP_PLAN_FH_TOUGH_DIFFICULTY = 4.0  # ticker difficulty counting as "tough"
+# Difficulty→multiplier for the TC haul-prob lambda (mirrors the projection
+# engine's FDR multipliers; keyed on round(difficulty)).
+CHIP_PLAN_TC_DIFF_MULT = {1: 1.25, 2: 1.12, 3: 1.0, 4: 0.88, 5: 0.75}
+
+# European midweek congestion (src/european.py). The FPL API knows nothing
+# about the Champions League / Europa / Conference calendar, so the team list
+# and matchday dates are user-maintained in data/models/european_calendar.json
+# (same pattern as knowledge_discount.json). A team is "in a European week"
+# for a GW when one of its competition's matchdays falls inside the GW's
+# window (deadline -> next deadline) or in the EURO_WINDOW_BEFORE_DAYS before
+# the deadline (the midweek leading into the GW: fatigue + late rotation).
+CHIP_PLAN_EURO_WINDOW_BEFORE_DAYS = 5
+CHIP_PLAN_EURO_XPTS_MULT = 0.95          # rotation/fatigue haircut on every player of a team in a European week (1.0 = off); applied to BOTH the squad and the market side of a chip comparison
+CHIP_PLAN_EURO_CONFIDENCE_MULT = 0.90    # confidence haircut when the TC captain / >=EURO_BB_MIN_BENCH BB bench players are in European weeks
+CHIP_PLAN_EURO_BB_MIN_BENCH = 2          # bench players in European weeks before BB confidence is cut
+CHIP_PLAN_CUP_CLASH_BLANK_PROB = 0.70    # structural zone: likelihood an FA Cup clash weekend becomes a blank GW before FPL announces it
+
+# Per-GW points distributions for chip EV (src/chip_distribution.py). The EV
+# stays the mean; these describe its shape (P(return), P(haul), P(blank),
+# P(chip beats its bar)). Discrete events come from the same convolution the
+# player cards use (points_distribution.player_points_pmf); the goal/assist/CS
+# lambdas are scaled so the pmf mean matches the engine's blended xPts minus
+# the continuous share (bonus, saves, goals-conceded) that the pmf excludes.
+CHIP_PLAN_DIST_CONTINUOUS_SHARE = {"GKP": 0.25, "DEF": 0.12, "MID": 0.10, "FWD": 0.10}
+CHIP_PLAN_DIST_RETURN_AT = 6             # "return" = at least this many points in the GW
+CHIP_PLAN_DIST_HAUL_AT = 10              # "haul" = at least this many points
+CHIP_PLAN_DIST_BLANK_AT = 2              # "blank" = at most this many points
+CHIP_PLAN_DIST_PRIOR_WEIGHT = 2.0        # pseudo-GWs of MINUTES_START_PRIOR mixed into a player's start rate
+CHIP_PLAN_DIST_MINUTES_SHARE = 0.85      # E[minutes]/90 given an appearance, for the per-GW lambda
+CHIP_PLAN_CS_PROB_BY_DIFF = {1: 0.50, 2: 0.42, 3: 0.33, 4: 0.25, 5: 0.18}  # per-fixture clean-sheet prob by round(difficulty)
+
+# Fixture swing detection (src/fixture_difficulty.py -> compute_fixture_swings)
+SWING_WINDOW_GWS = 3            # fixture-swing comparison window (before vs after)
+SWING_MIN_DELTA = 0.8           # min avg-difficulty delta to call a swing
+
+# -----------------------------
 # Chip strategy tuning
 # -----------------------------
 CHIP_WILDCARD_DEFAULT_HORIZON_GWS = 5
+# Own GK/DEF facing own attackers in the same GW cancel each other out (a
+# hedge — same mean, lower ceiling). Chip drafts dock a candidate's score by
+# this much per directly-opposed own XI player, mirroring the transfer
+# planner's TRANSFER_H2H_CONFLICT_PENALTY. Soft: a clearly better pick still
+# survives, and surviving pairs are reported as `h2h_conflicts`.
+CHIP_H2H_CONFLICT_PENALTY = 0.75
+# Chip-draft availability: injured/suspended/unavailable never enter the
+# market (XI or bench); bench fodder additionally prefers players with at
+# least this many season minutes — cheap is fine, ghosts are not. Soft
+# preference, not a hard filter: a thin market still builds.
+CHIP_MARKET_EXCLUDE_STATUS = ("i", "s", "u")
+CHIP_BENCH_MIN_MINUTES = 90.0
+# Bench diversity: prefer a distinct-team bench body over a duplicate when one
+# exists at (cheapest + this margin). 0.0 = only free swaps, never pay extra.
+CHIP_BENCH_DIVERSITY_MAX_EXTRA_M = 0.0
+# Soft attacker-stack limit: from this many same-team attackers already in the
+# XI, the next one is docked the penalty — stacking survives only when the
+# stacked player is clearly better than the spread alternative.
+CHIP_ATTACKER_STACK_SOFT_LIMIT = 2
+CHIP_ATTACKER_STACK_PENALTY = 0.6
+# Differential draft mode: dock a candidate's score by weight × ownership so
+# near-equal low-owned players displace the template. 0.35 → a 50%-owned
+# player loses ~17.5% of its score; mini-league differentiation, off by default.
+CHIP_DIFF_OWNERSHIP_WEIGHT = 0.35
+# Stack odds annotation (src/stack_odds.py): joint return/blank odds for
+# same-team attacker stacks in a draft XI. Slots ≈ scorer + assister per goal.
+CHIP_STACK_ODDS_MIN = 2
+CHIP_STACK_SLOTS_PER_GOAL = 2.0
 CHIP_MAX_PER_TEAM = 3
 CHIP_SQUAD_SHAPE = {
     "GKP": 2,
@@ -263,6 +449,11 @@ OUTPUT_ASSIST_POINTS = 3.0
 OUTPUT_CS_POINTS = {"GKP": 4, "DEF": 4, "MID": 1, "FWD": 0}
 OUTPUT_GOALS_CONCEDED_PENALTY_PER_2 = {"GKP": -1.0, "DEF": -1.0, "MID": 0.0, "FWD": 0.0}
 OUTPUT_SAVES_PER_XGA = 2.0           # rough expected saves per unit opponent xG (GKP)
+# Keeper-specific shot-stopping volume. The flat OUTPUT_SAVES_PER_XGA gives every
+# keeper the same save rate; this scales it by the keeper's own saves_per_90
+# relative to the league median, shrunk toward 1.0 by minutes played.
+OUTPUT_APPLY_KEEPER_SAVE_RATE = True
+OUTPUT_SAVE_RATIO_CLAMP = (0.6, 1.6)  # a keeper cannot be 3x the league at stopping shots
 OUTPUT_SAVE_POINTS_PER_SAVE = 1.0 / 3.0
 OUTPUT_BONUS_PER_XGI = 0.9           # rough bonus points per expected goal involvement
 # Defensive bonus: BPS from clean sheets, clearances, blocks, recoveries earns
@@ -280,6 +471,15 @@ OUTPUT_MAX_ASSISTS_PER_GAME = 2.0
 # The feature is a shrunk, time-decayed per-player rate of clearing the
 # threshold in 60+ minute games — backtest showed that rate is highly stable
 # (H1-vs-H2 rank corr 0.88) and predicts next-game clearance better than form.
+# Set-piece duty uplift. The xG model reads only per-90 history, which cannot
+# know that a player has just been handed penalties. Applied to the position
+# PRIOR and tapered away as a player's own minutes sample grows, since their own
+# expected_goals already contains the penalties they have taken.
+OUTPUT_APPLY_SETPIECE = True          # off restores exact pre-set-piece behaviour
+OUTPUT_SETPIECE_PEN_XG90 = 0.11       # league-average penalty xG per 90 for a first-choice taker
+OUTPUT_SETPIECE_FK_XG90 = 0.03        # direct free-kick xG per 90 for the designated taker
+OUTPUT_SETPIECE_CORNER_XA90 = 0.05    # xA per 90 uplift for the primary corner taker
+
 OUTPUT_APPLY_DC = True                # off restores exact pre-DC output_model behaviour
 OUTPUT_DC_POINTS = 2.0                # points banked for clearing the threshold
 OUTPUT_DC_HALFLIFE_DAYS = 75.0        # decay half-life on the clearance-rate samples
@@ -290,10 +490,56 @@ OUTPUT_DC_BASE_RATE = {"GKP": 0.0, "DEF": 0.12, "MID": 0.06, "FWD": 0.0}  # shri
 # --- blend of the xG model into the baseline projection ---
 # Set from the Task 8 sweep (docs/superpowers/plans/2026-08-25-transfer-planner-v2.md
 # ## Results): scripts.backtest_blend_sweep over 2025-26 GW6-29 (24 GWs), DC=True,
+# Which fixture-difficulty source drives the BASELINE leg's multiplier (and
+# the published diff_avg_gw{n} the captain ceiling term reads):
+#   "fpl"        — FPL's official FDR (legacy; opinion-based, lags form)
+#   "xg_ratings" — our xG attack/defence ratings via attack_difficulty(),
+#                  continuous 1-5 (smooth multiplier, no integer rounding),
+#                  knowledge_discount applied — one difficulty truth with the
+#                  ticker/chips/stack-odds side.
+# A/B (scripts/backtest_difficulty_ab.py, 2025-26 GW6-38, blend 0.5):
+# MAE 1.902 vs 1.903 — statistical tie; captain hit 0.121→0.152, regret
+# 10.97→10.88 (both within noise). Flipped on no-regression + unification:
+# one difficulty truth across engine, ticker, chips, stack odds AND the
+# (Dn) badges; knowledge_discount nudges now move everything consistently.
+PROJ_DIFFICULTY_SOURCE = "xg_ratings"
+
+# GK fixture-sensitivity damp: fraction of the combined context multiplier's
+# deviation from 1.0 that applies to GOALKEEPERS. 1.0 = legacy (full stack on
+# the whole GK baseline — overstates fixture elasticity: saves + appearance
+# points barely move with the opponent, only the CS share does). Tune only
+# via scripts/backtest_gk_damp.py. 2026-09-12 sweep (GW6-38): GK MAE flat at
+# every damp (±0.001) — the backtest is INSENSITIVE here (1-GW MAE can't see
+# horizon-spread inflation; blend dilutes the leg). 0.5 shipped on scoring-
+# rule arithmetic, not a backtest win: CS is ~40-50% of GK expected points,
+# appearance+saves are fixture-flat — full elasticity overstated GK transfer
+# gains ~2x (live case: a GK swap topped the plan at +11.6/5GW).
+PROJ_GK_FIXTURE_DAMP = 0.5
+
+# -----------------------------
+# Bookmaker odds (src/odds_client.py / odds_model.py)
+# -----------------------------
+# The market prices team news and rotation our decayed xG can't see. Implied
+# per-team expected goals (de-vigged 1X2 + totals → Poisson inversion +
+# supremacy split) blend into the stack-odds lambda at this weight when odds
+# are available for the fixture; 0 disables. Key: ODDS_API_KEY env var
+# (free tier ~500 credits/month — cache + archive protect the quota).
+ODDS_LAMBDA_BLEND_WEIGHT = 0.7
+# Market difficulty into the projections' FIRST horizon GW (and the chip
+# planner's current-GW difficulty map). Odds only cover the next fixture,
+# so later GWs stay pure xG ratings. 0 disables.
+ODDS_DIFFICULTY_BLEND_WEIGHT = 0.5
+ODDS_CACHE_TTL_S = 21600.0   # 6h — aligned with the data-refresh cadence
+ODDS_TEAM_ALIASES = {}       # extra {fpl_name: odds_api_name} fixes if naming drifts
+
 # weight 0.5 beat weight 0.0 on every metric (MAE -0.202/-9.47%, captain hit +0.042,
 # top10 +0.029, regret -0.334), with MAE improving monotonically across the whole
-# grid and no regression at any weight. 0.5 is the top of the script's default grid,
-# not a confirmed interior optimum -- see the Task 8 caveats in the plan doc.
+# grid and no regression at any weight.
+# 2026-09-10 extended sweep (0.5..1.0, GW6-38) resolved the old "top of grid,
+# not a confirmed interior optimum" caveat: the bowl bottoms at 0.5-0.6
+# (MAE 1.902/1.897 — noise-level apart), degrades from 0.8, and 1.0 drops
+# captain hit back to baseline. 0.5 is confirmed at-optimum; do not raise
+# past 0.6 without new evidence.
 PROJ_MODEL_BLEND_WEIGHT = 0.5
 
 # --- minutes/rotation-risk multiplier (surgical, applied in projections.py) ---

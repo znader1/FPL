@@ -1,0 +1,332 @@
+import pandas as pd
+import pytest
+from fastapi.testclient import TestClient
+
+from api import chips as _chips_module
+
+
+@pytest.fixture(autouse=True)
+def _clear_plan_cache():
+    _chips_module._plan_cache.clear()
+    yield
+    _chips_module._plan_cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _clear_bootstrap_cache():
+    """api.main.get_bootstrap_cached holds a process-wide TTL cache (keyed
+    on wall-clock time, not per-test). A real or fake fetch in one test can
+    otherwise leak into a later test's assertions — reset before/after every
+    test in this module so each test's own bootstrap stub is what actually
+    gets returned."""
+    import api.main as _main_module
+    _main_module._bootstrap_cache["data"] = None
+    _main_module._bootstrap_cache["ts"] = 0.0
+    yield
+    _main_module._bootstrap_cache["data"] = None
+    _main_module._bootstrap_cache["ts"] = 0.0
+
+
+def _network_disabled_bootstrap():
+    """Stub for fpl_client.get_bootstrap in tests that don't exercise the
+    strategy signals. Raising — rather than faking a full bootstrap/ticker —
+    proves the signal block's fail-soft try/except isolates a broken
+    bootstrap fetch without ever reaching the live FPL API, and makes
+    build_fixture_difficulty_payload (which runs after it in the try block)
+    unreachable."""
+    raise RuntimeError("network disabled in tests")
+
+
+def _fake_context(entry_id, current_gw, horizon=5):
+    rows, pid = [], 1
+    for pos, n in (("GKP", 2), ("DEF", 5), ("MID", 5), ("FWD", 3)):
+        for _ in range(n):
+            rows.append((pid, f"p{pid}", pos, f"T{pid % 5}", 5.0, 3.0, 1))
+            pid += 1
+    market = pd.DataFrame(rows, columns=[
+        "player_id", "name", "pos", "team", "price_m", "xpts", "fixture_count"])
+    squad = market[["player_id", "name", "pos", "team", "price_m"]]
+    gw_projections = {g: market for g in range(current_gw, current_gw + horizon)}
+    proj = pd.DataFrame({
+        "id": market["player_id"], "web_name": market["name"], "pos": market["pos"],
+        "team_short": market["team"], "price_m": market["price_m"],
+        **{f"xpts_gw{g}": market["xpts"] for g in range(current_gw, current_gw + horizon)},
+    })
+    return {
+        "squad": squad, "market": market, "starting_xi": market.head(11),
+        "gw_projections": gw_projections, "bank_m": 1.5, "free_transfers": 2,
+        "captain_id": 1, "proj": proj,
+        "fixtures": pd.DataFrame(columns=["event", "team_h", "team_a"]),
+        "teams_short_map": {},
+    }
+
+
+def test_chips_plan_is_cached_within_ttl(monkeypatch):
+    from api.main import app
+    from api import chips as chips_module
+    from src.auth import require_user
+
+    calls = []
+
+    def _counting_context(entry_id, current_gw, horizon=5):
+        calls.append(entry_id)
+        return _fake_context(entry_id, current_gw, horizon)
+
+    monkeypatch.setattr(chips_module, "_build_context_for_entry", _counting_context)
+    monkeypatch.setattr(chips_module, "_get_entry_chips", lambda entry_id: [])
+    monkeypatch.setattr(chips_module, "_resolve_current_gw", lambda: 5)
+    monkeypatch.setattr(chips_module.fpl_client, "get_bootstrap", _network_disabled_bootstrap)
+    app.dependency_overrides[require_user] = lambda: {"sub": "test-user"}
+    client = TestClient(app)
+    r1 = client.get("/chips/plan?entry_id=321")
+    r2 = client.get("/chips/plan?entry_id=321")
+    assert r1.status_code == r2.status_code == 200
+    assert r1.json() == r2.json()
+    assert len(calls) == 1, "second request within the TTL must not rebuild"
+    app.dependency_overrides = {}
+
+
+def test_chips_plan_route(monkeypatch):
+    from api.main import app
+    from api import chips as chips_module
+
+    monkeypatch.setattr(chips_module, "_build_context_for_entry", _fake_context)
+    monkeypatch.setattr(chips_module, "_get_entry_chips", lambda entry_id: [])
+    monkeypatch.setattr(chips_module, "_resolve_current_gw", lambda: 5)
+    monkeypatch.setattr(chips_module.fpl_client, "get_bootstrap", _network_disabled_bootstrap)
+    app.dependency_overrides = {}
+    # require_user is applied at include_router time; override it
+    from src.auth import require_user
+    app.dependency_overrides[require_user] = lambda: {"sub": "test-user"}
+
+    client = TestClient(app)
+    r = client.get("/chips/plan?entry_id=123")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["entry_id"] == 123
+    assert body["current_gw"] == 5
+    assert {c["name"] for c in body["chips_remaining"]} == {
+        "wildcard", "free_hit", "bench_boost", "triple_captain"}
+    assert isinstance(body["recommendations"], list)
+    app.dependency_overrides = {}
+
+
+def _fake_context_with_boosted_captain(entry_id, current_gw, horizon=5):
+    """Same fake market as `_fake_context`, but with one FWD (player_id=13,
+    team T3) boosted far above the flat 3.0 xpts baseline. That makes them
+    the deterministic model-chosen captain (ties on cap-weighted score would
+    otherwise be broken arbitrarily) with a TC uplift that clears
+    CHIP_PLAN_MIN_EV["triple_captain"] (15.0) — needed to actually exercise
+    the xGI/difficulty wiring under test, not just its absence.
+    """
+    ctx = _fake_context(entry_id, current_gw, horizon)
+    ctx["market"].loc[ctx["market"]["player_id"] == 13, "xpts"] = 20.0
+    return ctx
+
+
+def test_plan_response_carries_new_optional_keys(monkeypatch):
+    """/chips/plan wires breaks/team_difficulty_by_gw/swings/xgi_per90 into
+    build_chip_plan. Beyond the brief's shape-only asserts, this pins down
+    that the wiring actually reaches the engine: with a captain who has xGI
+    data and a GW hit by an international break, the TC recommendation must
+    carry haul_prob and the nudge must flag wait_for_team_news."""
+    from api.main import app
+    from api import chips as chips_module
+    import api.main as main_module
+    from src.auth import require_user
+
+    current_gw = 5
+
+    def _fake_bootstrap():
+        # 7-day deadline cadence, except a 14-day gap landing on current_gw
+        # (>BREAK_GAP_DAYS=10) — marks GW5 as a post-international-break GW.
+        base = pd.Timestamp("2026-08-01T18:00:00Z")
+        events = []
+        for eid in range(1, 8):
+            gap = 14 if eid == current_gw else 7
+            if eid > 1:
+                base = base + pd.Timedelta(days=gap)
+            events.append({"id": eid, "deadline_time": base.isoformat()})
+        teams = [{"id": 3, "name": "T3"}]
+        elements = [{"id": pid, "expected_goals_per_90": 0.0, "expected_assists_per_90": 0.0}
+                    for pid in range(1, 16)]
+        for e in elements:
+            if e["id"] == 13:
+                e["expected_goals_per_90"] = 0.6
+                e["expected_assists_per_90"] = 0.3
+        return {"events": events, "teams": teams, "elements": elements}
+
+    def _fake_ticker(gw_start=None, horizon_gws=6):
+        gws = list(range(gw_start, gw_start + horizon_gws))
+        cells = {gw: {"difficulty": 4.0 if gw < gw_start + 3 else 1.0} for gw in gws}
+        return {
+            "gw_start": gw_start, "horizon_gws": horizon_gws, "gws": gws,
+            "teams": [{"team_id": 3, "team_short": "T3", "gws": cells}],
+        }
+
+    monkeypatch.setattr(chips_module, "_build_context_for_entry", _fake_context_with_boosted_captain)
+    monkeypatch.setattr(chips_module, "_get_entry_chips", lambda entry_id: [])
+    monkeypatch.setattr(chips_module, "_resolve_current_gw", lambda: current_gw)
+    monkeypatch.setattr(chips_module.fpl_client, "get_bootstrap", _fake_bootstrap)
+    monkeypatch.setattr(main_module, "build_fixture_difficulty_payload", _fake_ticker)
+
+    app.dependency_overrides = {}
+    app.dependency_overrides[require_user] = lambda: {"sub": "test-user"}
+    client = TestClient(app)
+    resp = client.get("/chips/plan", params={"entry_id": 1})
+    assert resp.status_code == 200
+    body = resp.json()
+
+    nudge = body.get("nudge")
+    if nudge is not None:
+        assert isinstance(nudge.get("wait_for_team_news"), bool)
+    for rec in body["recommendations"]:
+        if "haul_prob" in rec:
+            assert 0.0 <= rec["haul_prob"] <= 1.0
+
+    # The wiring must actually reach the engine, not merely leave the new
+    # keys as an inert no-op: the boosted captain (xGI-equipped, on a
+    # break-hit GW) should produce a TC rec with a haul_prob, and the nudge
+    # (fires for a current-GW rec >= CHIP_PLAN_NUDGE_MIN_EV) should flag
+    # wait_for_team_news given the break at GW5.
+    tc_recs = [r for r in body["recommendations"] if r.get("chip") == "triple_captain"]
+    assert tc_recs, "expected a triple_captain recommendation to clear the EV floor"
+    assert tc_recs[0].get("haul_prob") is not None, (
+        "xgi_per90 wiring did not reach score_triple_captain")
+    assert nudge is not None and nudge.get("chip") == "triple_captain"
+    assert nudge["wait_for_team_news"] is True, (
+        "breaks wiring did not reach build_chip_plan's nudge")
+    app.dependency_overrides = {}
+
+
+def test_signal_failure_resets_all_signals(monkeypatch):
+    """A failure part-way through signal building (here: the ticker call,
+    which runs AFTER breaks/xGI are assigned) must reset all four signals to
+    None — the engine gets the no-signals path, never a populated/missing
+    mix. Same break+xGI fixtures as the success test above, so the only
+    difference is the ticker raising: if any signal leaked through, the TC
+    rec would carry haul_prob and the nudge would flag wait_for_team_news."""
+    from api.main import app
+    from api import chips as chips_module
+    import api.main as main_module
+    from src.auth import require_user
+
+    current_gw = 5
+
+    def _fake_bootstrap():
+        base = pd.Timestamp("2026-08-01T18:00:00Z")
+        events = []
+        for eid in range(1, 8):
+            gap = 14 if eid == current_gw else 7
+            if eid > 1:
+                base = base + pd.Timedelta(days=gap)
+            events.append({"id": eid, "deadline_time": base.isoformat()})
+        teams = [{"id": 3, "name": "T3"}]
+        elements = [{"id": pid, "expected_goals_per_90": 0.6, "expected_assists_per_90": 0.3}
+                    for pid in range(1, 16)]
+        return {"events": events, "teams": teams, "elements": elements}
+
+    def _raising_ticker(gw_start=None, horizon_gws=6):
+        raise RuntimeError("ticker unavailable")
+
+    monkeypatch.setattr(chips_module, "_build_context_for_entry", _fake_context_with_boosted_captain)
+    monkeypatch.setattr(chips_module, "_get_entry_chips", lambda entry_id: [])
+    monkeypatch.setattr(chips_module, "_resolve_current_gw", lambda: current_gw)
+    monkeypatch.setattr(chips_module.fpl_client, "get_bootstrap", _fake_bootstrap)
+    monkeypatch.setattr(main_module, "build_fixture_difficulty_payload", _raising_ticker)
+
+    app.dependency_overrides = {}
+    app.dependency_overrides[require_user] = lambda: {"sub": "test-user"}
+    client = TestClient(app)
+    resp = client.get("/chips/plan", params={"entry_id": 1})
+    assert resp.status_code == 200, "signal failure must never fail the plan"
+    body = resp.json()
+
+    # breaks were assigned before the ticker raised — the reset must wipe them
+    nudge = body.get("nudge")
+    assert nudge is not None and nudge.get("chip") == "triple_captain"
+    assert nudge["wait_for_team_news"] is False, (
+        "breaks leaked through a partial signal failure")
+    # xgi_per90 was assigned before the ticker raised — reset must wipe it too
+    tc_recs = [r for r in body["recommendations"] if r.get("chip") == "triple_captain"]
+    assert tc_recs and "haul_prob" not in tc_recs[0], (
+        "xgi_per90 leaked through a partial signal failure")
+    app.dependency_overrides = {}
+
+
+def test_plan_response_carries_calendar_distribution_and_european_signal(monkeypatch, tmp_path):
+    """The 2026-09-17 signals reach the engine through build_chip_signals:
+    a calendar file naming the boosted captain's team as a UCL side (with a
+    matchday 3 days before GW5's deadline) must produce a TC rec whose risks
+    name the Champions League, a per-GW distribution (priors come from the
+    bootstrap elements) and calendar rows flagging the European week."""
+    import json
+    from api.main import app
+    from api import chips as chips_module
+    import api.main as main_module
+    from src.auth import require_user
+
+    current_gw = 5
+    base = pd.Timestamp("2026-09-12T10:00:00Z")
+
+    def _fake_bootstrap():
+        events = [{"id": eid, "deadline_time": (base + pd.Timedelta(days=7 * (eid - 1))).isoformat(),
+                   "finished": eid < current_gw}
+                  for eid in range(1, 13)]
+        teams = [{"id": 3, "name": "T3", "short_name": "TTT"}]
+        elements = [{"id": pid, "element_type": 4 if pid == 13 else 3,
+                     "expected_goals_per_90": 0.6, "expected_assists_per_90": 0.3,
+                     "starts": 4, "chance_of_playing_next_round": None, "status": "a"}
+                    for pid in range(1, 16)]
+        return {"events": events, "teams": teams, "elements": elements}
+
+    def _fake_ticker(gw_start=None, horizon_gws=6):
+        gws = list(range(gw_start, gw_start + horizon_gws))
+        return {"gw_start": gw_start, "horizon_gws": horizon_gws, "gws": gws,
+                "teams": [{"team_id": 3, "team_short": "TTT",
+                           "gws": {gw: {"difficulty": 2.0} for gw in gws}}]}
+
+    # GW5 deadline = 12 Sep + 28d = 10 Oct; a UCL tie every Wednesday from
+    # 7 Oct sandwiches every horizon GW (a tie 3 days before its deadline AND
+    # one after its round), so every model-zone GW is a European week for T3.
+    # A single flagged GW would simply push the rec to an unflagged one — the
+    # discount doing its job — which is why the whole horizon is flagged here.
+    cal = tmp_path / "euro.json"
+    cal.write_text(json.dumps({
+        "teams": {"TTT": "ucl"},
+        "matchdays": [{"competition": "ucl", "label": f"MD{i}",
+                       "dates": [(pd.Timestamp("2026-10-07") + pd.Timedelta(days=7 * i)).strftime("%Y-%m-%d")]}
+                      for i in range(8)],
+        "cup_rounds": [],
+    }), encoding="utf-8")
+    real_build = chips_module.build_chip_signals
+    monkeypatch.setattr(chips_module, "build_chip_signals",
+                        lambda b, g, h: real_build(b, g, h, calendar_path=str(cal)))
+    monkeypatch.setattr(chips_module, "_build_context_for_entry", _fake_context_with_boosted_captain)
+    monkeypatch.setattr(chips_module, "_get_entry_chips", lambda entry_id: [])
+    monkeypatch.setattr(chips_module, "_resolve_current_gw", lambda: current_gw)
+    monkeypatch.setattr(chips_module.fpl_client, "get_bootstrap", _fake_bootstrap)
+    monkeypatch.setattr(main_module, "build_fixture_difficulty_payload", _fake_ticker)
+
+    app.dependency_overrides = {}
+    app.dependency_overrides[require_user] = lambda: {"sub": "test-user"}
+    client = TestClient(app)
+    resp = client.get("/chips/plan", params={"entry_id": 1})
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["signals"] == {
+        "breaks": False, "european_calendar": True, "cup_calendar": False,
+        "distributions": True, "european_xpts_mult": chips_module.config.CHIP_PLAN_EURO_XPTS_MULT}
+    cal_rows = {r["gw"]: r for r in body["calendar"]}
+    assert cal_rows[5]["european"] == {"ucl": ["T3"]}
+    assert cal_rows[5]["squad_european"] and cal_rows[5]["squad_european"][0]["team"] == "T3"
+    assert cal_rows[5]["deadline_utc"] is not None
+
+    tc = next(r for r in body["recommendations"] if r["chip"] == "triple_captain")
+    assert any("sandwiched between Champions League ties" in r for r in tc["reasons"])
+    # the boosted captain's 20.0 xPts carries the European haircut on the EV
+    assert abs(tc["ev_gain"] - 20.0 * chips_module.config.CHIP_PLAN_EURO_XPTS_MULT) < 1e-6
+    assert 0.0 <= tc["distribution"]["p_beats_bar"] <= 1.0
+    assert all("p_beats_bar" in p and p.get("european") for p in tc["ev_curve"])
+    app.dependency_overrides = {}
