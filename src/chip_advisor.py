@@ -90,6 +90,11 @@ class ChipRecommendation:
     haul_prob: float | None = None   # TC only: P(captain gets 2+ goal involvements)
     captain_team: str | None = None  # TC only: captain's team — internal, not emitted by to_dict()
     pmf: np.ndarray | None = None    # TC/BB: distribution of the chip's extra points — internal
+    # Share of full xPts `pmf` leaves out (bonus/saves/conceded). A bar quoted
+    # in full xPts has to be scaled by (1 - this) to land on the pmf's axis.
+    pmf_share: float = 0.0
+    # False for a bench-4 sum: RETURN_AT/HAUL_AT/BLANK_AT are per-player.
+    pmf_thresholds: bool = True
 
     def to_dict(self) -> dict:
         out = {
@@ -268,6 +273,7 @@ def score_triple_captain(
             risks.append(_euro_line(captain_row["name"], captain_row.get("team"), euro, gw))
 
         pmf = None
+        pmf_share = 0.0
         if player_priors:
             dmap = (team_difficulty_by_gw or {}).get(gw) or {}
             pmf = chip_distribution.player_gw_pmf(
@@ -277,6 +283,8 @@ def score_triple_captain(
                 difficulty=dmap.get(captain_row.get("team")),
             )
             if pmf is not None:
+                pmf_share = chip_distribution.continuous_share(
+                    [(captain_row["pos"], best_cap_xpts)])
                 d = chip_distribution.summarize(pmf)
                 reasoning.append(
                     f"{d['p_return']:.0%} chance the captain returns (6+), "
@@ -292,6 +300,7 @@ def score_triple_captain(
             haul_prob=haul_prob,
             captain_team=captain_row.get("team"),
             pmf=pmf,
+            pmf_share=pmf_share,
         ))
     return recs
 
@@ -369,6 +378,7 @@ def score_bench_boost(
             reasoning.append(f"{n_squad_euro}/15 squad players in European weeks around GW{gw}")
 
         pmf = None
+        pmf_share = 0.0
         if player_priors:
             dmap = (team_difficulty_by_gw or {}).get(gw) or {}
             parts = [
@@ -382,9 +392,12 @@ def score_bench_boost(
             ]
             if parts and all(p is not None for p in parts):
                 pmf = chip_distribution.convolve(parts)
-                d = chip_distribution.summarize(pmf)
+                pmf_share = chip_distribution.continuous_share(
+                    [(r["pos"], float(r["xpts"])) for _, r in bench.iterrows()])
+                d = chip_distribution.summarize(pmf, player_thresholds=False)
+                band = f"{d['p80_low']}–{d['p80_high']}{'+' if d.get('p80_open') else ''}"
                 reasoning.append(
-                    f"Bench most likely {d['modal']} pts (80% band {d['p80_low']}–{d['p80_high']})")
+                    f"Bench most likely {d['modal']} pts (80% band {band})")
 
         recs.append(ChipRecommendation(
             chip="bench_boost",
@@ -394,6 +407,8 @@ def score_bench_boost(
             reasoning=reasoning,
             risks=risks,
             pmf=pmf,
+            pmf_share=pmf_share,
+            pmf_thresholds=False,   # the bench-4 sum is not one player
         ))
     return recs
 
@@ -823,16 +838,20 @@ def build_chip_plan(
             point = {"gw": r.gw, "ev": round(float(r.expected_value), 2)}
             if r.pmf is not None:
                 d = chip_distribution.summarize(
-                    r.pmf, bar=effective_min_ev(chip, r.gw, expires_gw))
+                    r.pmf, bar=effective_min_ev(chip, r.gw, expires_gw),
+                    continuous_share=r.pmf_share, player_thresholds=r.pmf_thresholds)
                 point["p_beats_bar"] = d["p_beats_bar"]
-                point["p_return"] = d["p_return"]
+                if "p_return" in d:
+                    point["p_return"] = d["p_return"]
             if euro_by_gw and r.gw in euro_by_gw:
                 point["european"] = int(squad["team"].isin(list(euro_by_gw[r.gw])).sum())
             if breaks and r.gw in breaks:
                 point["post_break"] = True
             curve.append(point)
         bar = effective_min_ev(chip, best.gw, expires_gw)
-        distribution = chip_distribution.summarize(best.pmf, bar=bar) if best.pmf is not None else None
+        distribution = chip_distribution.summarize(
+            best.pmf, bar=bar, continuous_share=best.pmf_share,
+            player_thresholds=best.pmf_thresholds) if best.pmf is not None else None
         outlook_row = {
             "chip": chip,
             "event_id": int(best.gw),

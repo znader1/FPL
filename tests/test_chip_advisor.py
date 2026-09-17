@@ -752,6 +752,55 @@ def test_build_chip_plan_distribution_and_curve_probabilities():
     assert plan["signals"]["distributions"] is True
 
 
+def test_tc_p_beats_bar_is_measured_on_the_pmf_axis():
+    """F2: the pmf excludes the continuous share, so the bar must be scaled too."""
+    import numpy as np
+    from src import chip_distribution
+    gws = [5, 6, 7, 8]
+    projections = _gw_projections_with_dgw(gws, dgw_gw=6)
+    for g in gws:
+        projections[g].loc[projections[g]["player_id"] == 13, "xpts"] = 16.0
+    squad = _squad_15()[["player_id", "name", "pos", "team", "price_m"]]
+    priors = _priors_for(projections[5])
+    plan = build_chip_plan(squad=squad, current_gw=5, gw_projections=projections,
+                           chips_played=[], horizon_gws=4, player_priors=priors)
+    tc = next(r for r in plan["recommendations"] if r["chip"] == "triple_captain")
+    rec = next(r for r in score_triple_captain(squad, projections, [tc["event_id"]],
+                                               player_priors=priors))
+    bar = tc["distribution"]["bar"]
+    assert bar > 0
+    share = chip_distribution.continuous_share([("FWD", 16.0)])
+    assert share > 0
+    on_axis = round(float(rec.pmf[int(np.ceil(bar * (1 - share))):].sum()), 3)
+    naive = round(float(rec.pmf[int(np.ceil(bar)):].sum()), 3)
+    assert tc["distribution"]["p_beats_bar"] == on_axis
+    assert on_axis > naive                       # the old number understated the odds
+
+
+def test_bb_payload_drops_per_player_thresholds_while_tc_keeps_them():
+    """F3: 6/10/2 describe one player; on a bench-4 sum they carry no signal."""
+    gws = [5, 6, 7, 8]
+    projections = _gw_projections_with_dgw(gws, dgw_gw=6)
+    for g in gws:
+        projections[g].loc[projections[g]["player_id"] == 13, "xpts"] = 16.0
+    squad = _squad_15()[["player_id", "name", "pos", "team", "price_m"]]
+    plan = build_chip_plan(squad=squad, current_gw=5, gw_projections=projections,
+                           chips_played=[], horizon_gws=4,
+                           player_priors=_priors_for(projections[5]))
+    bb = next(o for o in plan["outlook"] if o["chip"] == "bench_boost")
+    d = bb["distribution"]
+    assert {"mean", "modal", "p80_low", "p80_high", "bar", "p_beats_bar"} <= set(d)
+    assert not ({"p_return", "p_haul", "p_blank"} & set(d))
+    assert d["modal"] < 30                       # F1: not the folded ceiling
+    tc = next(o for o in plan["outlook"] if o["chip"] == "triple_captain")
+    assert {"p_return", "p_haul", "p_blank"} <= set(tc["distribution"])
+    # the BB EV curve carries odds but no per-player return rate
+    bb_rec = next((r for r in plan["recommendations"] if r["chip"] == "bench_boost"), None)
+    if bb_rec is not None:
+        assert all("p_return" not in p for p in bb_rec["ev_curve"])
+        assert any("p_beats_bar" in p for p in bb_rec["ev_curve"])
+
+
 def tc_bar(plan, chip, gw):
     expires = next(c["expires_gw"] for c in plan["chips_remaining"] if c["name"] == chip)
     return round(effective_min_ev(chip, gw, expires), 2)

@@ -53,6 +53,26 @@ def test_european_weeks_flags_after_for_the_gw_before_and_before_for_the_next():
     assert "Aston Villa" not in euro[1]
 
 
+def test_days_before_only_counts_ties_inside_the_window_and_keeps_the_nearest():
+    ev = _events(n=3)   # deadlines Sat 12, 19, 26 Sep
+    # A tie on 1 Sep is 18 days before GW2's deadline — nowhere near "the
+    # midweek leading into GW2". Only the 20 Sep leg flags GW2, as "after",
+    # and an "after" week has no days_before to report.
+    stale = {"teams": {"Arsenal": "ucl"},
+             "matchdays": [{"competition": "ucl", "label": "MD1",
+                            "dates": ["2026-09-01", "2026-09-20"]}]}
+    euro = european.european_weeks_by_gw(ev, stale)
+    assert euro[2]["Arsenal"]["when"] == "after"
+    assert euro[2]["Arsenal"]["days_before"] is None
+
+    # Two matchdays both lead into GW3 (deadline 26 Sep): 24 Sep is 2 days out,
+    # 23 Sep is 3. Keep the nearer one whatever order the file lists them in.
+    two = {"teams": {"Arsenal": "ucl"},
+           "matchdays": [{"competition": "ucl", "label": "MD2", "dates": ["2026-09-24"]},
+                         {"competition": "ucl", "label": "MD3", "dates": ["2026-09-23"]}]}
+    assert european.european_weeks_by_gw(ev, two)[3]["Arsenal"]["days_before"] == 2
+
+
 def test_european_weeks_empty_without_teams_or_events():
     assert european.european_weeks_by_gw(_events(), {}) == {}
     assert european.european_weeks_by_gw(_events(), {"teams": {}, "matchdays": CAL["matchdays"]}) == {}

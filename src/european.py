@@ -161,8 +161,13 @@ def european_weeks_by_gw(events, calendar: dict, before_days: float | None = Non
             when = _classify(dates, start, end, before_days)
             if when is None:
                 continue
+            # Only a leg inside the "before" window is the midweek leading INTO
+            # this GW — an earlier matchday elsewhere in the season is not, and
+            # an "after" week has no lead-in leg at all.
+            cutoff = start - pd.Timedelta(days=before_days)
             days_before = min(
-                (int((start - d).days) for d in dates if d < start), default=None)
+                (int((start - d).days) for d in dates if cutoff <= d < start),
+                default=None)
             for team in teams_by_comp.get(comp, []):
                 slot = out.setdefault(gw, {})
                 prev = slot.get(team)
@@ -170,12 +175,20 @@ def european_weeks_by_gw(events, calendar: dict, before_days: float | None = Non
                     when_merged = "both"
                 else:
                     when_merged = when
+                # Several matchdays can lead into the same GW; the nearest tie
+                # is the one the risk line should quote.
+                prev_days = (prev or {}).get("days_before")
+                if days_before is None:
+                    merged_days = prev_days
+                elif prev_days is None:
+                    merged_days = days_before
+                else:
+                    merged_days = min(days_before, prev_days)
                 slot[team] = {
                     "competition": comp,
                     "label": label,
                     "when": when_merged,
-                    "days_before": days_before if days_before is not None
-                    else (prev or {}).get("days_before"),
+                    "days_before": merged_days,
                 }
     return out
 

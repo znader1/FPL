@@ -49,9 +49,12 @@ def main():
         print(f"{r['chip']:16s} GW{r['event_id']:<3d} {tag}")
         d = r.get("distribution")
         if d:
-            print(f"{'':16s}       beats bar {d.get('p_beats_bar', 0):.0%} · return {d['p_return']:.0%}"
-                  f" · haul {d['p_haul']:.0%} · blank {d['p_blank']:.0%}"
-                  f" · modal {d['modal']} · 80% band {d['p80_low']}-{d['p80_high']}")
+            # p_return/p_haul/p_blank are per-player thresholds: TC only.
+            per_player = (f" · return {d['p_return']:.0%} · haul {d['p_haul']:.0%}"
+                          f" · blank {d['p_blank']:.0%}") if "p_return" in d else ""
+            band = f"{d['p80_low']}-{d['p80_high']}" + ("+" if d.get("p80_open") else "")
+            print(f"{'':16s}       beats bar {d.get('p_beats_bar', 0):.0%}{per_player}"
+                  f" · modal {d['modal']} · 80% band {band}")
         for reason in r["reasons"]:
             if reason.startswith("Risk:") or "European" in reason or "League" in reason:
                 print(f"{'':16s}       {reason}")
