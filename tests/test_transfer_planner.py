@@ -205,3 +205,23 @@ def test_team_limit_blocks_fourth_from_club():
     out = tp.plan_transfers(proj, [1, 2, 3, 6], GWS, start_ft=1)
     m = out["plan"][0]["moves"][0]
     assert m["sell"]["id"] == 6 and m["buy"]["id"] == 5  # team-legal upgrade
+
+
+def test_horizon_floor_is_one_gw_so_the_slider_is_honoured():
+    # "1 GW" on the slider must mean this week alone: no hidden 3-GW ranking.
+    from src import config
+    assert int(getattr(config, "TRANSFER_PLAN_MIN_HORIZON_GWS")) == 1
+
+
+def test_single_gw_plan_ranks_this_week_and_skips_the_roll_comparison():
+    proj = _proj_frame([
+        _player(1, "MID", price=5.0, xpts=2.0),
+        _player(2, "MID", price=5.0, xpts=7.0),
+    ], gws=(10,))
+    out = tp.plan_transfers(proj, squad_ids=[1], gws=[10], itb_m=0.0, start_ft=1, min_gain=2.0)
+    assert out["verdict"] == "spend"
+    d = out["verdict_detail"]
+    assert d["horizon"] == {"start_gw": 10, "end_gw": 10, "n": 1}
+    assert d["moves"][0]["this_gw_gain"] == d["moves"][0]["horizon_gain"] == 5.0
+    assert d["roll_alternative"] is None
+    assert "roll_alternative_net_gain" not in out

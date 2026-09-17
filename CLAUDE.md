@@ -115,7 +115,7 @@ Greedy per-GW walk across the projection horizon, separate from the single-GW be
 - **XI-aware**: a bench seller's swap only credits points the buyer adds by displacing the weakest same-position XI member — bench churn is worth 0.
 - **Positional bars**: GKP/DEF swaps need `POS_GAIN_MULT` × min_gain (2.0 / 2.25) — shared with the beam search.
 - **Head-to-head hedge nudge**: buys directly opposing an owned GKP/DEF↔attacker pair that GW get `TRANSFER_H2H_CONFLICT_PENALTY` (variance preference, deliberately small) and an `h2h_conflicts` warning on the move record.
-- **Horizon floor**: the planner always evaluates ≥ `MIN_HORIZON_GWS` (3) regardless of the display slider — roll-vs-move never runs blind.
+- **Horizon = slider**: `MIN_HORIZON_GWS` is 1 (was a hard floor of 3 until 2026-09-17). "1 GW" ranks moves on this week alone and skips roll-vs-move (needs a next week); 3 GW default unchanged.
 
 ### Chip optimizer (`src/optimizer.py` + chip logic in `api/main.py`)
 

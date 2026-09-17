@@ -218,11 +218,12 @@ TRANSFER_PLAN_RUNNER_UPS = 5
 # ties toward the non-conflicting candidate, nothing more. 0 disables.
 TRANSFER_H2H_CONFLICT_PENALTY = 0.75  # xPts per directly-opposed own player
 
-# The roll-vs-move verdict is meaningless with no next week to roll into, and
-# a 1-GW display slider kept producing exactly that. The planner always
-# evaluates at least this many GWs regardless of the display horizon; the
-# slider still controls the pitch/optimization view (1 GW remains available).
-TRANSFER_PLAN_MIN_HORIZON_GWS = 3
+# The display slider is the planner horizon. "1 GW" ranks moves on this
+# week alone (the roll-vs-move comparison needs a next week and is skipped;
+# the card then shows only the this-GW gain). The 3-GW default is unchanged.
+# Was a hard floor of 3 until 2026-09-17: users read the slider as "best move
+# for this week" and a 3-GW ranking contradicted the "+x this GW" number.
+TRANSFER_PLAN_MIN_HORIZON_GWS = 1
 
 # -----------------------------
 # Strategy recommendation tuning

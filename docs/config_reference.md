@@ -158,3 +158,4 @@ This file explains every parameter in `src/config.py`, what it controls, and whe
 - Add a model output column (for example `xpts_model`) in `src/projections.py`.
 - In `api/main.py`, switch `score_col` used by optimizer/recommender from rule-based to model-based.
 - Keep all strategy thresholds (`STRATEGY_*`) active as guardrails until model calibration is stable.
+| `TRANSFER_PLAN_MIN_HORIZON_GWS` | 1 | Planner horizon floor (GWs); the display slider sets the planner horizon (`api/main.py` plan_horizon_gws) |
