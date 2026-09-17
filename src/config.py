@@ -212,11 +212,13 @@ TRANSFER_PLAN_MOVES_FOLLOW_FT = True
 TRANSFER_PLAN_RUNNER_UPS = 5
 
 # Head-to-head hedge nudge: buying a player who faces one of your own
-# GKP/DEF<->attacker pairs that gameweek caps the pair's joint ceiling (your
+# GKP/DEF<->attacker pairs that gameweek cap the pair's joint ceiling (your
 # striker scoring kills your defender's clean sheet). Expected points don't
-# change — this is a variance preference, so the nudge is small: it breaks
-# ties toward the non-conflicting candidate, nothing more. 0 disables.
-TRANSFER_H2H_CONFLICT_PENALTY = 0.75  # xPts per directly-opposed own player
+# change, so this is a preference, and the product's stance (2026-09-17, set
+# by the user) is that transfers should REDUCE direct confrontations: a buy
+# that faces your own keeper/defence must beat the clean alternative by this
+# many xPts to still win. Was 0.75 (tie-break only) until 2026-09-17. 0 disables.
+TRANSFER_H2H_CONFLICT_PENALTY = 3.0  # xPts per directly-opposed own player
 
 # The roll-vs-move verdict is meaningless with no next week to roll into, and
 # a 1-GW display slider kept producing exactly that. The planner always
