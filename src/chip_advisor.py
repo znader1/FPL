@@ -757,6 +757,13 @@ def _fh_structural_cup_clash_gw(cup_clashes, fixtures, model_end, expires_gw, bl
     return None
 
 
+def _fh_structural_guidance(gw):
+    """Shared sentence for the Free Hit structural-hold case — used by both
+    the outlook row (via `_chip_guidance`) and the provisional cup-clash
+    recommendation entry, so the two can never drift apart."""
+    return f"Hold for GW{gw}: likely blank gameweek (FA Cup weekend), FPL confirms nearer the time."
+
+
 def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon,
                     transfer_plan_net_gain=0.0, structural_gw=None):
     """Plain-language "why is this chip on hold" sentence for one outlook or
@@ -765,15 +772,14 @@ def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon,
     prior = config.CHIP_PLAN_SEASON_PRIORS[chip]
 
     if status == "play":
-        text = f"Play it in GW{event_id}: +{ev_gain:.1f} pts over the bar of {bar:.1f}."
+        text = f"Play it in GW{event_id}: +{ev_gain:.1f} pts over the bar of {bar:.0f}."
         if distribution and "p_beats_bar" in distribution:
-            text += f" {distribution['p_beats_bar'] * 100:.1f}% chance it beats the bar."
+            text += f" {round(distribution['p_beats_bar'] * 100)}% chance it beats the bar."
         return text
 
     if event_id is None:
         if chip == "free_hit" and structural_gw is not None:
-            return (f"Hold for GW{structural_gw}: likely blank gameweek (FA Cup weekend), "
-                    f"FPL confirms nearer the time.")
+            return _fh_structural_guidance(structural_gw)
         text = f"Hold. Nothing in the next {horizon} GWs beats keeping it. Best use: {prior}."
         if chip == "wildcard" and transfer_plan_net_gain > 0:
             text += " Your squad plus free transfers already covers this stretch."
@@ -781,7 +787,7 @@ def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon,
 
     text = f"Hold for now. GW{event_id} is the best week so far (+{ev_gain:.1f} pts"
     if distribution and "p_beats_bar" in distribution:
-        text += f", {distribution['p_beats_bar'] * 100:.1f}% chance to beat the {bar:.1f}-pt bar"
+        text += f", {round(distribution['p_beats_bar'] * 100)}% chance to beat the {bar:.0f}-pt bar"
     text += f"). Best use: {prior}."
     return text
 
@@ -1020,32 +1026,26 @@ def build_chip_plan(
     # GW window has historically wiped most of the round. Surface it as a
     # likelihood-tagged provisional FH window so the manager holds the chip
     # for it instead of burning it on an ordinary week.
-    if cup_clashes and "free_hit" in remaining and "free_hit" not in recommended_chips:
+    if (cup_clashes and "free_hit" in remaining and "free_hit" not in recommended_chips
+            and fh_structural_gw is not None):
         blank_prob = float(getattr(config, "CHIP_PLAN_CUP_CLASH_BLANK_PROB", 0.7))
-        for g in sorted(cup_clashes):
-            info = cup_clashes[g]
-            if g <= model_end or g > windows["free_hit"]["expires_gw"]:
-                continue
-            if not info.get("likely_blank"):
-                continue
-            counts = team_fixture_counts(fixtures, g)
-            if counts and len(counts) <= int(getattr(config, "CHIP_PLAN_BLANK_TEAM_THRESHOLD", 14)):
-                continue  # already announced — handled above
-            comp = str(info.get("competition", "cup")).replace("_", " ").upper()
-            label = info.get("label") or "round"
-            recommendations.append({
-                "chip": "free_hit",
-                "event_id": g,
-                "ev_gain": None,
-                "provisional": True,
-                "likelihood": round(blank_prob, 2),
-                "reasons": [f"GW{g} clashes with the {comp} {label} weekend — "
-                            f"~{blank_prob:.0%} likely to become a blank GW once fixtures are "
-                            f"confirmed; hold Free Hit for it"],
-                "ev_curve": [],
-            })
-            recommended_chips.add("free_hit")
-            break
+        g = fh_structural_gw
+        info = cup_clashes[g]
+        comp = str(info.get("competition", "cup")).replace("_", " ").upper()
+        label = info.get("label") or "round"
+        recommendations.append({
+            "chip": "free_hit",
+            "event_id": g,
+            "ev_gain": None,
+            "provisional": True,
+            "likelihood": round(blank_prob, 2),
+            "reasons": [f"GW{g} clashes with the {comp} {label} weekend — "
+                        f"~{blank_prob:.0%} likely to become a blank GW once fixtures are "
+                        f"confirmed; hold Free Hit for it"],
+            "ev_curve": [],
+            "guidance": _fh_structural_guidance(g),
+        })
+        recommended_chips.add("free_hit")
 
     calendar = build_calendar(
         squad=squad, current_gw=current_gw, horizon=horizon, events=events,

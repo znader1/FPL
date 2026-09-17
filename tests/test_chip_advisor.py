@@ -942,10 +942,10 @@ def test_outlook_guidance_hold_below_bar_with_distribution_p_beats_bar():
                            player_priors=_priors_for(projections[5]))
     tc = next(o for o in plan["outlook"] if o["chip"] == "triple_captain")
     assert tc["status"] == "hold" and "distribution" in tc
-    p = tc["distribution"]["p_beats_bar"] * 100
+    p = round(tc["distribution"]["p_beats_bar"] * 100)
     assert tc["guidance"] == (
         f"Hold for now. GW{tc['event_id']} is the best week so far "
-        f"(+{tc['ev_gain']:.1f} pts, {p:.1f}% chance to beat the {tc['bar']:.1f}-pt bar). "
+        f"(+{tc['ev_gain']:.1f} pts, {p}% chance to beat the {tc['bar']:.0f}-pt bar). "
         f"Best use: {config.CHIP_PLAN_SEASON_PRIORS['triple_captain']}."
     )
 
@@ -968,6 +968,30 @@ def test_outlook_guidance_structural_fh_cup_clash_beyond_horizon():
     )
 
 
+def test_provisional_fh_cup_clash_recommendation_carries_matching_guidance():
+    """The likelihood-tagged provisional FH recommendation (built from the
+    same cup-clash detection as the outlook row's structural-hold guidance)
+    must carry the identical sentence -- they describe the same GW and must
+    never drift apart."""
+    gws = [5, 6, 7, 8]
+    squad = _squad_15()[["player_id", "name", "pos", "team", "price_m"]]
+    fx = _fixtures([(g, h, h + 10) for g in range(5, 31) for h in range(1, 11)])
+    plan = build_chip_plan(
+        squad=squad, current_gw=5, gw_projections=_gw_projections_with_dgw(gws, dgw_gw=None),
+        chips_played=[], fixtures=fx, horizon_gws=4,
+        cup_clashes={6: {"competition": "fa_cup", "label": "R5", "likely_blank": True},
+                     15: {"competition": "fa_cup", "label": "QF", "likely_blank": True}},
+    )
+    fh_rec = next(r for r in plan["recommendations"] if r["chip"] == "free_hit")
+    assert fh_rec["provisional"] is True and fh_rec["event_id"] == 15
+    assert fh_rec["guidance"] == (
+        "Hold for GW15: likely blank gameweek (FA Cup weekend), "
+        "FPL confirms nearer the time."
+    )
+    fh_outlook = next(o for o in plan["outlook"] if o["chip"] == "free_hit")
+    assert fh_outlook["guidance"] == fh_rec["guidance"]
+
+
 def test_outlook_and_recommendation_guidance_play_it():
     squad = _squad_15_single_team()
     market = _market_for(squad, gw_xpts=6.0)
@@ -977,7 +1001,7 @@ def test_outlook_and_recommendation_guidance_play_it():
     assert bb_out["status"] == "play"
     expected = (
         f"Play it in GW{bb_out['event_id']}: +{bb_out['ev_gain']:.1f} pts "
-        f"over the bar of {bb_out['bar']:.1f}."
+        f"over the bar of {bb_out['bar']:.0f}."
     )
     assert bb_out["guidance"] == expected
     assert bb_rec["guidance"] == expected  # outlook and recommendation agree
@@ -993,11 +1017,11 @@ def test_recommendation_guidance_names_p_beats_bar_when_distribution_present():
                            chips_played=[], horizon_gws=4,
                            player_priors=_priors_for(projections[5]))
     tc = next(r for r in plan["recommendations"] if r["chip"] == "triple_captain")
-    p = tc["distribution"]["p_beats_bar"] * 100
+    p = round(tc["distribution"]["p_beats_bar"] * 100)
     assert tc["guidance"] == (
         f"Play it in GW{tc['event_id']}: +{tc['ev_gain']:.1f} pts over the bar of "
-        f"{tc_bar(plan, 'triple_captain', tc['event_id']):.1f}. "
-        f"{p:.1f}% chance it beats the bar."
+        f"{tc_bar(plan, 'triple_captain', tc['event_id']):.0f}. "
+        f"{p}% chance it beats the bar."
     )
 
 
