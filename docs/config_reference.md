@@ -151,6 +151,7 @@ This file explains every parameter in `src/config.py`, what it controls, and whe
 | `CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR` | Price threshold that defines a premium MID/FWD for wildcard captaincy coverage. | `src/projections.py` (`add_wildcard_scores`). |
 | `CHIP_WILDCARD_PREMIUM_ATTACKER_BASE_BONUS` | Flat wildcard bonus for premium captaincy-ready attackers. | `src/projections.py` (`add_wildcard_scores`). |
 | `CHIP_WILDCARD_CAPTAINCY_WEIGHT` | How strongly captaincy upside affects the wildcard score. | `src/projections.py` (`add_wildcard_scores`). |
+| `CHIP_PLAN_SEASON_PRIORS` | One-line "typical window" text per chip (`free_hit`/`bench_boost`/`triple_captain`/`wildcard`), used inside the plain-language `guidance` string on every chip timing planner outlook/recommendation row. Not model output — a season prior, firmed up once FPL announces doubles/blanks. | `src/chip_advisor.py` (`build_chip_plan`, guidance builder). |
 
 ## 9) If you want to switch to ML tuning later
 

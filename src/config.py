@@ -293,6 +293,18 @@ CHIP_PLAN_FH_TOUGH_DIFFICULTY = 4.0  # ticker difficulty counting as "tough"
 # engine's FDR multipliers; keyed on round(difficulty)).
 CHIP_PLAN_TC_DIFF_MULT = {1: 1.25, 2: 1.12, 3: 1.0, 4: 0.88, 5: 0.75}
 
+# Plain-language "why is this chip on hold" guidance (2026-09-17). One line
+# per chip, surfaced on every outlook/recommendation row so a fan understands
+# WHY without reading the EV math. These are season priors — typical windows
+# FPL managers plan around — not model output; firm them up once FPL
+# announces the actual doubles/blanks for the season.
+CHIP_PLAN_SEASON_PRIORS = {
+    "free_hit": "the blank gameweek, usually GW29–33 (FA Cup rounds)",
+    "bench_boost": "a double gameweek, usually GW24–26 or GW34–37",
+    "triple_captain": "a double gameweek for your captain, usually GW24–26 or GW34–37",
+    "wildcard": "a fixture swing or an injury pile-up; re-check after each international break",
+}
+
 # European midweek congestion (src/european.py). The FPL API knows nothing
 # about the Champions League / Europa / Conference calendar, so the team list
 # and matchday dates are user-maintained in data/models/european_calendar.json
