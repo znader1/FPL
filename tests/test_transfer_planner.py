@@ -205,3 +205,57 @@ def test_team_limit_blocks_fourth_from_club():
     out = tp.plan_transfers(proj, [1, 2, 3, 6], GWS, start_ft=1)
     m = out["plan"][0]["moves"][0]
     assert m["sell"]["id"] == 6 and m["buy"]["id"] == 5  # team-legal upgrade
+
+
+def test_same_gw_move_never_resells_a_player_it_just_bought():
+    """A greedy per-GW move sequence must never sell a player a earlier move
+    in the SAME gameweek just bought. Before the fix, the second move's
+    seller pool included every currently-owned player -- including one
+    bought a moment earlier this GW -- so a non-XI/bench "gain" (which rates
+    a buy against a fixed XI floor, not the seller's own value) could rate
+    reselling a just-bought player as the best available move, proposing
+    e.g. "sell A, buy Grob" then "sell Grob, buy C" as two transfers instead
+    of the always-available, identical-value single move "sell A, buy C".
+
+    Squad: 11 non-MID starters (cheap, low value -- never in the running for
+    the MID buys below) + two weak bench MID players, X1 and X2. Market: two
+    unowned MID upgrades, Grob and P4. With 2 FT and max_moves_per_gw=2, the
+    planner should recommend BOTH bench MIDs get upgraded (X1 -> Grob,
+    X2 -> P4) -- never a Grob-in-then-out cycle."""
+    xi = [_player(i, pos, price=1.0, xpts=1.5)
+          for i, pos in enumerate((["GKP"] * 2 + ["DEF"] * 5 + ["FWD"] * 4), start=1)]
+    GROB, P4, X1, X2 = 12, 13, 14, 15
+    market = [
+        _player(GROB, "MID", price=9.0, xpts=4.5),
+        _player(P4, "MID", price=8.5, xpts=4.25),
+        _player(X1, "MID", price=4.0, xpts=0.5),
+        _player(X2, "MID", price=8.5, xpts=0.5),
+    ]
+    proj = _proj_frame(xi + market, gws=(10, 11), with_status_cols=False)
+    squad_ids = [p["id"] for p in xi] + [X1, X2]
+
+    out = tp.plan_transfers(proj, squad_ids, gws=[10, 11], itb_m=5.0, start_ft=2,
+                            ft_cap=5, hit_penalty=4.0, allow_hits=False,
+                            min_gain=0.5, max_moves_per_gw=2)
+
+    assert out["verdict"] == "spend"
+    assert "roll_alternative_net_gain" in out  # the counterfactual still ran
+
+    first_gw = out["plan"][0]
+    moves = first_gw["moves"]
+    assert len(moves) == 2
+
+    # The invariant: no move's sell id may equal an earlier move's buy id
+    # within this same GW.
+    buys_so_far = set()
+    for m in moves:
+        assert m["sell"]["id"] not in buys_so_far
+        buys_so_far.add(m["buy"]["id"])
+
+    # Both moves are distinct, real upgrades: two different sellers, two
+    # different buys, neither a fake round-trip through the other.
+    sells = {m["sell"]["id"] for m in moves}
+    buys = {m["buy"]["id"] for m in moves}
+    assert sells == {X1, X2}
+    assert buys == {GROB, P4}
+    assert all(m["score_gain"] > 0 for m in moves)

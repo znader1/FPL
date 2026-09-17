@@ -339,6 +339,21 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
                 min_gain, pos_mult, int(getattr(config, "TRANSFER_PLAN_RUNNER_UPS", 5)))
 
         moves, hits = [], 0
+        # A player this GW's plan just bought must never be eligible as a
+        # seller for a LATER move in the same GW: the greedy per-move search
+        # picks the single best swap each iteration from the squad as it
+        # stands after the previous move, with no memory of what it just
+        # paid a transfer for. Without this guard a non-XI/bench "gain"
+        # (which compares the buy's horizon value against a fixed XI floor,
+        # not the seller's own value — see `_best_swap`) can rate reselling
+        # a just-bought player as the best available move, proposing e.g.
+        # "sell A, buy Grob" then "sell Grob, buy C" as two transfers when
+        # "sell A, buy C" in one transfer was always available and identical
+        # in value (buy/sell price are symmetric here — no price markdown is
+        # modeled), or even worse, can prefer a genuine downgrade the fixed
+        # floor can't see. `bought_this_gw` is excluded from every seller
+        # pool below, in both the forced-sell pass and the greedy walk.
+        bought_this_gw = set()
 
         if gi == 0:
             for pid in sorted(forced_sells, key=lambda p: info[p]["xg"].get(g, 0.0)):
@@ -351,6 +366,7 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
                 s, b = best["sell"], best["buy"]
                 squad.discard(s)
                 squad.add(b)
+                bought_this_gw.add(b)
                 bank += info[s]["price"] - info[b]["price"]
                 team_counts[info[s]["team"]] = team_counts.get(info[s]["team"], 0) - 1
                 team_counts[info[b]["team"]] = team_counts.get(info[b]["team"], 0) + 1
@@ -374,7 +390,7 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
             # fails its (higher) bar while a slightly smaller MID/FWD gain
             # passes its own — so retry with the failing position excluded
             # instead of giving up on the first miss.
-            pool = set(squad)
+            pool = set(squad) - bought_this_gw
             best = None
             while pool:
                 cand = _best_swap(pool, info, unowned, hz, bank, team_counts, xi=xi,
@@ -391,6 +407,7 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
             s, b = best["sell"], best["buy"]
             squad.discard(s)
             squad.add(b)
+            bought_this_gw.add(b)
             bank += info[s]["price"] - info[b]["price"]
             team_counts[info[s]["team"]] = team_counts.get(info[s]["team"], 0) - 1
             team_counts[info[b]["team"]] = team_counts.get(info[b]["team"], 0) + 1
