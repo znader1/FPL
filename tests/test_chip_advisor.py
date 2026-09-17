@@ -876,3 +876,179 @@ def test_build_chip_plan_cup_clash_skips_when_blank_already_announced_or_chip_us
         cup_clashes={15: {"competition": "fa_cup", "label": "QF", "likely_blank": True}},
     )
     assert not [r for r in used["recommendations"] if r["chip"] == "free_hit"]
+
+
+# ---------- 2026-09-17: plain-language chip guidance ----------
+
+def test_outlook_guidance_hold_no_window():
+    """No candidate window at all -> generic hold + season prior. No p-beats-bar
+    clause, no wildcard/free_hit bonus sentence attached."""
+    squad = _squad_15_single_team()
+    market = _market_for(squad, gw_xpts=6.0)
+    plan = build_chip_plan(squad, 5, {5: market}, chips_played=[])
+    wc = next(o for o in plan["outlook"] if o["chip"] == "wildcard")
+    fh = next(o for o in plan["outlook"] if o["chip"] == "free_hit")
+    assert wc["event_id"] is None and fh["event_id"] is None
+    assert wc["guidance"] == (
+        f"Hold. Nothing in the next {plan['horizon_model_gws']} GWs beats keeping it. "
+        f"Best use: {config.CHIP_PLAN_SEASON_PRIORS['wildcard']}."
+    )
+    assert fh["guidance"] == (
+        f"Hold. Nothing in the next {plan['horizon_model_gws']} GWs beats keeping it. "
+        f"Best use: {config.CHIP_PLAN_SEASON_PRIORS['free_hit']}."
+    )
+
+
+def test_outlook_guidance_hold_no_window_wildcard_names_transfer_plan():
+    """Wildcard-only addendum: when the transfer plan already has positive net
+    gain, the hold-no-window sentence names it."""
+    squad = _squad_15_single_team()
+    market = _market_for(squad, gw_xpts=6.0)
+    plan = build_chip_plan(squad, 5, {5: market}, chips_played=[],
+                           transfer_plan={"total_net_gain": 5.0})
+    wc = next(o for o in plan["outlook"] if o["chip"] == "wildcard")
+    assert wc["event_id"] is None
+    assert wc["guidance"] == (
+        f"Hold. Nothing in the next {plan['horizon_model_gws']} GWs beats keeping it. "
+        f"Best use: {config.CHIP_PLAN_SEASON_PRIORS['wildcard']}. "
+        "Your squad plus free transfers already covers this stretch."
+    )
+    # free_hit gets no such addendum even with the same transfer plan
+    fh = next(o for o in plan["outlook"] if o["chip"] == "free_hit")
+    assert "free transfers" not in fh["guidance"]
+
+
+def test_outlook_guidance_hold_below_bar_without_distribution():
+    squad = _squad_15_single_team()
+    market = _market_for(squad, gw_xpts=6.0)
+    plan = build_chip_plan(squad, 5, {5: market}, chips_played=[])
+    tc = next(o for o in plan["outlook"] if o["chip"] == "triple_captain")
+    assert tc["status"] == "hold" and tc["event_id"] == 5
+    assert "distribution" not in tc
+    assert tc["guidance"] == (
+        f"Hold for now. GW{tc['event_id']} is the best week so far (+{tc['ev_gain']:.1f} pts). "
+        f"Best use: {config.CHIP_PLAN_SEASON_PRIORS['triple_captain']}."
+    )
+
+
+def test_outlook_guidance_hold_below_bar_with_distribution_p_beats_bar():
+    gws = [5, 6, 7, 8]
+    projections = _gw_projections_with_dgw(gws, dgw_gw=6)
+    for g in gws:
+        projections[g].loc[projections[g]["player_id"] == 13, "xpts"] = 10.0
+    squad = _squad_15()[["player_id", "name", "pos", "team", "price_m"]]
+    plan = build_chip_plan(squad=squad, current_gw=5, gw_projections=projections,
+                           chips_played=[], horizon_gws=4,
+                           player_priors=_priors_for(projections[5]))
+    tc = next(o for o in plan["outlook"] if o["chip"] == "triple_captain")
+    assert tc["status"] == "hold" and "distribution" in tc
+    p = round(tc["distribution"]["p_beats_bar"] * 100)
+    assert tc["guidance"] == (
+        f"Hold for now. GW{tc['event_id']} is the best week so far "
+        f"(+{tc['ev_gain']:.1f} pts, {p}% chance to beat the {tc['bar']:.0f}-pt bar). "
+        f"Best use: {config.CHIP_PLAN_SEASON_PRIORS['triple_captain']}."
+    )
+
+
+def test_outlook_guidance_structural_fh_cup_clash_beyond_horizon():
+    gws = [5, 6, 7, 8]
+    squad = _squad_15()[["player_id", "name", "pos", "team", "price_m"]]
+    fx = _fixtures([(g, h, h + 10) for g in range(5, 31) for h in range(1, 11)])
+    plan = build_chip_plan(
+        squad=squad, current_gw=5, gw_projections=_gw_projections_with_dgw(gws, dgw_gw=None),
+        chips_played=[], fixtures=fx, horizon_gws=4,
+        cup_clashes={6: {"competition": "fa_cup", "label": "R5", "likely_blank": True},   # in model zone: ignored
+                     15: {"competition": "fa_cup", "label": "QF", "likely_blank": True}},
+    )
+    fh = next(o for o in plan["outlook"] if o["chip"] == "free_hit")
+    assert fh["event_id"] is None  # still no model-zone window
+    assert fh["guidance"] == (
+        "Hold for GW15: likely blank gameweek (FA Cup weekend), "
+        "FPL confirms nearer the time."
+    )
+
+
+def test_provisional_fh_cup_clash_recommendation_carries_matching_guidance():
+    """The likelihood-tagged provisional FH recommendation (built from the
+    same cup-clash detection as the outlook row's structural-hold guidance)
+    must carry the identical sentence -- they describe the same GW and must
+    never drift apart."""
+    gws = [5, 6, 7, 8]
+    squad = _squad_15()[["player_id", "name", "pos", "team", "price_m"]]
+    fx = _fixtures([(g, h, h + 10) for g in range(5, 31) for h in range(1, 11)])
+    plan = build_chip_plan(
+        squad=squad, current_gw=5, gw_projections=_gw_projections_with_dgw(gws, dgw_gw=None),
+        chips_played=[], fixtures=fx, horizon_gws=4,
+        cup_clashes={6: {"competition": "fa_cup", "label": "R5", "likely_blank": True},
+                     15: {"competition": "fa_cup", "label": "QF", "likely_blank": True}},
+    )
+    fh_rec = next(r for r in plan["recommendations"] if r["chip"] == "free_hit")
+    assert fh_rec["provisional"] is True and fh_rec["event_id"] == 15
+    assert fh_rec["guidance"] == (
+        "Hold for GW15: likely blank gameweek (FA Cup weekend), "
+        "FPL confirms nearer the time."
+    )
+    fh_outlook = next(o for o in plan["outlook"] if o["chip"] == "free_hit")
+    assert fh_outlook["guidance"] == fh_rec["guidance"]
+
+
+def test_outlook_and_recommendation_guidance_play_it():
+    squad = _squad_15_single_team()
+    market = _market_for(squad, gw_xpts=6.0)
+    plan = build_chip_plan(squad, 5, {5: market}, chips_played=[])
+    bb_out = next(o for o in plan["outlook"] if o["chip"] == "bench_boost")
+    bb_rec = next(r for r in plan["recommendations"] if r["chip"] == "bench_boost")
+    assert bb_out["status"] == "play"
+    expected = (
+        f"Play it in GW{bb_out['event_id']}: +{bb_out['ev_gain']:.1f} pts "
+        f"over the bar of {bb_out['bar']:.0f}."
+    )
+    assert bb_out["guidance"] == expected
+    assert bb_rec["guidance"] == expected  # outlook and recommendation agree
+
+
+def test_recommendation_guidance_names_p_beats_bar_when_distribution_present():
+    gws = [5, 6, 7, 8]
+    projections = _gw_projections_with_dgw(gws, dgw_gw=6)
+    for g in gws:
+        projections[g].loc[projections[g]["player_id"] == 13, "xpts"] = 16.0
+    squad = _squad_15()[["player_id", "name", "pos", "team", "price_m"]]
+    plan = build_chip_plan(squad=squad, current_gw=5, gw_projections=projections,
+                           chips_played=[], horizon_gws=4,
+                           player_priors=_priors_for(projections[5]))
+    tc = next(r for r in plan["recommendations"] if r["chip"] == "triple_captain")
+    p = round(tc["distribution"]["p_beats_bar"] * 100)
+    assert tc["guidance"] == (
+        f"Play it in GW{tc['event_id']}: +{tc['ev_gain']:.1f} pts over the bar of "
+        f"{tc_bar(plan, 'triple_captain', tc['event_id']):.0f}. "
+        f"{p}% chance it beats the bar."
+    )
+
+
+def test_outlook_excludes_used_chips_so_no_guidance_needed():
+    """Used chips never appear in outlook at all — nothing to assert a
+    guidance string on, which is the point: no guidance is emitted for them."""
+    squad = _squad_15_single_team()
+    market = _market_for(squad, gw_xpts=6.0)
+    plan = build_chip_plan(squad, 5, {5: market},
+                           chips_played=[{"name": "bboost", "event": 3}])
+    assert all(o["chip"] != "bench_boost" for o in plan["outlook"])
+
+
+def test_chip_guidance_never_raises_falls_back_to_generic():
+    """_chip_guidance raises on a bad/missing chip key; _safe_chip_guidance
+    must swallow it and fall back to a generic sentence rather than blow up
+    build_chip_plan."""
+    from src.chip_advisor import _safe_chip_guidance
+
+    text = _safe_chip_guidance(
+        "not_a_real_chip", status="hold", event_id=None, ev_gain=None,
+        bar=0.0, distribution=None, horizon=8, transfer_plan_net_gain=0.0)
+    assert text == "Hold. Best use: the right structural window for this chip."
+
+    # a genuine chip name but a status/field combo that blows up formatting
+    # (event_id required as an int for the %d-style GW interpolation)
+    text2 = _safe_chip_guidance(
+        "triple_captain", status="hold", event_id="not-a-number", ev_gain=None,
+        bar=0.0, distribution=None, horizon=8, transfer_plan_net_gain=0.0)
+    assert text2 == f"Hold. Best use: {config.CHIP_PLAN_SEASON_PRIORS['triple_captain']}."
