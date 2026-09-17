@@ -21,7 +21,9 @@ import logging
 from typing import Optional
 
 import pandas as pd
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Request
+
+from src.ratelimit import LLM_LIMIT, _user_key, limiter
 from pydantic import BaseModel, Field
 
 
@@ -42,49 +44,34 @@ class ChatResponse(BaseModel):
     latency_ms: int
 
 
-def _derive_chips_remaining(entry_id: int, current_gw: int) -> list[str]:
-    """
-    Returns the list of chip types still available, taking Phase 1/2 into account.
-    2025/26: 2 of each chip — Phase 1 (GW1-19), Phase 2 (GW20-38).
-    """
+def _get_entry_chips(entry_id: int) -> list[dict]:
+    """Fetch the raw chip-play records once. Feeds both chips_remaining
+    (via _derive_chips_remaining below) and the chip agent's tool call
+    (chips_played), so callers only hit the entry-history endpoint once."""
     from src import fpl_client
-
-    all_chips = {"wildcard", "free_hit", "bench_boost", "triple_captain"}
-    # FPL chip names → our canonical names
-    chip_name_map = {
-        "wildcard": "wildcard",
-        "freehit": "free_hit",
-        "bboost": "bench_boost",
-        "3xc": "triple_captain",
-    }
 
     try:
         history = fpl_client.get_entry_history(entry_id)
-    except Exception:
-        # On failure, assume all chips remaining (safe default)
-        return sorted(all_chips)
-
-    chips_played = history.get("chips") or []
-    # Figure out current phase
-    in_phase_1 = current_gw <= 19
-    phase_gw_range = (1, 19) if in_phase_1 else (20, 38)
-
-    # Count chips used in the current phase AND played strictly before current_gw
-    # (we're advising for current_gw, so chips already played in past GWs are gone)
-    used_in_phase = set()
-    for c in chips_played:
-        played_gw = int(c.get("event", 0))
-        canonical = chip_name_map.get(c.get("name", "").lower())
-        if not canonical:
-            continue
-        if phase_gw_range[0] <= played_gw <= phase_gw_range[1] and played_gw < current_gw:
-            used_in_phase.add(canonical)
-
-    remaining = all_chips - used_in_phase
-    return sorted(remaining)
+        return history.get("chips") or []
+    except Exception as e:  # noqa: BLE001 - degrade to "all chips available"
+        logger.warning(f"entry history fetch failed for {entry_id}: {e}")
+        return []
 
 
-def _build_context_for_entry(entry_id: int, current_gw: int):
+def _derive_chips_remaining(chips_played: list[dict], current_gw: int) -> list[str]:
+    """
+    Returns the list of chip types still available, taking Phase 1/2 into account.
+    2025/26: 2 of each chip — Phase 1 (GW1-19), Phase 2 (GW20-38).
+    chips_played=[] (e.g. on an upstream fetch failure) yields every chip
+    available — the same safe default as before.
+    """
+    from src.chip_advisor import chip_windows
+
+    windows = chip_windows(chips_played, current_gw)
+    return sorted(c for c, w in windows.items() if w["available"])
+
+
+def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
     """
     Build the data context needed by the orchestrator:
     squad, market, starting_xi, gw_projections, bank, FT, captain_id.
@@ -93,8 +80,11 @@ def _build_context_for_entry(entry_id: int, current_gw: int):
     """
     # Local import to avoid circular and keep startup fast
     from src import fpl_client, transforms, projections, optimizer, config
+    from src.breaks import international_break_gws
 
     bootstrap = fpl_client.get_bootstrap()
+    # Reuses the bootstrap already fetched above — no extra network call.
+    breaks = international_break_gws(bootstrap.get("events", []))
     fixtures = transforms.fixtures_df(fpl_client.get_fixtures())
     elements, teams, teams_short_map = transforms.tables_from_bootstrap(bootstrap)
 
@@ -142,19 +132,23 @@ def _build_context_for_entry(entry_id: int, current_gw: int):
         "price_m": (squad_rows["now_cost"] / 10.0).values,
     })
 
-    # Project next 5 GWs
-    horizon = 5
+    # Project next N GWs
+    horizon = int(horizon)
     proj = projections.project_elements_next_gws(
         elements=elements, fixtures=fixtures, teams_short_map=teams_short_map,
         gw_start=current_gw, horizon_gws=horizon,
     )
 
     # Reshape into the simulator's market schema, one DataFrame per GW
+    from src.chip_advisor import team_fixture_counts
+
     gw_projections = {}
     for g in range(current_gw, current_gw + horizon):
         col = f"xpts_gw{g}"
         if col not in proj.columns:
             continue
+        counts = team_fixture_counts(fixtures, g)
+        team_ids = pd.to_numeric(proj["team"], errors="coerce")
         market_g = pd.DataFrame({
             "player_id": proj["id"].astype(int).values,
             "name": proj["web_name"].values,
@@ -163,7 +157,7 @@ def _build_context_for_entry(entry_id: int, current_gw: int):
             "team": proj["team"].map(team_name_map).values,
             "price_m": (pd.to_numeric(proj["now_cost"], errors="coerce") / 10.0).values,
             "xpts": pd.to_numeric(proj[col], errors="coerce").fillna(0).values,
-            "fixture_count": 1,
+            "fixture_count": team_ids.map(lambda t: counts.get(int(t), 0) if pd.notna(t) else 0).values,
         })
         gw_projections[g] = market_g
 
@@ -190,6 +184,10 @@ def _build_context_for_entry(entry_id: int, current_gw: int):
         "bank_m": bank_m,
         "free_transfers": derived_ft,
         "captain_id": captain_id,
+        "proj": proj,
+        "fixtures": fixtures,
+        "teams_short_map": teams_short_map,
+        "breaks": breaks,
     }
 
 
@@ -210,11 +208,11 @@ def _resolve_current_gw(req_gw: Optional[int]) -> int:
     return int(summary.get("event_id") or 1)
 
 
-def _resolve_chips(req: SpecialistRequest, current_gw: int) -> list[str]:
+def _resolve_chips(req: SpecialistRequest, current_gw: int, chips_played: list[dict]) -> list[str]:
     if req.chips_remaining is not None:
         return req.chips_remaining
     try:
-        return _derive_chips_remaining(req.entry_id, current_gw)
+        return _derive_chips_remaining(chips_played, current_gw)
     except Exception as e:
         logger.warning(f"chip derivation failed: {e}")
         return ["wildcard", "free_hit", "bench_boost", "triple_captain"]
@@ -233,7 +231,8 @@ def _load_rules_text() -> str | None:
 
 
 @router.post("/chat/captain", response_model=ChatResponse)
-def chat_captain(req: SpecialistRequest = Body(...)):
+@limiter.limit(LLM_LIMIT, key_func=_user_key)
+def chat_captain(request: Request, req: SpecialistRequest = Body(...)):
     """Direct captain-agent call — skips orchestrator for speed."""
     from agents.captain_agent import run_captain_agent
 
@@ -255,7 +254,8 @@ def chat_captain(req: SpecialistRequest = Body(...)):
 
 
 @router.post("/chat/transfer", response_model=ChatResponse)
-def chat_transfer(req: SpecialistRequest = Body(...)):
+@limiter.limit(LLM_LIMIT, key_func=_user_key)
+def chat_transfer(request: Request, req: SpecialistRequest = Body(...)):
     """
     Direct transfer-agent call — skips orchestrator for speed.
     Computes the model-recommended captain (deterministic, fast) and protects
@@ -293,14 +293,16 @@ def chat_transfer(req: SpecialistRequest = Body(...)):
 
 
 @router.post("/chat/chip", response_model=ChatResponse)
-def chat_chip(req: SpecialistRequest = Body(...)):
+@limiter.limit(LLM_LIMIT, key_func=_user_key)
+def chat_chip(request: Request, req: SpecialistRequest = Body(...)):
     """Direct chip-agent call — skips orchestrator for speed."""
     from agents.chip_agent import run_chip_agent
 
     t0 = time.perf_counter()
     current_gw = _resolve_current_gw(req.current_gw)
     ctx = _build_context_for_entry(req.entry_id, current_gw)
-    chips_remaining = _resolve_chips(req, current_gw)
+    chips_played = _get_entry_chips(req.entry_id)
+    chips_remaining = _resolve_chips(req, current_gw, chips_played)
 
     if not chips_remaining:
         return ChatResponse(
@@ -314,6 +316,10 @@ def chat_chip(req: SpecialistRequest = Body(...)):
             squad=ctx["squad"], current_gw=current_gw,
             gw_projections=ctx["gw_projections"], chips_remaining=chips_remaining,
             extra_context=_load_rules_text(),
+            chips_played=chips_played,
+            bank_m=ctx["bank_m"],
+            fixtures=ctx["fixtures"],
+            breaks=ctx["breaks"],
         )
     except Exception as e:
         logger.exception("chip agent failed")
@@ -324,7 +330,8 @@ def chat_chip(req: SpecialistRequest = Body(...)):
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest = Body(...)):
+@limiter.limit(LLM_LIMIT, key_func=_user_key)
+def chat(request: Request, req: ChatRequest = Body(...)):
     """Route a user question to the FPL orchestrator agent (free-form questions)."""
     from agents.orchestrator import run_orchestrator
     from api.main import build_next_event_summary, get_bootstrap_cached, get_fixtures_cached
@@ -349,11 +356,14 @@ def chat(req: ChatRequest = Body(...)):
         logger.exception("Failed to build chat context")
         raise HTTPException(status_code=500, detail=f"Context build failed: {e}")
 
-    # Derive chips_remaining from live FPL state if not supplied
+    # Single entry-history fetch feeds both chips_remaining (if not supplied)
+    # and chips_played (threaded to the chip agent's tool call).
+    chips_played = _get_entry_chips(req.entry_id)
+
     chips_remaining = req.chips_remaining
     if chips_remaining is None:
         try:
-            chips_remaining = _derive_chips_remaining(req.entry_id, current_gw)
+            chips_remaining = _derive_chips_remaining(chips_played, current_gw)
         except Exception as e:
             logger.warning(f"Failed to derive chips_remaining: {e}")
             chips_remaining = ["wildcard", "free_hit", "bench_boost", "triple_captain"]
@@ -370,6 +380,8 @@ def chat(req: ChatRequest = Body(...)):
             free_transfers=ctx["free_transfers"],
             captain_id=ctx["captain_id"],
             chips_remaining=chips_remaining,
+            chips_played=chips_played,
+            fixtures=ctx["fixtures"],
         )
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))

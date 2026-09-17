@@ -1,4 +1,7 @@
 # See https://fly.io/docs/app-guides/continuous-deployment-with-github-actions/
+#
+# The test job gates the deploy. Before this, deploy and api-ci ran in parallel,
+# so a red suite shipped to production — see docs/prelaunch_audit_2026-09-12.md (C6).
 
 name: Fly Deploy
 on:
@@ -7,8 +10,21 @@ on:
       - main
       - master
 jobs:
+  test:
+    name: Test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt pytest
+      - run: python -m compileall -q api src scripts
+      - run: python -m pytest tests/ -q
+
   deploy:
     name: Deploy app
+    needs: test
     runs-on: ubuntu-latest
     concurrency: deploy-group    # optional: ensure only one action runs at a time
     steps:

@@ -21,3 +21,12 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/snapshot_to_db.py
+      - name: Chip plan snapshot
+        if: always()
+        env:
+          FPL_API_BASE_URL: ${{ secrets.FPL_API_BASE_URL }}
+          FPL_ADMIN_KEY: ${{ secrets.FPL_ADMIN_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          CHIP_SNAPSHOT_ENTRY_IDS: ${{ secrets.CHIP_SNAPSHOT_ENTRY_IDS }}
+        run: python scripts/chip_snapshot_to_db.py

@@ -48,6 +48,11 @@ def _build_player_alerts(record, optimize_event_id=None):
     return alerts
 
 
+def _opt_round(value, ndigits=2):
+    """Round when a value is present, otherwise stay None. `round_float` coerces."""
+    return round_float(value, ndigits, 0.0) if value is not None else None
+
+
 def _build_score_breakdown(record, chip_strategy="none", objective_score_col=None):
     breakdown = {
         "note": "xPts are projected points, not actual FPL points.",
@@ -56,6 +61,44 @@ def _build_score_breakdown(record, chip_strategy="none", objective_score_col=Non
         "objective_score_col": objective_score_col,
         "objective_score": None,
     }
+
+    # Component probabilities from the xG model. A mean of 2.3 tells a manager
+    # nothing they can act on; "61% to score, 78% to play 60'" does.
+    #
+    # These describe the MODEL half of the projection only: `xpts` above is a
+    # blend of the ppg baseline and the xG model
+    # (``config.PROJ_MODEL_BLEND_WEIGHT``), so `model_exp_points` is carried
+    # alongside them and the components add up against that, not against `xpts`.
+    components = {
+        "p_goal": _opt_round(record.get("p_goal"), 3),
+        "p_assist": _opt_round(record.get("p_assist"), 3),
+        "p_clean_sheet": _opt_round(record.get("p_clean_sheet"), 3),
+        "p_appear": _opt_round(record.get("p_appear"), 3),
+        "p_60": _opt_round(record.get("p_60"), 3),
+        "p_dc": _opt_round(record.get("p_dc"), 3),
+        "exp_goals": _opt_round(record.get("exp_goals"), 3),
+        "exp_assists": _opt_round(record.get("exp_assists"), 3),
+        "exp_minutes": _opt_round(record.get("exp_minutes"), 1),
+        "model_exp_points": _opt_round(record.get("model_exp_points"), 2),
+        "ep_appearance": _opt_round(record.get("ep_appearance"), 2),
+        "ep_goals": _opt_round(record.get("ep_goals"), 2),
+        "ep_assists": _opt_round(record.get("ep_assists"), 2),
+        "ep_clean_sheet": _opt_round(record.get("ep_clean_sheet"), 2),
+        "ep_bonus": _opt_round(record.get("ep_bonus"), 2),
+        "ep_dc": _opt_round(record.get("ep_dc"), 2),
+    }
+    breakdown["components"] = components if any(v is not None for v in components.values()) else None
+
+    # The distribution behind the mean: what the player is actually likely to score.
+    distribution = {
+        "modal_points": safe_int(record.get("modal_points")),
+        "p_return_6": _opt_round(record.get("p_return_6"), 3),
+        "p_haul_10": _opt_round(record.get("p_haul_10"), 3),
+        "p80_low": safe_int(record.get("p80_low")),
+        "p80_high": safe_int(record.get("p80_high")),
+    }
+    breakdown["distribution"] = distribution if any(
+        v is not None for v in distribution.values()) else None
 
     breakdown["recent_form"] = {
         "window_gws": safe_int(record.get("recent_history_window_gws")),

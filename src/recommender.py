@@ -253,9 +253,24 @@ def required_gain_for_seller(seller):
         required = max(required, float(config.TRANSFER_MIN_SCORE_GAIN_GKP))
     if not bool(seller.get("is_starter")):
         required = max(required, float(config.TRANSFER_MIN_SCORE_GAIN_BENCH))
+    # Same positional discipline as the horizon planner: a GKP/DEF swap must
+    # clear a higher bar than MID/FWD before it's worth surfacing at all.
+    pos_mult = getattr(config, "TRANSFER_PLAN_POS_GAIN_MULT", {}) or {}
+    required *= float(pos_mult.get(pos, 1.0))
     if to_number(seller.get("injury_sell_boost"), 0.0) >= float(config.TRANSFER_GUARDRAIL_INJURY_OVERRIDE):
         required = float(config.TRANSFER_MIN_SCORE_GAIN)
     return float(required)
+
+
+def swap_gain(seller, buy):
+    """Score gain for one swap. A bench seller's replacement won't take set
+    pieces or ride form from the bench, so bench swaps compete on the raw
+    projection (base_score) alone; starters keep the full bonus-laden score."""
+    if bool(seller.get("is_starter")):
+        return to_number(buy.get("transfer_score"), 0.0) - to_number(seller.get("transfer_score"), 0.0)
+    buy_base = to_number(buy.get("base_score"), to_number(buy.get("transfer_score"), 0.0))
+    sell_base = to_number(seller.get("base_score"), to_number(seller.get("transfer_score"), 0.0))
+    return buy_base - sell_base
 
 
 def pick_sellers_for_state(sellers_df, sold_ids):
@@ -305,7 +320,7 @@ def estimate_best_next_gain(state, sellers_df, el):
             continue
         req = required_gain_for_seller(seller)
         for _, buy in candidates.iterrows():
-            gain = to_number(buy.get("transfer_score"), 0.0) - to_number(seller.get("transfer_score"), 0.0)
+            gain = swap_gain(seller, buy)
             if gain >= req and gain > max_gain:
                 max_gain = gain
     return float(max_gain)
@@ -366,7 +381,7 @@ def beam_search(sellers, el, start_state, transfer_count, beam_width, max_per_te
 
                 required_gain = required_gain_for_seller(seller)
                 for _, buy in candidates.iterrows():
-                    gain = to_number(buy.get("transfer_score"), 0.0) - to_number(seller.get("transfer_score"), 0.0)
+                    gain = swap_gain(seller, buy)
                     if gain < required_gain:
                         continue
 

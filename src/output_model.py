@@ -203,6 +203,43 @@ def compute_dc_rates(match_df, gw, halflife_days=None, min_games_trust=None):
 # Expected points per fixture
 # ---------------------------------------------------------------------------
 
+def _is_first_choice(value):
+    """True when a set-piece order column marks this player as the primary taker."""
+    try:
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return False
+        return int(float(value)) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def _setpiece_uplift(row, minutes_sample, min_trust):
+    """
+    Extra per-90 xG/xA from set-piece duty, as ``(xg90_add, xa90_add)``.
+
+    Bootstrap knows who takes penalties; per-90 xG history does not know it until
+    the player has actually taken some. So the uplift fills the gap the history
+    cannot yet see, and tapers to zero as the player's own sample grows --
+    otherwise an established taker's penalties would be counted twice.
+    """
+    if not bool(getattr(config, "OUTPUT_APPLY_SETPIECE", True)):
+        return 0.0, 0.0
+
+    conf = min(1.0, float(minutes_sample) / min_trust) if min_trust > 0 else 1.0
+    untrusted = 1.0 - conf
+    if untrusted <= 0.0:
+        return 0.0, 0.0
+
+    xg_add = xa_add = 0.0
+    if _is_first_choice(row.get("penalties_order")):
+        xg_add += float(getattr(config, "OUTPUT_SETPIECE_PEN_XG90", 0.11))
+    if _is_first_choice(row.get("direct_freekicks_order")):
+        xg_add += float(getattr(config, "OUTPUT_SETPIECE_FK_XG90", 0.03))
+    if _is_first_choice(row.get("corners_and_indirect_freekicks_order")):
+        xa_add += float(getattr(config, "OUTPUT_SETPIECE_CORNER_XA90", 0.05))
+    return xg_add * untrusted, xa_add * untrusted
+
+
 def _resolve_pos(row):
     pos = row.get("pos")
     if isinstance(pos, str) and pos:
@@ -238,6 +275,7 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
     save_pts_per = float(getattr(config, "OUTPUT_SAVE_POINTS_PER_SAVE", 1.0 / 3.0))
     bonus_per_xgi = float(getattr(config, "OUTPUT_BONUS_PER_XGI", 0.9))
     cs_bonus_per = getattr(config, "OUTPUT_CS_BONUS_PER_CS", {})
+    min_minutes_trust = float(getattr(config, "OUTPUT_MIN_MINUTES_TRUST", 270.0))
     max_goals = float(getattr(config, "OUTPUT_MAX_GOALS_PER_GAME", 2.5))
     max_assists = float(getattr(config, "OUTPUT_MAX_ASSISTS_PER_GAME", 2.0))
     home_mult = float(getattr(config, "FDR_HOME_XG_MULT", 1.10))
@@ -262,6 +300,20 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
     el = el[el["id"].notna()].copy()
     el["id"] = el["id"].astype(int)
 
+    # League-median keeper save volume, used to turn a keeper's own saves_per_90
+    # into a ratio against the flat OUTPUT_SAVES_PER_XGA prior. Median, not mean,
+    # so a single backup with a freak rate cannot move the baseline.
+    apply_save_rate = bool(getattr(config, "OUTPUT_APPLY_KEEPER_SAVE_RATE", True))
+    save_ratio_clamp = tuple(getattr(config, "OUTPUT_SAVE_RATIO_CLAMP", (0.6, 1.6)))
+    median_saves90 = None
+    if apply_save_rate and "saves_per_90" in el.columns and "element_type" in el.columns:
+        keepers = pd.to_numeric(
+            el.loc[pd.to_numeric(el["element_type"], errors="coerce") == 1, "saves_per_90"],
+            errors="coerce").dropna()
+        keepers = keepers[keepers > 0]
+        if not keepers.empty:
+            median_saves90 = float(keepers.median())
+
     rows = []
     for _, r in el.iterrows():
         pid = int(r["id"])
@@ -279,9 +331,17 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
         if pid in rates.index:
             xg90 = float(rates.loc[pid, "xg90"])
             xa90 = float(rates.loc[pid, "xa90"])
+            minutes_sample = float(rates.loc[pid, "minutes_sample"]) if (
+                "minutes_sample" in rates.columns) else 0.0
         else:
             xg90 = float(getattr(config, "OUTPUT_POSITION_BASE_XG90", {}).get(pos, 0.05))
             xa90 = float(getattr(config, "OUTPUT_POSITION_BASE_XA90", {}).get(pos, 0.05))
+            minutes_sample = 0.0
+
+        # Set-piece duty the per-90 history cannot see yet.
+        xg_add, xa_add = _setpiece_uplift(r, minutes_sample, min_minutes_trust)
+        xg90 += xg_add
+        xa90 += xa_add
 
         # Minutes projection.
         if pid in mins.index:
@@ -296,6 +356,9 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
         minutes_frac = exp_min / 90.0
 
         exp_goals = exp_assists = clean_sheet = conceded = saves = 0.0
+        # P(no clean sheet in any fixture). Tracked as a product so a DGW yields a
+        # real probability -- summing per-fixture clean-sheet odds can exceed 1.
+        cs_none = 1.0
         for it in fixtures_for_team:
             opp = int(it.get("opp"))
             is_home = bool(it.get("is_home"))
@@ -308,12 +371,16 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
 
             # Defensive: team's expected xG-against this fixture.
             _, team_xga = fixture_difficulty.expected_xg_for_fixture(ratings, team_id, opp, is_home)
-            clean_sheet += np.exp(-max(0.0, team_xga)) * prob_60  # Poisson P(0 conceded), need 60'
+            cs_fixture = np.exp(-max(0.0, team_xga)) * prob_60  # Poisson P(0 conceded), need 60'
+            clean_sheet += cs_fixture      # expected COUNT of clean sheets -> points
+            cs_none *= (1.0 - min(1.0, max(0.0, cs_fixture)))  # -> P(at least one)
             conceded += team_xga
             saves += team_xga * saves_per_xga
 
         exp_goals = float(np.clip(exp_goals, 0.0, max_goals))
         exp_assists = float(np.clip(exp_assists, 0.0, max_assists))
+
+        dc_rate = float(dcr.loc[pid, "dc_clear_rate"]) if pid in dcr.index else 0.0
 
         # Points by source.
         pts_appearance = prob_appear * 1.0 + prob_60 * 1.0  # 1 for playing, +1 for 60'
@@ -322,10 +389,23 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
         pts_cs = float(cs_pts.get(pos, 0)) * clean_sheet
         # Conceded penalty applies to GKP/DEF, scaled by playing 60'.
         pts_conceded = float(conceded_pen.get(pos, 0.0)) * (conceded / 2.0) * prob_60
-        pts_saves = (saves * save_pts_per * prob_60) if pos == "GKP" else 0.0
+        # Keeper save volume varies far more between keepers than a flat
+        # saves-per-xGA constant allows. Scale by the keeper's own rate relative
+        # to the league median, shrunk toward 1.0 while their sample is thin, and
+        # clamped so an outlier cannot run away with it.
+        save_ratio = 1.0
+        if pos == "GKP" and median_saves90:
+            own_saves90 = pd.to_numeric(pd.Series([r.get("saves_per_90")]),
+                                        errors="coerce").iloc[0]
+            if pd.notna(own_saves90) and float(own_saves90) > 0:
+                raw = float(own_saves90) / median_saves90
+                conf = (min(1.0, minutes_sample / min_minutes_trust)
+                        if min_minutes_trust > 0 else 1.0)
+                shrunk = conf * raw + (1.0 - conf) * 1.0
+                save_ratio = float(np.clip(shrunk, save_ratio_clamp[0], save_ratio_clamp[1]))
+        pts_saves = (saves * save_ratio * save_pts_per * prob_60) if pos == "GKP" else 0.0
         # Defensive-contribution points: banked only in a 60'+ appearance, so
         # scale the clearance rate by prob_60 the same way clean sheets are.
-        dc_rate = float(dcr.loc[pid, "dc_clear_rate"]) if pid in dcr.index else 0.0
         pts_dc = dc_points * dc_rate * prob_60
         # Attacking bonus (goals/assists BPS) + defensive bonus (clean-sheet /
         # clearance / block BPS) so defenders/keepers aren't left with only
@@ -336,9 +416,30 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
         total = (pts_appearance + pts_goals + pts_assists + pts_cs
                  + pts_conceded + pts_saves + pts_bonus + pts_dc)
 
+        # Component probabilities. These are the quantities a manager actually
+        # reasons about; the model already computes them, so surface them rather
+        # than collapsing everything into a single mean.
+        # Poisson P(at least one) from the expected count.
+        p_goal = float(1.0 - np.exp(-exp_goals))
+        p_assist = float(1.0 - np.exp(-exp_assists))
+        p_clean_sheet = float(1.0 - cs_none)
+        # DC points need a 60' appearance, same gate the points term applies.
+        p_dc = float(dc_rate * prob_60)
+
         rows.append({
             "id": pid,
+            "pos": pos,
             "exp_points": float(total),
+            "p_goal": p_goal,
+            "p_assist": p_assist,
+            "p_clean_sheet": p_clean_sheet,
+            "p_appear": float(prob_appear),
+            "p_60": float(prob_60),
+            "p_dc": p_dc,
+            # Expected COUNT of clean sheets (>1 possible in a DGW) and the
+            # fixture count, so a points distribution can reproduce this mean.
+            "exp_clean_sheets": float(clean_sheet),
+            "n_fixtures": int(len(fixtures_for_team)),
             "ep_appearance": float(pts_appearance),
             "ep_goals": float(pts_goals),
             "ep_assists": float(pts_assists),

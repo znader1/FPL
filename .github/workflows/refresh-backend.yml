@@ -33,6 +33,19 @@ jobs:
             -H "X-API-Key: ${FPL_ADMIN_KEY}" \
             -d '{"run_snapshot": true}' | tee refresh-response.json
 
+      - name: Refresh staging API caches and snapshot
+        continue-on-error: true
+        env:
+          FPL_DEV_API_BASE_URL: ${{ secrets.FPL_DEV_API_BASE_URL }}
+          FPL_DEV_ADMIN_KEY: ${{ secrets.FPL_DEV_ADMIN_KEY }}
+        run: |
+          if [ -z "$FPL_DEV_API_BASE_URL" ] || [ -z "$FPL_DEV_ADMIN_KEY" ]; then
+            echo "Staging refresh skipped: FPL_DEV_* secrets not set"; exit 0
+          fi
+          curl -fsS -m 300 -X POST "${FPL_DEV_API_BASE_URL%/}/admin/refresh" \
+            -H "Content-Type: application/json" -H "X-API-Key: ${FPL_DEV_ADMIN_KEY}" \
+            -d '{"run_snapshot": true}' | tee staging-refresh-response.json
+
       - name: Print next deadline summary
         env:
           FPL_API_BASE_URL: ${{ secrets.FPL_API_BASE_URL }}

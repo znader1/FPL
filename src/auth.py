@@ -113,9 +113,31 @@ def check_api_key(x_api_key=None, authorization=None, api_key=None):
     return JSONResponse(status_code=401, content={"error": "Unauthorized"})
 
 
+def authenticated_subject(x_api_key=None, authorization=None):
+    """Identify the authenticated caller, or None if unauthenticated.
+
+    Returns ``{"kind": "user", "sub": <supabase user id>}`` for a valid user
+    JWT, or ``{"kind": "service", "sub": None}`` for the static server-to-server
+    key. ``check_api_key`` only answers *whether* a caller is authenticated;
+    ownership checks need to know *who*, so routes that write per-user data must
+    use this instead of trusting a client-supplied entry_id.
+    """
+    token = _bearer(authorization)
+    if token:
+        claims = verify_supabase_jwt(token)
+        if claims is not None:
+            return {"kind": "user", "sub": claims.get("sub")}
+    if _static_key_ok(x_api_key):
+        return {"kind": "service", "sub": None}
+    return None
+
+
 def check_admin_key(x_api_key=None, authorization=None, api_key=None):
     """Require the static admin key. Fails closed if none is configured."""
-    required = (os.environ.get("FPL_ADMIN_KEY") or os.environ.get("FPL_API_KEY") or "").strip()
+    # Deliberately NOT falling back to FPL_API_KEY: that key is accepted on every
+    # user route, so the fallback silently promoted any user-key holder to admin.
+    # See docs/prelaunch_audit_2026-09-12.md (C5).
+    required = (os.environ.get("FPL_ADMIN_KEY") or "").strip()
     if not required:
         return JSONResponse(status_code=503, content={"error": "Admin key not configured"})
     for candidate in (str(x_api_key).strip() if x_api_key is not None else "", _bearer(authorization) or ""):

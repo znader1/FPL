@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 
 from . import config
@@ -94,9 +96,17 @@ def _prepare_chip_market(elements_all, score_col, shape):
     if score_col not in elements_all.columns:
         return pd.DataFrame()
 
-    cols = ["id", "web_name", "pos", "team", "team_short", "team_name", "price_m", "now_cost", score_col]
+    cols = ["id", "web_name", "pos", "team", "team_short", "team_name", "price_m", "now_cost",
+            "status", "minutes", "selected_by_percent", score_col]
     keep = [c for c in cols if c in elements_all.columns]
     market = elements_all[keep].copy()
+
+    # Injured / suspended / unavailable players never belong in a chip draft —
+    # not in the XI and not as bench fodder. Column-guarded: engine callers
+    # whose markets carry no status column are unaffected.
+    if "status" in market.columns:
+        excluded = tuple(getattr(config, "CHIP_MARKET_EXCLUDE_STATUS", ("i", "s", "u")))
+        market = market[~market["status"].astype(str).str.lower().isin(excluded)].copy()
 
     market["id"] = pd.to_numeric(market.get("id"), errors="coerce")
     market["team"] = pd.to_numeric(market.get("team"), errors="coerce")
@@ -123,6 +133,23 @@ def _prepare_chip_market(elements_all, score_col, shape):
     market = market[market["price_m"] > 0].copy()
     market = market.sort_values(["chip_score", "price_m"], ascending=[False, True]).reset_index(drop=True)
     return market
+
+
+def _apply_differential(market):
+    """Differential draft mode: dock each candidate's score by
+    CHIP_DIFF_OWNERSHIP_WEIGHT × ownership, so near-equal low-owned players
+    displace the template. No-op when ownership data is missing."""
+    if market is None or market.empty or "selected_by_percent" not in market.columns:
+        return market
+    w = float(getattr(config, "CHIP_DIFF_OWNERSHIP_WEIGHT", 0.35))
+    own = (
+        pd.to_numeric(market["selected_by_percent"], errors="coerce").fillna(0.0) / 100.0
+    ).clip(0.0, 1.0)
+    out = market.copy()
+    out["chip_score"] = out["chip_score"] * (1.0 - w * own)
+    return out.sort_values(
+        ["chip_score", "price_m"], ascending=[False, True]
+    ).reset_index(drop=True)
 
 
 def _replace_row(selected, idx, cand):
@@ -384,7 +411,47 @@ def _ensure_min_premium_attackers(
     return out, final_ok
 
 
-def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
+_H2H_DEFENSIVE_POS = {"GKP", "DEF"}
+
+
+def _bench_sort(pool):
+    """Bench-fodder ordering: players with at least CHIP_BENCH_MIN_MINUTES
+    season minutes come first (cheap is fine, ghosts are not), then price
+    ascending, then WORST scorer so a price tie never eats an XI candidate.
+    Preference, not a filter — a thin market falls through to the ghosts."""
+    pool = pool.copy()
+    floor = float(getattr(config, "CHIP_BENCH_MIN_MINUTES", 90.0))
+    if "minutes" in pool.columns:
+        pool["_bench_pref"] = (
+            pd.to_numeric(pool["minutes"], errors="coerce").fillna(0.0) >= floor
+        )
+    else:
+        pool["_bench_pref"] = True
+    return pool.sort_values(
+        ["_bench_pref", "price_m", "chip_score"],
+        ascending=[False, True, True],
+        kind="mergesort",
+    )
+
+
+def _h2h_conflict_count(row, picked_rows, opponents):
+    """Count GK/DEF↔attacker pairs between `row` and already-picked XI rows
+    whose teams face each other this GW — own players cancelling each other."""
+    if not opponents:
+        return 0
+    row_defensive = row["pos"] in _H2H_DEFENSIVE_POS
+    row_opps = opponents.get(int(row["team"])) or ()
+    n = 0
+    for r in picked_rows:
+        if (r["pos"] in _H2H_DEFENSIVE_POS) == row_defensive:
+            continue
+        if int(r["team"]) in row_opps:
+            n += 1
+    return n
+
+
+def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None, opponents=None,
+                         differential=False):
     """
     Build a legal free-hit 15-man squad optimised for a single gameweek.
 
@@ -394,6 +461,11 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
     - Bench (4 slots): fill with the cheapest legal players in the required
       positions (1 GKP + remaining outfield to complete the shape), keeping
       budget available for the XI.
+    - Head-to-head hedge: with an `opponents` map ({team_id: opponent ids this
+      GW}), a candidate is docked CHIP_H2H_CONFLICT_PENALTY per own XI player
+      it directly opposes (GK/DEF vs attacker), so the draft avoids picks that
+      cancel each other unless one is clearly better. Surviving pairs are
+      returned as `h2h_conflicts`.
 
     This reflects real free-hit usage: the bench only exists to satisfy the
     squad rules, not to score points.
@@ -408,45 +480,72 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
     )
     if market.empty:
         return {"ok": False, "reason": f"Market missing columns or score `{score_col}`.", "squad_df": None}
+    if differential:
+        market = _apply_differential(market)
 
     # --- Step 1: pick bench fillers first (cheapest per position) ---
     # Bench shape: 1 GKP + enough outfield to complete the 15.
     # We defer deciding the exact outfield bench split until after picking the XI.
-    # Cheapest available GKP for bench slot.
-    gkp_pool = market[market["pos"] == "GKP"].sort_values("price_m", ascending=True)
+    # Cheapest available GKP for bench slot. The XI keeper is NOT price-picked —
+    # it competes on chip_score inside the XI loop below like every other XI
+    # slot (a price-ranked XI keeper meant a random 4.0m backup started every
+    # free hit). Bench ordering prefers fodder that actually plays (minutes
+    # floor), then cheapest, then the worst scorer of a price tie — leaving
+    # better keepers for the XI.
+    gkp_pool = market[market["pos"] == "GKP"]
     if len(gkp_pool) < 2:
         return {"ok": False, "reason": "Not enough GKPs in market.", "squad_df": None}
 
-    bench_gkp = gkp_pool.iloc[[0]]  # cheapest GKP
-    xi_gkp = gkp_pool.iloc[[1]]     # second GKP goes to XI
+    bench_gkp = _bench_sort(gkp_pool).iloc[[0]]
 
     # --- Step 2: pick best XI across all valid formations ---
     best_xi = None
     best_xi_score = -1.0
     best_formation = None
 
-    # Outfield pool excludes both GKPs already assigned
-    used_ids = set(bench_gkp["id"].astype(int).tolist() + xi_gkp["id"].astype(int).tolist())
+    used_ids = set(bench_gkp["id"].astype(int).tolist())
 
     for d, m, f in VALID_FORMATIONS:
         # Need d DEF + m MID + f FWD in XI, then bench = (5-d) DEF + (5-m) MID + (3-f) FWD
         bench_d, bench_m, bench_f = 5 - d, 5 - m, 3 - f
 
-        # Pick bench outfielders (cheapest) first to know budget left for XI
+        # Pick bench outfielders (cheapest) first to know budget left for XI.
+        # Two passes per position: the first prefers teams not already on the
+        # bench (so one postponement can't wipe several subs), but only at
+        # the cheapest available price (+ configurable margin) — diversity is
+        # never allowed to inflate the bench cost. The second pass fills
+        # whatever the diversity preference couldn't.
         bench_outfield = []
         team_counts_bench = _team_counts(bench_gkp)
+        bench_teams = set(team_counts_bench.keys())
+        diversity_extra = float(getattr(config, "CHIP_BENCH_DIVERSITY_MAX_EXTRA_M", 0.0))
         ok = True
         for pos, need in [("DEF", bench_d), ("MID", bench_m), ("FWD", bench_f)]:
-            pool = market[
+            pool = _bench_sort(market[
                 (market["pos"] == pos)
                 & (~market["id"].astype(int).isin(used_ids | {r["id"] for r in bench_outfield}))
-            ].sort_values("price_m", ascending=True)
+            ])
+            min_price = float(pool["price_m"].min()) if len(pool) else 0.0
             picked = []
-            for _, row in pool.iterrows():
-                t = int(row["team"])
-                if team_counts_bench.get(t, 0) < max_per_team:
-                    picked.append(row)
-                    team_counts_bench[t] = team_counts_bench.get(t, 0) + 1
+            picked_ids = set()
+            for prefer_distinct in (True, False):
+                for _, row in pool.iterrows():
+                    if len(picked) == need:
+                        break
+                    t = int(row["team"])
+                    rid = int(row["id"])
+                    if rid in picked_ids:
+                        continue
+                    if prefer_distinct and (
+                        t in bench_teams
+                        or float(row["price_m"]) > min_price + diversity_extra
+                    ):
+                        continue
+                    if team_counts_bench.get(t, 0) < max_per_team:
+                        picked.append(row)
+                        picked_ids.add(rid)
+                        team_counts_bench[t] = team_counts_bench.get(t, 0) + 1
+                        bench_teams.add(t)
                 if len(picked) == need:
                     break
             if len(picked) < need:
@@ -467,25 +566,56 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
 
         bench_ids = used_ids | {int(r["id"]) for r in bench_outfield}
 
-        # Pick XI outfielders (best by score within xi_budget)
-        xi_outfield = []
-        team_counts_xi = _team_counts(xi_gkp)
+        # Pick the XI (best by score within xi_budget). The keeper slot is
+        # score-picked here exactly like the outfield slots. Order matters for
+        # the H2H hedge: outfield first, keeper last, so the GK choice can see
+        # which attackers it would directly oppose. Conflicts only pair
+        # defensive picks (GK/DEF) with attackers, so within one position
+        # group the penalty is constant and can be computed per pool.
+        h2h_penalty = float(getattr(config, "CHIP_H2H_CONFLICT_PENALTY", 0.75))
+        xi_rows = []
+        team_counts_xi = {}
         # Merge bench team counts since they share the same 15-man squad
         for t, c in team_counts_bench.items():
             team_counts_xi[t] = team_counts_xi.get(t, 0) + c
 
         xi_ok = True
-        xi_cost = float(xi_gkp["price_m"].sum())
-        for pos, need in [("DEF", d), ("MID", m), ("FWD", f)]:
+        total_xi_slots = 1 + d + m + f
+        for pos, need in [("DEF", d), ("MID", m), ("FWD", f), ("GKP", 1)]:
             pool = market[
                 (market["pos"] == pos)
-                & (~market["id"].astype(int).isin(bench_ids | {int(r["id"]) for r in xi_outfield}))
-            ].sort_values("chip_score", ascending=False)
+                & (~market["id"].astype(int).isin(bench_ids | {int(r["id"]) for r in xi_rows}))
+            ].copy()
+            pool["_adj"] = pool["chip_score"]
+            if len(pool):
+                if opponents:
+                    pool["_adj"] = pool["_adj"] - h2h_penalty * pool.apply(
+                        lambda r: _h2h_conflict_count(r, xi_rows, opponents), axis=1
+                    )
+                # Soft attacker-stack limit: from the Nth same-team attacker
+                # already in the XI, the next one pays a penalty — stacking
+                # survives only when clearly better than the spread option.
+                stack_pen = float(getattr(config, "CHIP_ATTACKER_STACK_PENALTY", 0.6))
+                stack_lim = int(getattr(config, "CHIP_ATTACKER_STACK_SOFT_LIMIT", 2))
+                if pos in ("MID", "FWD") and stack_pen > 0:
+                    atk_counts: dict[int, int] = {}
+                    for r in xi_rows:
+                        if r["pos"] in ("MID", "FWD"):
+                            rt = int(r["team"])
+                            atk_counts[rt] = atk_counts.get(rt, 0) + 1
+                    pool["_adj"] = pool["_adj"] - pool["team"].astype(int).map(
+                        lambda t: stack_pen if atk_counts.get(t, 0) >= stack_lim else 0.0
+                    )
+            pool = pool.sort_values("_adj", ascending=False, kind="mergesort")
             picked = []
             for _, row in pool.iterrows():
                 t = int(row["team"])
-                cost_so_far = xi_cost + sum(float(r["price_m"]) for r in xi_outfield) + float(row["price_m"])
-                remaining_slots = (d + m + f) - len(xi_outfield) - 1
+                cost_so_far = (
+                    sum(float(r["price_m"]) for r in xi_rows)
+                    + sum(float(r["price_m"]) for r in picked)
+                    + float(row["price_m"])
+                )
+                remaining_slots = total_xi_slots - len(xi_rows) - len(picked) - 1
                 # rough budget check: leave min budget for remaining slots
                 if cost_so_far + remaining_slots * 4.0 > xi_budget:
                     continue
@@ -497,19 +627,21 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
             if len(picked) < need:
                 xi_ok = False
                 break
-            xi_outfield.extend(picked)
+            xi_rows.extend(picked)
 
         if not xi_ok:
             continue
 
-        xi_score = float(xi_gkp["chip_score"].sum()) + sum(float(r["chip_score"]) for r in xi_outfield)
+        # Compare formations on the hedge-adjusted score so a formation that
+        # avoids self-cancelling picks can beat a raw-score-equal one.
+        xi_score = sum(float(r["_adj"]) for r in xi_rows)
         if xi_score > best_xi_score:
             best_xi_score = xi_score
             best_formation = (d, m, f)
             best_xi = pd.concat(
-                [xi_gkp] + [pd.DataFrame([r]) for r in xi_outfield],
+                [pd.DataFrame([r]) for r in xi_rows],
                 ignore_index=True,
-            )
+            ).drop(columns=["_adj"])
             best_bench = pd.concat(
                 [bench_gkp] + [pd.DataFrame([r]) for r in bench_outfield],
                 ignore_index=True,
@@ -519,6 +651,9 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
         return {"ok": False, "reason": "Could not build a valid free-hit XI under budget.", "squad_df": None}
 
     selected = pd.concat([best_xi, best_bench], ignore_index=True)
+    selected = selected.drop(
+        columns=[c for c in ("_bench_pref", "_adj") if c in selected.columns]
+    )
     selected = selected.copy().reset_index(drop=True)
     selected["player_id"] = selected["id"].astype(int)
     selected["multiplier"] = 0
@@ -528,9 +663,38 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None):
     cost = float(pd.to_numeric(selected["price_m"], errors="coerce").fillna(0.0).sum())
     xi_score_total = float(pd.to_numeric(best_xi["chip_score"], errors="coerce").fillna(0.0).sum())
 
+    # Surviving head-to-head pairs in the chosen XI (penalty applied but the
+    # conflicted pick still won) — surfaced so the UI can badge them.
+    h2h_conflicts = []
+    if opponents:
+        defensive = best_xi[best_xi["pos"].isin(_H2H_DEFENSIVE_POS)]
+        attackers = best_xi[~best_xi["pos"].isin(_H2H_DEFENSIVE_POS)]
+        for _, drow in defensive.iterrows():
+            opps = opponents.get(int(drow["team"])) or ()
+            for _, arow in attackers.iterrows():
+                if int(arow["team"]) in opps:
+                    h2h_conflicts.append({
+                        "defender": str(drow.get("web_name", drow.get("id"))),
+                        "attacker": str(arow.get("web_name", arow.get("id"))),
+                        "defender_team": int(drow["team"]),
+                        "attacker_team": int(arow["team"]),
+                    })
+
+    reason = (
+        f"Free-hit draft built: {best_formation[0]}-{best_formation[1]}-{best_formation[2]} "
+        f"formation, XI xPts={round(xi_score_total, 1)}."
+    )
+    if h2h_conflicts:
+        pair_txt = "; ".join(f"{p['defender']} vs {p['attacker']}" for p in h2h_conflicts[:3])
+        reason += (
+            f" H2H note: {len(h2h_conflicts)} own-player pair(s) face each other this GW"
+            f" ({pair_txt}) — kept despite the hedge penalty."
+        )
+
     return {
         "ok": True,
-        "reason": f"Free-hit draft built: {best_formation[0]}-{best_formation[1]}-{best_formation[2]} formation, XI xPts={round(xi_score_total, 1)}.",
+        "reason": reason,
+        "h2h_conflicts": h2h_conflicts,
         "objective_score_col": score_col,
         "budget_m": float(round(budget_m, 2)),
         "squad_cost_m": float(round(cost, 2)),
@@ -549,12 +713,14 @@ def build_chip_squad(
     min_premium_attackers=0,
     premium_floor=0.0,
     premium_positions=None,
+    differential=False,
 ):
     """
     Build a legal 15-man draft for wildcard/free-hit under budget and team caps.
 
     The draft squad objective is `score_col` (for example `xpts_horizon` for wildcard,
     or `xpts_gwXX` for free hit), while the final XI can still be optimized separately.
+    `differential=True` docks scores by ownership (see _apply_differential).
     """
     shape_map = _chip_shape(shape)
     max_per_team = int(max_per_team or getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3)
@@ -562,6 +728,8 @@ def build_chip_squad(
     market = _prepare_chip_market(elements_all, score_col=score_col, shape=shape_map)
     if market.empty:
         return {"ok": False, "reason": f"Market missing columns or score `{score_col}`.", "squad_df": None}
+    if differential:
+        market = _apply_differential(market)
 
     for pos, need in shape_map.items():
         have = int((market["pos"] == pos).sum())
@@ -660,8 +828,16 @@ def merge_scores(squad_df, projections_df, score_col):
     for c in ["price_m", "form", "penalties_order"]:
         if c in projections_df.columns:
             optional_cols.append(c)
+    # Matching per-GW fixture difficulty (diff_avg_gw{N} for xpts_gw{N}) rides
+    # along as `fixture_difficulty` so the captain pick can see the fixture.
+    rename = {"id": "player_id", score_col: "xpts"}
+    m = re.match(r"xpts_gw(\d+)$", str(score_col))
+    if m and f"diff_avg_gw{m.group(1)}" in projections_df.columns:
+        diff_col = f"diff_avg_gw{m.group(1)}"
+        optional_cols.append(diff_col)
+        rename[diff_col] = "fixture_difficulty"
     proj = projections_df[["id", score_col] + optional_cols].copy()
-    proj = proj.rename(columns={"id": "player_id", score_col: "xpts"})
+    proj = proj.rename(columns=rename)
     df = df.merge(proj, on="player_id", how="left")
     df["xpts"] = pd.to_numeric(df["xpts"], errors="coerce").fillna(0.0)
     if "price_m" in df.columns:
@@ -742,6 +918,15 @@ def optimize_lineup(squad_df, projections_df, score_col, formations=None):
                     float(config.CAPTAIN_SET_PIECE_PENALTY_WEIGHT)
                     if to_number(r.get("penalties_order"), 99.0) == 1.0
                     and str(r.get("pos")) in ["MID", "FWD"]
+                    else 0.0
+                )
+                + (
+                    # Ceiling term: captaincy pays on hauls, and hauls die in
+                    # D4/D5 fixtures faster than the mean does. ± per FDR
+                    # step from neutral 3 — flips near-ties, never a monster.
+                    (3.0 - to_number(r.get("fixture_difficulty"), 3.0))
+                    * float(getattr(config, "CAPTAIN_FIXTURE_DIFFICULTY_WEIGHT", 0.35))
+                    if str(r.get("pos")) in ["MID", "FWD"]
                     else 0.0
                 )
             ),
