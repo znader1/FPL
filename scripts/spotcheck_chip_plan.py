@@ -39,11 +39,34 @@ def main():
     )
     print(json.dumps(plan, indent=2, default=str))
     print("\n--- summary ---")
+    print("signals:", plan.get("signals"))
     for r in plan["recommendations"]:
-        tag = "PROVISIONAL" if r["provisional"] else f"+{r['ev_gain']} xPts"
+        if r["provisional"]:
+            lik = r.get("likelihood")
+            tag = "PROVISIONAL" + (f" (~{lik:.0%} likely)" if lik is not None and lik < 1 else "")
+        else:
+            tag = f"+{r['ev_gain']} xPts"
         print(f"{r['chip']:16s} GW{r['event_id']:<3d} {tag}")
+        d = r.get("distribution")
+        if d:
+            print(f"{'':16s}       beats bar {d.get('p_beats_bar', 0):.0%} · return {d['p_return']:.0%}"
+                  f" · haul {d['p_haul']:.0%} · blank {d['p_blank']:.0%}"
+                  f" · modal {d['modal']} · 80% band {d['p80_low']}-{d['p80_high']}")
+        for reason in r["reasons"]:
+            if reason.startswith("Risk:") or "European" in reason or "League" in reason:
+                print(f"{'':16s}       {reason}")
+    print("--- outlook (hold) ---")
+    for o in plan.get("outlook", []):
+        if o["status"] != "hold":
+            continue
+        d = o.get("distribution") or {}
+        odds = f" · beats bar {d['p_beats_bar']:.0%}" if "p_beats_bar" in d else ""
+        where = f"GW{o['event_id']} +{o['ev_gain']} vs bar {o['bar']}" if o["event_id"] else "no window"
+        print(f"{o['chip']:16s} {where}{odds}")
     if plan["nudge"]:
-        print(f"NUDGE: {plan['nudge']['chip']} this GW (+{plan['nudge']['ev_gain']})")
+        n = plan["nudge"]
+        odds = f", {n['p_beats_bar']:.0%} beats bar" if "p_beats_bar" in n else ""
+        print(f"NUDGE: {n['chip']} this GW (+{n['ev_gain']}{odds})")
     print("\n--- calendar (model zone) ---")
     for row in plan.get("calendar", []):
         if not row["in_model_zone"]:
