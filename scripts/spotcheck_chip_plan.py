@@ -6,7 +6,7 @@ import json
 import sys
 
 from api.chat import _build_context_for_entry
-from api.chips import _get_entry_chips, _resolve_current_gw, build_chip_signals
+from api.chips import SIGNAL_KEYS, _get_entry_chips, _resolve_current_gw, build_chip_signals
 from api.main import get_bootstrap_cached
 from src import config
 from src.chip_advisor import build_chip_plan
@@ -21,13 +21,12 @@ def main():
     # Same signal-building approach as api/chips.py::_build_plan_response —
     # shared via build_chip_signals so the two never drift out of sync.
     # Fail-soft: a signals failure must never block the spot-check.
-    breaks = team_difficulty_by_gw = swings = xgi_per90 = None
+    signals = {}
     try:
         bootstrap = get_bootstrap_cached()
-        breaks, team_difficulty_by_gw, swings, xgi_per90 = build_chip_signals(
-            bootstrap, current_gw, horizon)
+        signals = build_chip_signals(bootstrap, current_gw, horizon)
     except Exception as e:  # noqa: BLE001 - signals must never fail the spot-check
-        breaks = team_difficulty_by_gw = swings = xgi_per90 = None
+        signals = {}
         print(f"WARNING: chip strategy signals unavailable: {e}", file=sys.stderr)
 
     plan = build_chip_plan(
@@ -36,10 +35,7 @@ def main():
         chips_played=_get_entry_chips(entry_id),
         itb_m=float(ctx["bank_m"]), fixtures=ctx.get("fixtures"),
         horizon_gws=horizon,
-        breaks=breaks,
-        team_difficulty_by_gw=team_difficulty_by_gw,
-        swings=swings,
-        xgi_per90=xgi_per90,
+        **{k: signals.get(k) for k in SIGNAL_KEYS},
     )
     print(json.dumps(plan, indent=2, default=str))
     print("\n--- summary ---")
@@ -48,6 +44,22 @@ def main():
         print(f"{r['chip']:16s} GW{r['event_id']:<3d} {tag}")
     if plan["nudge"]:
         print(f"NUDGE: {plan['nudge']['chip']} this GW (+{plan['nudge']['ev_gain']})")
+    print("\n--- calendar (model zone) ---")
+    for row in plan.get("calendar", []):
+        if not row["in_model_zone"]:
+            continue
+        flags = []
+        if row["post_break"]:
+            flags.append("post-break")
+        if row["has_dgw"]:
+            flags.append("DGW")
+        if row["is_blank_heavy"]:
+            flags.append("BGW")
+        if row["squad_european"]:
+            flags.append(f"{len(row['squad_european'])} in Europe")
+        if row["cup_clash"]:
+            flags.append(f"cup: {row['cup_clash']['label']}")
+        print(f"GW{row['gw']:<3d} {', '.join(flags) or '-'}")
 
 
 if __name__ == "__main__":

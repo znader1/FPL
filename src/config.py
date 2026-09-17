@@ -293,6 +293,33 @@ CHIP_PLAN_FH_TOUGH_DIFFICULTY = 4.0  # ticker difficulty counting as "tough"
 # engine's FDR multipliers; keyed on round(difficulty)).
 CHIP_PLAN_TC_DIFF_MULT = {1: 1.25, 2: 1.12, 3: 1.0, 4: 0.88, 5: 0.75}
 
+# European midweek congestion (src/european.py). The FPL API knows nothing
+# about the Champions League / Europa / Conference calendar, so the team list
+# and matchday dates are user-maintained in data/models/european_calendar.json
+# (same pattern as knowledge_discount.json). A team is "in a European week"
+# for a GW when one of its competition's matchdays falls inside the GW's
+# window (deadline -> next deadline) or in the EURO_WINDOW_BEFORE_DAYS before
+# the deadline (the midweek leading into the GW: fatigue + late rotation).
+CHIP_PLAN_EURO_WINDOW_BEFORE_DAYS = 5
+CHIP_PLAN_EURO_XPTS_MULT = 0.95          # rotation/fatigue haircut on every player of a team in a European week (1.0 = off); applied to BOTH the squad and the market side of a chip comparison
+CHIP_PLAN_EURO_CONFIDENCE_MULT = 0.90    # confidence haircut when the TC captain / >=EURO_BB_MIN_BENCH BB bench players are in European weeks
+CHIP_PLAN_EURO_BB_MIN_BENCH = 2          # bench players in European weeks before BB confidence is cut
+CHIP_PLAN_CUP_CLASH_BLANK_PROB = 0.70    # structural zone: likelihood an FA Cup clash weekend becomes a blank GW before FPL announces it
+
+# Per-GW points distributions for chip EV (src/chip_distribution.py). The EV
+# stays the mean; these describe its shape (P(return), P(haul), P(blank),
+# P(chip beats its bar)). Discrete events come from the same convolution the
+# player cards use (points_distribution.player_points_pmf); the goal/assist/CS
+# lambdas are scaled so the pmf mean matches the engine's blended xPts minus
+# the continuous share (bonus, saves, goals-conceded) that the pmf excludes.
+CHIP_PLAN_DIST_CONTINUOUS_SHARE = {"GKP": 0.25, "DEF": 0.12, "MID": 0.10, "FWD": 0.10}
+CHIP_PLAN_DIST_RETURN_AT = 6             # "return" = at least this many points in the GW
+CHIP_PLAN_DIST_HAUL_AT = 10              # "haul" = at least this many points
+CHIP_PLAN_DIST_BLANK_AT = 2              # "blank" = at most this many points
+CHIP_PLAN_DIST_PRIOR_WEIGHT = 2.0        # pseudo-GWs of MINUTES_START_PRIOR mixed into a player's start rate
+CHIP_PLAN_DIST_MINUTES_SHARE = 0.85      # E[minutes]/90 given an appearance, for the per-GW lambda
+CHIP_PLAN_CS_PROB_BY_DIFF = {1: 0.50, 2: 0.42, 3: 0.33, 4: 0.25, 5: 0.18}  # per-fixture clean-sheet prob by round(difficulty)
+
 # Fixture swing detection (src/fixture_difficulty.py -> compute_fixture_swings)
 SWING_WINDOW_GWS = 3            # fixture-swing comparison window (before vs after)
 SWING_MIN_DELTA = 0.8           # min avg-difficulty delta to call a swing

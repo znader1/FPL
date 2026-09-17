@@ -252,3 +252,81 @@ def test_signal_failure_resets_all_signals(monkeypatch):
     assert tc_recs and "haul_prob" not in tc_recs[0], (
         "xgi_per90 leaked through a partial signal failure")
     app.dependency_overrides = {}
+
+
+def test_plan_response_carries_calendar_distribution_and_european_signal(monkeypatch, tmp_path):
+    """The 2026-09-17 signals reach the engine through build_chip_signals:
+    a calendar file naming the boosted captain's team as a UCL side (with a
+    matchday 3 days before GW5's deadline) must produce a TC rec whose risks
+    name the Champions League, a per-GW distribution (priors come from the
+    bootstrap elements) and calendar rows flagging the European week."""
+    import json
+    from api.main import app
+    from api import chips as chips_module
+    import api.main as main_module
+    from src.auth import require_user
+
+    current_gw = 5
+    base = pd.Timestamp("2026-09-12T10:00:00Z")
+
+    def _fake_bootstrap():
+        events = [{"id": eid, "deadline_time": (base + pd.Timedelta(days=7 * (eid - 1))).isoformat(),
+                   "finished": eid < current_gw}
+                  for eid in range(1, 13)]
+        teams = [{"id": 3, "name": "T3", "short_name": "TTT"}]
+        elements = [{"id": pid, "element_type": 4 if pid == 13 else 3,
+                     "expected_goals_per_90": 0.6, "expected_assists_per_90": 0.3,
+                     "starts": 4, "chance_of_playing_next_round": None, "status": "a"}
+                    for pid in range(1, 16)]
+        return {"events": events, "teams": teams, "elements": elements}
+
+    def _fake_ticker(gw_start=None, horizon_gws=6):
+        gws = list(range(gw_start, gw_start + horizon_gws))
+        return {"gw_start": gw_start, "horizon_gws": horizon_gws, "gws": gws,
+                "teams": [{"team_id": 3, "team_short": "TTT",
+                           "gws": {gw: {"difficulty": 2.0} for gw in gws}}]}
+
+    # GW5 deadline = 12 Sep + 28d = 10 Oct; a UCL tie every Wednesday from
+    # 7 Oct sandwiches every horizon GW (a tie 3 days before its deadline AND
+    # one after its round), so every model-zone GW is a European week for T3.
+    # A single flagged GW would simply push the rec to an unflagged one — the
+    # discount doing its job — which is why the whole horizon is flagged here.
+    cal = tmp_path / "euro.json"
+    cal.write_text(json.dumps({
+        "teams": {"TTT": "ucl"},
+        "matchdays": [{"competition": "ucl", "label": f"MD{i}",
+                       "dates": [(pd.Timestamp("2026-10-07") + pd.Timedelta(days=7 * i)).strftime("%Y-%m-%d")]}
+                      for i in range(8)],
+        "cup_rounds": [],
+    }), encoding="utf-8")
+    real_build = chips_module.build_chip_signals
+    monkeypatch.setattr(chips_module, "build_chip_signals",
+                        lambda b, g, h: real_build(b, g, h, calendar_path=str(cal)))
+    monkeypatch.setattr(chips_module, "_build_context_for_entry", _fake_context_with_boosted_captain)
+    monkeypatch.setattr(chips_module, "_get_entry_chips", lambda entry_id: [])
+    monkeypatch.setattr(chips_module, "_resolve_current_gw", lambda: current_gw)
+    monkeypatch.setattr(chips_module.fpl_client, "get_bootstrap", _fake_bootstrap)
+    monkeypatch.setattr(main_module, "build_fixture_difficulty_payload", _fake_ticker)
+
+    app.dependency_overrides = {}
+    app.dependency_overrides[require_user] = lambda: {"sub": "test-user"}
+    client = TestClient(app)
+    resp = client.get("/chips/plan", params={"entry_id": 1})
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["signals"] == {
+        "breaks": False, "european_calendar": True, "cup_calendar": False,
+        "distributions": True, "european_xpts_mult": chips_module.config.CHIP_PLAN_EURO_XPTS_MULT}
+    cal_rows = {r["gw"]: r for r in body["calendar"]}
+    assert cal_rows[5]["european"] == {"ucl": ["T3"]}
+    assert cal_rows[5]["squad_european"] and cal_rows[5]["squad_european"][0]["team"] == "T3"
+    assert cal_rows[5]["deadline_utc"] is not None
+
+    tc = next(r for r in body["recommendations"] if r["chip"] == "triple_captain")
+    assert any("sandwiched between Champions League ties" in r for r in tc["reasons"])
+    # the boosted captain's 20.0 xPts carries the European haircut on the EV
+    assert abs(tc["ev_gain"] - 20.0 * chips_module.config.CHIP_PLAN_EURO_XPTS_MULT) < 1e-6
+    assert 0.0 <= tc["distribution"]["p_beats_bar"] <= 1.0
+    assert all("p_beats_bar" in p and p.get("european") for p in tc["ev_curve"])
+    app.dependency_overrides = {}

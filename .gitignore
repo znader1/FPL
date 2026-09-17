@@ -28,6 +28,7 @@ data/models/*
 !data/models/team_ratings_seed.json
 !data/models/team_ratings_*.json
 !data/models/knowledge_discount.json
+!data/models/european_calendar.json
 
 # OS
 .DS_Store

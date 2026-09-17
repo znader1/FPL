@@ -642,3 +642,188 @@ def test_build_chip_plan_outlook_excludes_used_chips():
                            chips_played=[{"name": "bboost", "event": 3}])
     chips = {o["chip"] for o in plan["outlook"]}
     assert "bench_boost" not in chips
+
+
+# ---------- 2026-09-17: European weeks, per-GW distributions, calendar ----------
+
+from src.chip_advisor import score_bench_boost, score_triple_captain
+
+
+def _priors_for(squad_df, p_appear=0.95, xg90=0.4, xa90=0.2):
+    return {
+        int(pid): {"pos": pos, "xg90": xg90, "xa90": xa90, "p_appear": p_appear, "p_60": p_appear * 0.86}
+        for pid, pos in zip(squad_df["player_id"], squad_df["pos"])
+    }
+
+
+def test_tc_captain_in_european_week_gets_risk_and_confidence_haircut():
+    market = _squad_15(xpts=3.0)
+    market.loc[market["player_id"] == 13, "xpts"] = 12.0     # FWD, team T3
+    squad = market[["player_id", "name", "pos", "team", "price_m"]]
+    plain = score_triple_captain(squad, {5: market}, [5])[0]
+    euro = {5: {"T3": {"competition": "ucl", "label": "MD1", "when": "before", "days_before": 3}}}
+    hit = score_triple_captain(squad, {5: market}, [5], euro_by_gw=euro)[0]
+    assert hit.expected_value == plain.expected_value          # EV untouched at the scorer
+    assert hit.confidence < plain.confidence
+    assert any("Champions League" in r and "3 days before GW5" in r for r in hit.risks)
+    # a different team in Europe doesn't touch the captain
+    other = score_triple_captain(squad, {5: market}, [5], euro_by_gw={5: {"T9": {"competition": "ucl", "when": "after"}}})[0]
+    assert other.confidence == plain.confidence
+
+
+def test_tc_distribution_attached_only_with_priors():
+    market = _squad_15(xpts=3.0)
+    market.loc[market["player_id"] == 13, "xpts"] = 12.0
+    squad = market[["player_id", "name", "pos", "team", "price_m"]]
+    no = score_triple_captain(squad, {5: market}, [5])[0]
+    assert no.pmf is None
+    yes = score_triple_captain(squad, {5: market}, [5], player_priors=_priors_for(market))[0]
+    assert yes.pmf is not None and abs(yes.pmf.sum() - 1.0) < 1e-9
+    assert any("chance the captain returns" in r for r in yes.reasoning)
+
+
+def test_bb_bench_in_european_weeks_names_players_and_cuts_confidence():
+    market = _squad_15(xpts=3.0)
+    squad = market[["player_id", "name", "pos", "team", "price_m"]]
+    plain = score_bench_boost(squad, {5: market}, [5])[0]
+    # every team in Europe → all 4 bench players exposed
+    euro = {5: {t: {"competition": "uel", "when": "after"} for t in market["team"].unique()}}
+    hit = score_bench_boost(squad, {5: market}, [5], euro_by_gw=euro)[0]
+    assert hit.confidence < plain.confidence
+    assert any("of your bench 4 are in European weeks" in r for r in hit.risks)
+    assert any("15/15 squad players in European weeks" in r for r in hit.reasoning)
+
+
+def test_bb_distribution_is_bench_convolution():
+    market = _squad_15(xpts=3.0)
+    squad = market[["player_id", "name", "pos", "team", "price_m"]]
+    rec = score_bench_boost(squad, {5: market}, [5], player_priors=_priors_for(market))[0]
+    assert rec.pmf is not None
+    from src import chip_distribution
+    d = chip_distribution.summarize(rec.pmf)
+    # four ~3 xPts players: the sum's most likely value sits well above one player's
+    assert d["mean"] > 6.0
+    assert any("Bench most likely" in r for r in rec.reasoning)
+
+
+def test_build_chip_plan_applies_european_discount_to_both_sides(monkeypatch):
+    monkeypatch.setattr(config, "CHIP_PLAN_EURO_XPTS_MULT", 0.5)
+    gws = [5, 6, 7, 8]
+    squad = _squad_15()[["player_id", "name", "pos", "team", "price_m"]]
+    base = build_chip_plan(squad=squad, current_gw=5,
+                           gw_projections=_gw_projections_with_dgw(gws, dgw_gw=6),
+                           chips_played=[], horizon_gws=4)
+    euro = {g: {t: {"competition": "ucl", "when": "before"} for t in squad["team"].unique()} for g in gws}
+    cut = build_chip_plan(squad=squad, current_gw=5,
+                          gw_projections=_gw_projections_with_dgw(gws, dgw_gw=6),
+                          chips_played=[], horizon_gws=4, euro_by_gw=euro)
+    tc_base = next(o for o in base["outlook"] if o["chip"] == "triple_captain")
+    tc_cut = next(o for o in cut["outlook"] if o["chip"] == "triple_captain")
+    assert abs(tc_cut["ev_gain"] - 0.5 * tc_base["ev_gain"]) < 1e-6
+    assert cut["signals"]["european_calendar"] is True
+    assert cut["signals"]["european_xpts_mult"] == 0.5
+    assert base["signals"]["european_calendar"] is False
+
+
+def test_build_chip_plan_distribution_and_curve_probabilities():
+    gws = [5, 6, 7, 8]
+    projections = _gw_projections_with_dgw(gws, dgw_gw=6)
+    for g in gws:
+        projections[g].loc[projections[g]["player_id"] == 13, "xpts"] = 16.0
+    squad = _squad_15()[["player_id", "name", "pos", "team", "price_m"]]
+    plan = build_chip_plan(squad=squad, current_gw=5, gw_projections=projections,
+                           chips_played=[], horizon_gws=4,
+                           player_priors=_priors_for(projections[5]),
+                           breaks={6: {"gap_days": 14.0, "prev_event": 5}},
+                           euro_by_gw={7: {"T3": {"competition": "ucl", "when": "after"}}})
+    tc = next(r for r in plan["recommendations"] if r["chip"] == "triple_captain")
+    d = tc["distribution"]
+    assert {"mean", "modal", "p_return", "p_haul", "p_blank", "p80_low", "p80_high", "bar", "p_beats_bar"} <= set(d)
+    assert 0.0 <= d["p_beats_bar"] <= 1.0
+    assert d["bar"] == tc_bar(plan, "triple_captain", tc["event_id"])
+    by_gw = {p["gw"]: p for p in tc["ev_curve"]}
+    assert all("p_beats_bar" in p for p in by_gw.values())
+    assert by_gw[6]["post_break"] is True and "post_break" not in by_gw[5]
+    assert by_gw[7]["european"] == 2 and "european" not in by_gw[5]   # own3 + own13 are T3
+    outlook = next(o for o in plan["outlook"] if o["chip"] == "triple_captain")
+    assert outlook["distribution"] == d
+    if plan["nudge"] and plan["nudge"]["chip"] == "triple_captain":
+        assert plan["nudge"]["p_beats_bar"] == d["p_beats_bar"]
+    assert plan["signals"]["distributions"] is True
+
+
+def tc_bar(plan, chip, gw):
+    expires = next(c["expires_gw"] for c in plan["chips_remaining"] if c["name"] == chip)
+    return round(effective_min_ev(chip, gw, expires), 2)
+
+
+def _events_from(current_gw, n, start="2026-09-12T10:00:00Z"):
+    base = pd.Timestamp(start)
+    return [{"id": current_gw + i, "deadline_time": (base + pd.Timedelta(days=7 * i)).isoformat()}
+            for i in range(n)]
+
+
+def test_build_chip_plan_calendar_rows():
+    gws = [5, 6, 7, 8]
+    squad = _squad_15()[["player_id", "name", "pos", "team", "price_m"]]
+    fx = _fixtures([(g, h, a) for g in range(5, 11) for h, a in ((1, 2), (3, 4))] + [(9, 1, 3)])
+    labels = {1: "T1", 2: "T2", 3: "T3", 4: "T4", 5: "T5"}
+    plan = build_chip_plan(
+        squad=squad, current_gw=5, gw_projections=_gw_projections_with_dgw(gws, dgw_gw=None),
+        chips_played=[], fixtures=fx, horizon_gws=4,
+        events=_events_from(5, 6), team_labels=labels,
+        breaks={7: {"gap_days": 14.0, "prev_event": 6}},
+        euro_by_gw={6: {"T1": {"competition": "ucl", "label": "MD2", "when": "after"}}},
+        cup_clashes={8: {"competition": "fa_cup", "label": "QF", "likely_blank": True}},
+    )
+    cal = {r["gw"]: r for r in plan["calendar"]}
+    assert min(cal) == 5 and max(cal) == 38
+    assert cal[5]["in_model_zone"] is True and cal[9]["in_model_zone"] is False
+    assert cal[5]["deadline_utc"] is not None and cal[38]["deadline_utc"] is None
+    assert cal[7]["post_break"] is True and cal[7]["break_gap_days"] == 14.0
+    assert cal[6]["european"] == {"ucl": ["T1"]}
+    assert [p["name"] for p in cal[6]["squad_european"]] == ["own1", "own11"]
+    assert cal[9]["has_dgw"] is True and cal[9]["dgw_teams"] == ["T1", "T3"]
+    assert cal[5]["blank_teams"] == ["T5"]
+    assert cal[5]["is_blank_heavy"] is True           # 4 of 5 teams playing <= threshold 14
+    assert cal[8]["cup_clash"] == {"competition": "fa_cup", "label": "QF", "likely_blank": True}
+    assert cal[20]["n_teams_playing"] is None         # no fixtures known that far
+
+
+def test_build_chip_plan_cup_clash_becomes_likelihood_tagged_fh_window():
+    gws = [5, 6, 7, 8]
+    squad = _squad_15()[["player_id", "name", "pos", "team", "price_m"]]
+    # 20 teams play every GW through GW30 — nothing announced, no structural blank
+    fx = _fixtures([(g, h, h + 10) for g in range(5, 31) for h in range(1, 11)])
+    plan = build_chip_plan(
+        squad=squad, current_gw=5, gw_projections=_gw_projections_with_dgw(gws, dgw_gw=None),
+        chips_played=[], fixtures=fx, horizon_gws=4,
+        cup_clashes={6: {"competition": "fa_cup", "label": "R5", "likely_blank": True},   # inside model zone: ignored
+                     12: {"competition": "fa_cup", "label": "QF", "likely_blank": False},  # not a blank-maker
+                     15: {"competition": "fa_cup", "label": "QF", "likely_blank": True}},
+    )
+    fh = [r for r in plan["recommendations"] if r["chip"] == "free_hit"]
+    assert len(fh) == 1 and fh[0]["provisional"] is True and fh[0]["event_id"] == 15
+    assert fh[0]["likelihood"] == config.CHIP_PLAN_CUP_CLASH_BLANK_PROB
+    assert "FA CUP QF" in fh[0]["reasons"][0] and "hold Free Hit" in fh[0]["reasons"][0]
+
+
+def test_build_chip_plan_cup_clash_skips_when_blank_already_announced_or_chip_used():
+    gws = [5, 6, 7, 8]
+    squad = _squad_15()[["player_id", "name", "pos", "team", "price_m"]]
+    # GW15 announced with only 4 teams → structural blank rec takes precedence (likelihood 1.0)
+    fx = _fixtures([(g, h, h + 10) for g in range(5, 31) if g != 15 for h in range(1, 11)]
+                   + [(15, 1, 2), (15, 3, 4)])
+    plan = build_chip_plan(
+        squad=squad, current_gw=5, gw_projections=_gw_projections_with_dgw(gws, dgw_gw=None),
+        chips_played=[], fixtures=fx, horizon_gws=4,
+        cup_clashes={15: {"competition": "fa_cup", "label": "QF", "likely_blank": True}},
+    )
+    fh = [r for r in plan["recommendations"] if r["chip"] == "free_hit"]
+    assert len(fh) == 1 and fh[0]["likelihood"] == 1.0
+    used = build_chip_plan(
+        squad=squad, current_gw=5, gw_projections=_gw_projections_with_dgw(gws, dgw_gw=None),
+        chips_played=[{"name": "freehit", "event": 3}], fixtures=fx, horizon_gws=4,
+        cup_clashes={15: {"competition": "fa_cup", "label": "QF", "likely_blank": True}},
+    )
+    assert not [r for r in used["recommendations"] if r["chip"] == "free_hit"]

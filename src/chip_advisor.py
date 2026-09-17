@@ -14,6 +14,7 @@ from typing import Callable, Optional
 import pandas as pd
 import numpy as np
 from src import config
+from src import chip_distribution, european
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,7 @@ class ChipRecommendation:
     risks: list[str] = field(default_factory=list)
     haul_prob: float | None = None   # TC only: P(captain gets 2+ goal involvements)
     captain_team: str | None = None  # TC only: captain's team — internal, not emitted by to_dict()
+    pmf: np.ndarray | None = None    # TC/BB: distribution of the chip's extra points — internal
 
     def to_dict(self) -> dict:
         out = {
@@ -200,10 +202,16 @@ def score_triple_captain(
     candidate_gws: list[int],
     xgi_per90: dict[int, float] | None = None,
     team_difficulty_by_gw: dict[int, dict[str, float]] | None = None,
+    player_priors: dict[int, dict] | None = None,
+    euro_by_gw: dict[int, dict[str, dict]] | None = None,
 ) -> list[ChipRecommendation]:
     """
     For each candidate GW, find the best captain in the squad and compute the
     TC uplift = captain_xpts × 1 (the EXTRA multiplier beyond normal captaincy).
+
+    With `player_priors` the captain's per-GW points pmf is attached (the TC
+    gain distribution); with `euro_by_gw` a captain in a European week gets a
+    rotation/fatigue risk line and a confidence haircut.
     """
     recs = []
     for gw in candidate_gws:
@@ -252,27 +260,69 @@ def score_triple_captain(
                 reasoning.append(
                     f"~{haul_prob:.0%} chance of a 2+ goal-involvement haul")
 
+        confidence = 0.6 + (0.3 if is_dgw else 0) + (0.1 if best_cap_xpts > 8 else 0)
+
+        euro = (euro_by_gw or {}).get(gw, {}).get(captain_row.get("team"))
+        if euro:
+            confidence *= float(getattr(config, "CHIP_PLAN_EURO_CONFIDENCE_MULT", 0.9))
+            risks.append(_euro_line(captain_row["name"], captain_row.get("team"), euro, gw))
+
+        pmf = None
+        if player_priors:
+            dmap = (team_difficulty_by_gw or {}).get(gw) or {}
+            pmf = chip_distribution.player_gw_pmf(
+                pos=captain_row["pos"], xpts=best_cap_xpts,
+                prior=player_priors.get(int(captain_row["player_id"])),
+                n_fixtures=int(captain_row.get("fixture_count", 1)),
+                difficulty=dmap.get(captain_row.get("team")),
+            )
+            if pmf is not None:
+                d = chip_distribution.summarize(pmf)
+                reasoning.append(
+                    f"{d['p_return']:.0%} chance the captain returns (6+), "
+                    f"{d['p_haul']:.0%} of a 10+ haul, {d['p_blank']:.0%} of a blank")
+
         recs.append(ChipRecommendation(
             chip="triple_captain",
             gw=gw,
             expected_value=uplift,
-            confidence=0.6 + (0.3 if is_dgw else 0) + (0.1 if best_cap_xpts > 8 else 0),
+            confidence=confidence,
             reasoning=reasoning,
             risks=risks,
             haul_prob=haul_prob,
             captain_team=captain_row.get("team"),
+            pmf=pmf,
         ))
     return recs
+
+
+def _euro_line(name, team, info, gw):
+    comp = european.COMPETITION_LABELS.get(info.get("competition"), "Europe")
+    when = info.get("when")
+    if when == "before":
+        days = info.get("days_before")
+        tail = f"{days} days before GW{gw}" if days is not None else f"in the midweek before GW{gw}"
+        return f"{name} ({team}) plays in the {comp} {tail} — fatigue / late rotation risk"
+    if when == "after":
+        return f"{name} ({team}) has a {comp} tie right after GW{gw} — rested-in-the-league risk"
+    return f"{name} ({team}) is sandwiched between {comp} ties around GW{gw} — rotation risk"
 
 
 def score_bench_boost(
     squad: pd.DataFrame,
     gw_projections: dict[int, pd.DataFrame],
     candidate_gws: list[int],
+    player_priors: dict[int, dict] | None = None,
+    euro_by_gw: dict[int, dict[str, dict]] | None = None,
+    team_difficulty_by_gw: dict[int, dict[str, float]] | None = None,
 ) -> list[ChipRecommendation]:
     """
     BB value = sum of xPts of bench players (non-starting 4).
     Bigger when many starters double or the bench has decent players.
+
+    With `player_priors` the bench-4 sum's pmf (independent convolution) is
+    attached; with `euro_by_gw` bench players in European weeks are named
+    and, past CHIP_PLAN_EURO_BB_MIN_BENCH of them, BB confidence is cut.
     """
     recs = []
     for gw in candidate_gws:
@@ -304,13 +354,46 @@ def score_bench_boost(
         if players_with_no_fixture > 0:
             risks.append(f"{players_with_no_fixture} squad players have no fixture (blank)")
 
+        confidence = 0.5 + (0.3 if n_doubling >= 13 else 0) + (0.2 if bench_value > 15 else 0)
+
+        euro_gw = (euro_by_gw or {}).get(gw) or {}
+        exposed = [r for _, r in bench.iterrows() if r["team"] in euro_gw]
+        if exposed:
+            names = ", ".join(str(r["name"]) for r in exposed[:4])
+            risks.append(
+                f"{len(exposed)} of your bench 4 are in European weeks around GW{gw} ({names}) — rotation risk")
+            if len(exposed) >= int(getattr(config, "CHIP_PLAN_EURO_BB_MIN_BENCH", 2)):
+                confidence *= float(getattr(config, "CHIP_PLAN_EURO_CONFIDENCE_MULT", 0.9))
+        n_squad_euro = int(squad_with_xpts["team"].isin(list(euro_gw)).sum()) if euro_gw else 0
+        if n_squad_euro:
+            reasoning.append(f"{n_squad_euro}/15 squad players in European weeks around GW{gw}")
+
+        pmf = None
+        if player_priors:
+            dmap = (team_difficulty_by_gw or {}).get(gw) or {}
+            parts = [
+                chip_distribution.player_gw_pmf(
+                    pos=r["pos"], xpts=float(r["xpts"]),
+                    prior=player_priors.get(int(r["player_id"])),
+                    n_fixtures=int(r.get("fixture_count", 1)),
+                    difficulty=dmap.get(r.get("team")),
+                )
+                for _, r in bench.iterrows()
+            ]
+            if parts and all(p is not None for p in parts):
+                pmf = chip_distribution.convolve(parts)
+                d = chip_distribution.summarize(pmf)
+                reasoning.append(
+                    f"Bench most likely {d['modal']} pts (80% band {d['p80_low']}–{d['p80_high']})")
+
         recs.append(ChipRecommendation(
             chip="bench_boost",
             gw=gw,
             expected_value=bench_value,
-            confidence=0.5 + (0.3 if n_doubling >= 13 else 0) + (0.2 if bench_value > 15 else 0),
+            confidence=confidence,
             reasoning=reasoning,
             risks=risks,
+            pmf=pmf,
         ))
     return recs
 
@@ -581,6 +664,8 @@ def recommend_chips(
     breaks: dict[int, dict] | None = None,
     xgi_per90: dict[int, float] | None = None,
     team_difficulty_by_gw: dict[int, dict[str, float]] | None = None,
+    player_priors: dict[int, dict] | None = None,
+    euro_by_gw: dict[int, dict[str, dict]] | None = None,
 ) -> list[ChipRecommendation]:
     """
     Main entry point. Returns ranked list of (chip, gw, value, reasoning) for
@@ -598,9 +683,14 @@ def recommend_chips(
         all_recs.extend(score_triple_captain(
             squad, gw_projections, candidate_gws,
             xgi_per90=xgi_per90, team_difficulty_by_gw=team_difficulty_by_gw,
+            player_priors=player_priors, euro_by_gw=euro_by_gw,
         ))
     if "bench_boost" in chips_remaining:
-        all_recs.extend(score_bench_boost(squad, gw_projections, candidate_gws))
+        all_recs.extend(score_bench_boost(
+            squad, gw_projections, candidate_gws,
+            player_priors=player_priors, euro_by_gw=euro_by_gw,
+            team_difficulty_by_gw=team_difficulty_by_gw,
+        ))
     if "free_hit" in chips_remaining:
         all_recs.extend(score_free_hit(
             squad, gw_projections, candidate_gws, bank_m,
@@ -646,9 +736,27 @@ def build_chip_plan(
     team_difficulty_by_gw: dict[int, dict[str, float]] | None = None,
     swings: list[dict] | None = None,
     xgi_per90: dict[int, float] | None = None,
+    player_priors: dict[int, dict] | None = None,
+    euro_by_gw: dict[int, dict[str, dict]] | None = None,
+    cup_clashes: dict[int, dict] | None = None,
+    events: list[dict] | None = None,
+    team_labels: dict[int, str] | None = None,
 ) -> dict:
     """Assemble the full chip plan payload: model-zone EV recommendations,
-    structural provisional windows, next-GW nudge, and transfer context."""
+    structural provisional windows, next-GW nudge, transfer context, and
+    (when the signals are supplied) per-GW points distributions plus a
+    fixture-context calendar (breaks, European weeks, DGW/BGW, cup clashes).
+
+    player_priors: {player_id: {pos, xg90, xa90, p_appear, p_60}} — enables
+        the TC/BB distributions (`chip_distribution.player_priors_from_elements`).
+    euro_by_gw: {gw: {team_label: {competition, when, ...}}} — European
+        weeks (`european.european_weeks_by_gw`); applies the
+        CHIP_PLAN_EURO_XPTS_MULT haircut to both sides of every comparison.
+    cup_clashes: {gw: {competition, label, likely_blank}} — domestic-cup
+        weekends that usually blank the GW before FPL announces it.
+    events: FPL bootstrap events (deadlines) for the calendar rows.
+    team_labels: {team_id: label} so DGW/BGW teams can be named.
+    """
     current_gw = int(current_gw)
     horizon = int(horizon_gws or getattr(config, "CHIP_PLAN_HORIZON_GWS", 8))
     windows = chip_windows(chips_played, current_gw)
@@ -657,6 +765,13 @@ def build_chip_plan(
 
     squad_value = float(pd.to_numeric(squad.get("price_m"), errors="coerce").fillna(0).sum())
     budget_m = squad_value + float(itb_m or 0.0)
+
+    # European midweeks: every player of a team in a European week that GW
+    # carries the rotation/fatigue haircut — on the squad AND the market side,
+    # so a FH/WC dream squad can't dodge it.
+    euro_mult = float(getattr(config, "CHIP_PLAN_EURO_XPTS_MULT", 1.0))
+    if euro_by_gw:
+        gw_projections = european.discount_projections(gw_projections, euro_by_gw, euro_mult)
 
     all_recs = recommend_chips(
         squad=squad,
@@ -669,6 +784,8 @@ def build_chip_plan(
         breaks=breaks,
         xgi_per90=xgi_per90,
         team_difficulty_by_gw=team_difficulty_by_gw,
+        player_priors=player_priors,
+        euro_by_gw=euro_by_gw,
     )
 
     recommendations = []
@@ -701,9 +818,21 @@ def build_chip_plan(
             })
             continue
         best = max(in_window, key=lambda r: r.expected_value)
-        curve = [{"gw": r.gw, "ev": round(float(r.expected_value), 2)}
-                 for r in sorted(in_window, key=lambda r: r.gw)]
+        curve = []
+        for r in sorted(in_window, key=lambda r: r.gw):
+            point = {"gw": r.gw, "ev": round(float(r.expected_value), 2)}
+            if r.pmf is not None:
+                d = chip_distribution.summarize(
+                    r.pmf, bar=effective_min_ev(chip, r.gw, expires_gw))
+                point["p_beats_bar"] = d["p_beats_bar"]
+                point["p_return"] = d["p_return"]
+            if euro_by_gw and r.gw in euro_by_gw:
+                point["european"] = int(squad["team"].isin(list(euro_by_gw[r.gw])).sum())
+            if breaks and r.gw in breaks:
+                point["post_break"] = True
+            curve.append(point)
         bar = effective_min_ev(chip, best.gw, expires_gw)
+        distribution = chip_distribution.summarize(best.pmf, bar=bar) if best.pmf is not None else None
         outlook_row = {
             "chip": chip,
             "event_id": int(best.gw),
@@ -712,6 +841,8 @@ def build_chip_plan(
             "status": "hold",
             "reasons": list(best.reasoning)[:3],
         }
+        if distribution is not None:
+            outlook_row["distribution"] = distribution
         outlook.append(outlook_row)
         if best.expected_value < bar:
             continue  # hold — nothing in the model zone clears the bar
@@ -725,6 +856,8 @@ def build_chip_plan(
             "reasons": list(best.reasoning) + [f"Risk: {r}" for r in best.risks],
             "ev_curve": curve,
         }
+        if distribution is not None:
+            rec["distribution"] = distribution
         if best.haul_prob is not None:
             rec["haul_prob"] = round(float(best.haul_prob), 3)
         if swings and chip in ("wildcard", "triple_captain"):
@@ -748,12 +881,14 @@ def build_chip_plan(
             if nudge is None or rec["ev_gain"] > nudge["ev_gain"]:
                 nudge = {"chip": chip, "event_id": current_gw, "ev_gain": rec["ev_gain"],
                          "wait_for_team_news": bool(breaks and current_gw in breaks)}
+                if distribution is not None and "p_beats_bar" in distribution:
+                    nudge["p_beats_bar"] = distribution["p_beats_bar"]
 
     # Structural zone: announced DGWs/BGWs beyond the model horizon, up to expiry.
+    model_end = current_gw + horizon - 1
+    recommended_chips = {r["chip"] for r in recommendations}
     if fixtures is not None and not fixtures.empty:
-        model_end = current_gw + horizon - 1
         season_end = int(getattr(config, "CHIP_PLAN_SEASON_END_GW", 38))
-        recommended_chips = {r["chip"] for r in recommendations}
         for g in range(model_end + 1, season_end + 1):
             counts = team_fixture_counts(fixtures, g)
             if not counts:
@@ -776,11 +911,49 @@ def build_chip_plan(
                     "event_id": g,
                     "ev_gain": None,
                     "provisional": True,
+                    "likelihood": 1.0,
                     "reasons": [f"GW{g} is a {label} (from announced fixtures) — "
                                 f"candidate window, EV computable once in the model horizon"],
                     "ev_curve": [],
                 })
                 recommended_chips.add(chip)
+
+    # Expected (not yet announced) blanks: a domestic-cup weekend inside the
+    # GW window has historically wiped most of the round. Surface it as a
+    # likelihood-tagged provisional FH window so the manager holds the chip
+    # for it instead of burning it on an ordinary week.
+    if cup_clashes and "free_hit" in remaining and "free_hit" not in recommended_chips:
+        blank_prob = float(getattr(config, "CHIP_PLAN_CUP_CLASH_BLANK_PROB", 0.7))
+        for g in sorted(cup_clashes):
+            info = cup_clashes[g]
+            if g <= model_end or g > windows["free_hit"]["expires_gw"]:
+                continue
+            if not info.get("likely_blank"):
+                continue
+            counts = team_fixture_counts(fixtures, g)
+            if counts and len(counts) <= int(getattr(config, "CHIP_PLAN_BLANK_TEAM_THRESHOLD", 14)):
+                continue  # already announced — handled above
+            comp = str(info.get("competition", "cup")).replace("_", " ").upper()
+            label = info.get("label") or "round"
+            recommendations.append({
+                "chip": "free_hit",
+                "event_id": g,
+                "ev_gain": None,
+                "provisional": True,
+                "likelihood": round(blank_prob, 2),
+                "reasons": [f"GW{g} clashes with the {comp} {label} weekend — "
+                            f"~{blank_prob:.0%} likely to become a blank GW once fixtures are "
+                            f"confirmed; hold Free Hit for it"],
+                "ev_curve": [],
+            })
+            recommended_chips.add("free_hit")
+            break
+
+    calendar = build_calendar(
+        squad=squad, current_gw=current_gw, horizon=horizon, events=events,
+        fixtures=fixtures, breaks=breaks, euro_by_gw=euro_by_gw,
+        cup_clashes=cup_clashes, team_labels=team_labels,
+    )
 
     return {
         "current_gw": current_gw,
@@ -791,12 +964,68 @@ def build_chip_plan(
         "recommendations": recommendations,
         "outlook": outlook,
         "nudge": nudge,
+        "calendar": calendar,
+        "signals": {
+            "breaks": bool(breaks),
+            "european_calendar": bool(euro_by_gw),
+            "cup_calendar": bool(cup_clashes),
+            "distributions": bool(player_priors),
+            "european_xpts_mult": euro_mult if euro_by_gw else None,
+        },
         "transfer_context": {
             "planned_transfers_net_gain": round(plan_net_gain, 2),
             "wc_alternative_gw": next(
                 (r["event_id"] for r in recommendations if r["chip"] == "wildcard"), None),
         },
     }
+
+
+def build_calendar(squad, current_gw, horizon, events=None, fixtures=None, breaks=None,
+                   euro_by_gw=None, cup_clashes=None, team_labels=None) -> list[dict]:
+    """One row per upcoming GW with the fixture context chips care about.
+
+    Rows run from current_gw to CHIP_PLAN_SEASON_END_GW. Model-zone rows are
+    flagged `in_model_zone`; the rest is the structural outlook. Every field
+    degrades to None/empty when its signal is missing.
+    """
+    last_gw = int(getattr(config, "CHIP_PLAN_SEASON_END_GW", 38))
+    deadlines = {}
+    for e in events or []:
+        try:
+            deadlines[int(e.get("id"))] = e.get("deadline_time")
+        except (TypeError, ValueError):
+            continue
+    blank_team_threshold = int(getattr(config, "CHIP_PLAN_BLANK_TEAM_THRESHOLD", 14))
+    all_team_ids = set(team_labels or {})
+
+    rows = []
+    for g in range(current_gw, last_gw + 1):
+        counts = team_fixture_counts(fixtures, g) if fixtures is not None else {}
+        n_playing = len(counts)
+        dgw_ids = sorted(t for t, v in counts.items() if v >= 2)
+        blank_ids = sorted(all_team_ids - set(counts)) if (all_team_ids and counts) else []
+        euro_gw = (euro_by_gw or {}).get(g) or {}
+        by_comp: dict[str, list[str]] = {}
+        for team, info in euro_gw.items():
+            by_comp.setdefault(info["competition"], []).append(team)
+        exposure = european.squad_exposure(squad, euro_gw)
+        row = {
+            "gw": g,
+            "deadline_utc": deadlines.get(g),
+            "in_model_zone": g < current_gw + horizon,
+            "post_break": bool(breaks and g in breaks),
+            "break_gap_days": (breaks or {}).get(g, {}).get("gap_days") if breaks else None,
+            "european": {c: sorted(v) for c, v in sorted(by_comp.items())},
+            "squad_european": exposure,
+            "n_teams_playing": n_playing if counts else None,
+            "dgw_teams": [team_labels.get(t, t) if team_labels else t for t in dgw_ids],
+            "blank_teams": [team_labels.get(t, t) for t in blank_ids] if team_labels else [],
+            "is_blank_heavy": bool(counts) and n_playing <= blank_team_threshold,
+            "has_dgw": bool(dgw_ids),
+            "cup_clash": (cup_clashes or {}).get(g),
+        }
+        rows.append(row)
+    return rows
 
 
 def plan_chips_smart(
