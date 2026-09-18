@@ -323,6 +323,13 @@ CHIP_PLAN_FH_TOUGH_DIFFICULTY = 4.0  # ticker difficulty counting as "tough"
 # 0 disables the blended opener.
 CHIP_PLAN_FH_MIN_STRESS = 4.0
 CHIP_PLAN_FH_STRESS_TOUGH_FROM = 3.3
+# Benching signal for the same opener: a fit player who has been left out
+# recently (manager's call, not an FPL flag) also counts as "unlikely to
+# play". P(start) = (n * recent_start_rate + PRIOR_GWS * 1.0) / (n + PRIOR_GWS)
+# — a squad player is presumed nailed until his recent starts say otherwise
+# (benched 3 of 3 -> 0.25; benched 1 of 3 -> 0.75; nailed -> 1.0). Multiplies
+# the availability probability. 0 disables the benching signal.
+CHIP_PLAN_FH_BENCH_PRIOR_GWS = 1.0
 # Difficulty→multiplier for the TC haul-prob lambda (mirrors the projection
 # engine's FDR multipliers; keyed on round(difficulty)).
 CHIP_PLAN_TC_DIFF_MULT = {1: 1.25, 2: 1.12, 3: 1.0, 4: 0.88, 5: 0.75}

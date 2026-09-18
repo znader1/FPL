@@ -434,14 +434,32 @@ def play_prob_from_availability(df: pd.DataFrame) -> pd.Series:
     return prob.clip(lower=0.0, upper=1.0).astype(float)
 
 
+def start_prob_from_recent_starts(start_rate, samples, prior_gws: float | None = None) -> pd.Series:
+    """P(start) from a recent start rate, shrunk toward 1.0 ("a squad player is
+    a starter") by CHIP_PLAN_FH_BENCH_PRIOR_GWS pseudo-GWs, so only a real
+    benching pattern moves it: benched 3 of 3 -> 0.25, benched 1 of 3 -> 0.75,
+    nailed -> 1.0. No samples (pre-season, missing history) -> 1.0."""
+    if prior_gws is None:
+        prior_gws = float(getattr(config, "CHIP_PLAN_FH_BENCH_PRIOR_GWS", 1.0))
+    prior_gws = float(prior_gws)
+    rate = pd.to_numeric(pd.Series(start_rate), errors="coerce").clip(0.0, 1.0)
+    n = pd.to_numeric(pd.Series(samples), errors="coerce").fillna(0.0).clip(lower=0.0)
+    n = n.where(rate.notna(), 0.0)
+    rate = rate.fillna(1.0)
+    if prior_gws <= 0:
+        return pd.Series(1.0, index=rate.index)
+    return ((n * rate + prior_gws) / (n + prior_gws)).clip(0.0, 1.0).astype(float)
+
+
 def fh_squad_stress(squad_with_xpts: pd.DataFrame, difficulty_by_team: dict[str, float] | None,
                     tough_from: float | None = None) -> dict:
     """Blended Free Hit "squad stress" for one GW, in player-equivalents (0..15).
 
     Per squad player: max(blank, 1 - play_prob, tough_weight) with
     tough_weight = clip((difficulty - tough_from) / (5 - tough_from), 0, 1).
-    `play_prob` is read from the squad frame when present (see
-    `play_prob_from_availability`), else every player counts as fit.
+    `play_prob` is read from the squad frame when present (availability x
+    P(start): `play_prob_from_availability` x `start_prob_from_recent_starts`),
+    else every player counts as fit and starting.
     Returns the total plus the parts that explain it.
     """
     if tough_from is None:
@@ -601,8 +619,8 @@ def score_free_hit(
                 names = ", ".join(stress["unavailable_names"][:3])
                 more = stress["n_unavailable"] - min(3, len(stress["unavailable_names"]))
                 parts.append(
-                    f"{stress['n_unavailable']} unavailable/doubtful"
-                    + (f" ({names}{f' +{more}' if more > 0 else ''})" if names else ""))
+                    f"{stress['n_unavailable']} unlikely to play (injured/doubtful/benched)"
+                    + (f": {names}{f' +{more}' if more > 0 else ''}" if names else ""))
             if stress["n_blanking"]:
                 parts.append(f"{stress['n_blanking']} blanking")
             if stress["n_tough"]:

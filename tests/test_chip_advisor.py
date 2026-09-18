@@ -1098,7 +1098,7 @@ def test_fh_stress_gate_opens_on_injuries_plus_hard_away_week(monkeypatch):
     recs = score_free_hit(squad, {5: market}, [5], budget_m=100.0,
                           team_difficulty_by_gw=diff)
     assert len(recs) == 1
-    assert any("Squad stress" in r and "3 unavailable/doubtful" in r for r in recs[0].reasoning)
+    assert any("Squad stress" in r and "3 unlikely to play" in r for r in recs[0].reasoning)
     assert recs[0].confidence >= 0.8
 
 
@@ -1147,3 +1147,34 @@ def test_fh_injury_driven_stress_carries_transfer_check_risk(monkeypatch):
                           team_difficulty_by_gw={5: {"Arsenal": 2.5}})
     assert len(recs) == 1
     assert any("free transfers" in r for r in recs[0].risks)
+
+
+from src.chip_advisor import start_prob_from_recent_starts
+
+
+def test_start_prob_from_recent_starts_presumes_nailed_until_benched():
+    rate = [1.0, 0.0, 2 / 3, None, 0.0]
+    samples = [3, 3, 3, 0, 0]
+    got = start_prob_from_recent_starts(rate, samples, prior_gws=1.0).round(4).tolist()
+    # nailed -> 1.0; benched 3/3 -> 0.25; benched 1/3 -> 0.75; no history -> 1.0
+    assert got == [1.0, 0.25, 0.75, 1.0, 1.0]
+    # prior 0 disables the signal entirely
+    assert start_prob_from_recent_starts(rate, samples, prior_gws=0).tolist() == [1.0] * 5
+
+
+def test_fh_stress_counts_a_fit_but_benched_player(monkeypatch):
+    """Fit per FPL (play_prob would be 1.0 on flags alone) but benched 3 of 3:
+    availability x P(start) = 0.25 -> 0.75 stress, named in the reason."""
+    monkeypatch.setattr(config, "CHIP_PLAN_FH_MIN_STRESS", 4.0, raising=False)
+    squad = _squad_15_single_team(team="Arsenal")
+    squad["play_prob"] = 1.0
+    benched = start_prob_from_recent_starts([0.0], [3], prior_gws=1.0).iloc[0]
+    squad.loc[0, "play_prob"] = 1.0 * benched          # Hume-style: fit, not picked
+    squad.loc[squad.index[1:4], "play_prob"] = 0.0     # three injured
+    market = _market_for(squad, gw_xpts=2.0)
+    recs = score_free_hit(squad, {5: market}, [5], budget_m=100.0,
+                          team_difficulty_by_gw={5: {"Arsenal": 3.5}})
+    assert len(recs) == 1
+    reason = next(r for r in recs[0].reasoning if "Squad stress" in r)
+    # three injured (0.0) list first; the benched player (0.25) is the "+1"
+    assert "4 unlikely to play" in reason and "P2, P3, P4 +1" in reason

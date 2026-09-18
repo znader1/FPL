@@ -81,7 +81,7 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
     # Local import to avoid circular and keep startup fast
     from src import fpl_client, transforms, projections, optimizer, config
     from src.breaks import international_break_gws
-    from src.chip_advisor import play_prob_from_availability
+    from src.chip_advisor import play_prob_from_availability, start_prob_from_recent_starts
 
     bootstrap = fpl_client.get_bootstrap()
     # Reuses the bootstrap already fetched above — no extra network call.
@@ -132,10 +132,11 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
         "pos": squad_rows["element_type"].map(pos_map).values,
         "team": squad_rows["team"].map(team_name_map).values,
         "price_m": (squad_rows["now_cost"] / 10.0).values,
-        # P(available) from FPL status + chance_of_playing — feeds the Free
-        # Hit squad-stress opener (chip_advisor.fh_squad_stress).
-        "play_prob": play_prob_from_availability(squad_rows).values,
     })
+    # P(available) from FPL status + chance_of_playing; multiplied below by
+    # P(start) from recent starts once the projection frame exists. Feeds the
+    # Free Hit squad-stress opener (chip_advisor.fh_squad_stress).
+    squad["play_prob"] = play_prob_from_availability(squad_rows).values
 
     # Project next N GWs
     horizon = int(horizon)
@@ -143,6 +144,16 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
         elements=elements, fixtures=fixtures, teams_short_map=teams_short_map,
         gw_start=current_gw, horizon_gws=horizon,
     )
+
+    # Benching signal: a fit player left out in recent GWs (manager's call,
+    # invisible to FPL's flags) also lowers play_prob for the FH stress gate.
+    if "recent_gw_avg_starts" in proj.columns:
+        recent = proj.set_index(pd.to_numeric(proj["id"], errors="coerce"))
+        rate = squad["player_id"].map(recent["recent_gw_avg_starts"])
+        samples = squad["player_id"].map(recent.get("recent_gw_samples", pd.Series(dtype=float)))
+        squad["play_prob"] = (
+            squad["play_prob"] * start_prob_from_recent_starts(rate, samples).values
+        ).clip(0.0, 1.0)
 
     # Reshape into the simulator's market schema, one DataFrame per GW
     from src.chip_advisor import team_fixture_counts
