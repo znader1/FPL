@@ -46,13 +46,14 @@ def _red_flag(r):
 
 def _avail_risk(status, chance):
     """Availability-risk scalar for the injured-sell-preference bonus (not
-    xPts): 1.0 for an i/s/u status; a doubtful player scales as
-    min(1.0, 2*(100-chance)/100) (75% chance -> 0.5); a "d" status with an
-    unknown chance defaults to 0.5; everything else (fit, chance==100) is 0."""
+    xPts): 1.0 for an i/s/u status; a doubtful player with a KNOWN chance
+    scales as min(1.0, 2*(100-chance)/100) (75% chance -> 0.5), including 0
+    for a known chance of 100 (no risk, regardless of status); a "d" status
+    with an UNKNOWN chance defaults to 0.5; everything else is 0."""
     if status in ("i", "s", "u"):
         return 1.0
-    if chance is not None and chance < 100:
-        return min(1.0, 2 * (100 - chance) / 100)
+    if chance is not None:
+        return min(1.0, 2 * (100 - chance) / 100) if chance < 100 else 0.0
     if status == "d":
         return 0.5
     return 0.0
@@ -64,11 +65,13 @@ def _build_info(proj, gws):
     for _, r in df.iterrows():
         pid = int(r["id"])
         status = str(r.get("status") or "a").lower()
-        chance_raw = r.get("chance_of_playing_next_round")
-        try:
-            chance = float(chance_raw)
-        except (TypeError, ValueError):
-            chance = None
+        # chance_of_playing_next_round arrives as pandas NaN for many injured
+        # players (missing rather than 0) -- pd.isna catches that (float(nan)
+        # does NOT raise, so a bare try/except float() leaves it as NaN, which
+        # later breaks JSON encoding with allow_nan=False). Normalize to None,
+        # same as _num does for the other numeric fields.
+        chance_num = pd.to_numeric(r.get("chance_of_playing_next_round"), errors="coerce")
+        chance = None if pd.isna(chance_num) else float(chance_num)
         info[pid] = {
             "id": pid,
             "name": r.get("web_name"),

@@ -400,3 +400,28 @@ def test_runner_ups_carry_sell_availability():
     runner_ups = out["verdict_detail"]["runner_ups"]
     ru = next(r for r in runner_ups if r["sell"]["id"] == 2)
     assert ru["sell_availability"] == {"status": "d", "chance": 50.0}
+
+
+def test_nan_chance_normalises_to_none_and_stays_json_safe():
+    # chance_of_playing_next_round arrives as pandas NaN (missing), not None,
+    # for many injured players once mixed into a float64 column alongside a
+    # numeric peer -- must normalize to None, never leak NaN into the payload
+    # (Starlette's JSONResponse uses allow_nan=False -> ValueError -> 500).
+    import json
+
+    proj = _proj_frame([
+        _player(1, "MID", price=5.0, xpts=2.0, status="i", chance=None),  # unknown chance -> NaN col
+        _player(2, "MID", price=5.0, xpts=7.0),                           # numeric peer, forces float64
+    ], gws=(10,))
+    out = tp.plan_transfers(proj, squad_ids=[1], gws=[10], itb_m=0.0, start_ft=1, min_gain=2.0)
+    move = out["plan"][0]["moves"][0]
+    assert move["sell_availability"] == {"status": "i", "chance": None}
+    json.dumps(out, allow_nan=False)  # must not raise
+
+
+def test_avail_risk_known_full_chance_is_no_risk_even_for_doubtful_status():
+    # A "d" status with a KNOWN chance of 100 is not a risk -- only an
+    # UNKNOWN chance (None) with status "d" defaults to 0.5.
+    assert tp._avail_risk("d", 100.0) == 0.0
+    assert tp._avail_risk("d", None) == 0.5
+    assert tp._avail_risk("d", 75.0) == 0.5
