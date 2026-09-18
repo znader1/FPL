@@ -161,3 +161,4 @@ This file explains every parameter in `src/config.py`, what it controls, and whe
 - Keep all strategy thresholds (`STRATEGY_*`) active as guardrails until model calibration is stable.
 | `TRANSFER_PLAN_MIN_HORIZON_GWS` | 1 | Planner horizon floor (GWs); the display slider sets the planner horizon (`api/main.py` plan_horizon_gws) |
 | `TRANSFER_PLAN_MIN_GAIN` / `TRANSFER_PLAN_MIN_GAIN_REF_GWS` | 2.0 / 3 | Planner gain bar defined over REF GWs; `transfer_planner.scaled_min_gain(n)` scales it to the plan horizon |
+| `TRANSFER_PLAN_INJURED_SELL_BONUS` | 1.0 | Tie-break preference (not xPts) added to a candidate's SELECTION score only when swaps score within noise of each other, sell the availability-risk player first; scaled by risk (i/s/u = 1.0, doubtful = `(100-chance)/100 × 2` capped at 1.0); 0 disables; frontend toggle sends `prioritize_injured=false` per request |

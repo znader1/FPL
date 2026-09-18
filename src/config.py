@@ -234,6 +234,14 @@ TRANSFER_PLAN_MIN_HORIZON_GWS = 1
 TRANSFER_PLAN_MIN_GAIN = 2.0
 TRANSFER_PLAN_MIN_GAIN_REF_GWS = 3
 
+# Preference (not xPts): when swaps score within noise of each other, sell the
+# player with availability risk first. Bonus added to a candidate's SELECTION
+# score only — reported gains stay honest. Scaled by risk: an "i/s/u" status
+# counts as risk 1.0; a doubtful player counts (100 - chance)/100 × 2, capped
+# at 1.0 (75% chance → 0.5). 0 disables; the frontend toggle sends
+# prioritize_injured=false to disable per request.
+TRANSFER_PLAN_INJURED_SELL_BONUS = 1.0
+
 # -----------------------------
 # Strategy recommendation tuning
 # -----------------------------
