@@ -35,17 +35,27 @@ def test_hits_floor_at_one():
     assert derive_free_transfers(events, [], next_event_id=3) == 1
 
 
-def test_wildcard_gw_consumes_nothing():
-    # WC in GW3 with 8 transfers: treated as 0 used -> bank keeps growing
+def test_wildcard_gw_maintains_the_bank():
+    # WC in GW3 with 8 transfers: nothing spent, nothing gained — the 2 FT
+    # taken into GW3 are still 2 for GW4, then GW4 unused banks a third.
     events = [_ev(1, 0), _ev(2, 0), _ev(3, 8), _ev(4, 0)]
     chips = [{"name": "wildcard", "event": 3}]
-    assert derive_free_transfers(events, chips, next_event_id=5) == 4
+    assert derive_free_transfers(events, chips, next_event_id=5) == 3
 
 
-def test_freehit_gw_consumes_nothing():
+def test_freehit_gw_maintains_the_bank():
+    # FH in GW2 with 1 FT: still 1 FT for GW3 (maintained, no +1).
     events = [_ev(1, 0), _ev(2, 1)]
     chips = [{"name": "freehit", "event": 2}]
-    assert derive_free_transfers(events, chips, next_event_id=3) == 2
+    assert derive_free_transfers(events, chips, next_event_id=3) == 1
+
+
+def test_live_shape_fh_after_two_single_transfers():
+    # Entry 5645321 on 2026-09-18: 1 transfer in GW2, 1 in GW3, Free Hit in
+    # GW4 -> FPL shows 1 free transfer for GW5.
+    events = [_ev(1, 0), _ev(2, 1), _ev(3, 1), _ev(4, 0)]
+    chips = [{"name": "freehit", "event": 4}]
+    assert derive_free_transfers(events, chips, next_event_id=5) == 1
 
 
 def test_events_at_or_after_next_are_ignored():

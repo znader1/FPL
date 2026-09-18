@@ -3,7 +3,8 @@
 Pure functions; API fetch stays in the caller. The season walk replaces the
 old binary 1/2 heuristic in api/main.py: FPL grants +1 FT at each new GW
 deadline (cap 5), spent transfers subtract, hits floor the carry at 0, and
-Wildcard/Free-Hit gameweeks consume no free transfers.
+Wildcard/Free-Hit gameweeks consume no free transfers and grant no +1: the
+saved count is maintained as-is (FPL rule since 2025/26).
 
 GW1 is squad creation (unlimited changes, no FT concept): everyone enters
 GW2 with exactly 1 FT, and banking starts from GW2's unused FT — so the
@@ -41,6 +42,13 @@ def derive_free_transfers(events, chips, next_event_id, ft_max=None):
     ft = 1
     for row in rows:
         gw = int(row["event"])
-        used = 0 if gw in chip_gws else max(0, int(row.get("event_transfers") or 0))
+        if gw in chip_gws:
+            # FPL (since 2025/26) MAINTAINS saved transfers through a Wildcard
+            # or Free Hit week: the count you took into the chip week is the
+            # count you have next week. No spend, and no +1 either — a FH in
+            # GW4 with 1 FT gives 1 FT for GW5, not 2 (verified 2026-09-18
+            # against a live entry).
+            continue
+        used = max(0, int(row.get("event_transfers") or 0))
         ft = min(int(ft_max), max(ft - used, 0) + 1)
     return ft
