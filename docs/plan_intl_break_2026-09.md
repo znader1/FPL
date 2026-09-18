@@ -8,6 +8,8 @@ says "merge". Deploy freeze Thu 8 Oct evening; brother tests 8–9 Oct.
 
 ## Week 1 · 19–25 Sep · Transfers depth (what users see first)
 
+| 0 | **Injury-priority toggle** (built 18 Sep, on `feature/injury-priority` both repos, review clean, on staging): sell the doubtful/injured player first when gains tie; "75% fit" chips; default on. Awaiting user go to merge. Follow-up: `_red_flag` still uses the NaN-tolerant `float()` pattern (benign). | done | user go |
+
 | # | Item | Size | Gate |
 |---|---|---|---|
 | 1 | **Planned squad follows you across weeks.** Apply on the card sets a planned squad; GW6/GW7 pitch shows it with that week's fixtures and the plan's later moves pre-applied; staircase rows jump to the week; real/planned toggle. Backend adds `squad_after` ids per plan GW. | 0.5 d | UI review |
