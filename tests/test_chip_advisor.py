@@ -1052,3 +1052,98 @@ def test_chip_guidance_never_raises_falls_back_to_generic():
         "triple_captain", status="hold", event_id="not-a-number", ev_gain=None,
         bar=0.0, distribution=None, horizon=8, transfer_plan_net_gain=0.0)
     assert text2 == f"Hold. Best use: {config.CHIP_PLAN_SEASON_PRIORS['triple_captain']}."
+
+
+# ---- FH blended squad-stress gate (2026-09-18) ----
+
+from src.chip_advisor import fh_squad_stress, play_prob_from_availability
+
+
+def test_play_prob_from_availability_mapping():
+    df = pd.DataFrame({
+        "status": ["a", "d", "i", "s", "a", "d"],
+        "chance_of_playing_next_round": [None, None, None, 0, 75, 25],
+    })
+    got = play_prob_from_availability(df).tolist()
+    assert got == [1.0, 0.75, 0.0, 0.0, 0.75, 0.25]
+    # No availability columns at all -> everyone fit.
+    assert play_prob_from_availability(pd.DataFrame({"id": [1, 2]})).tolist() == [1.0, 1.0]
+
+
+def test_fh_squad_stress_takes_max_per_player_not_sum():
+    squad = _squad_15_single_team(team="Arsenal")
+    squad["fixture_count"] = 1
+    squad["play_prob"] = 1.0
+    squad.loc[0, "play_prob"] = 0.0          # injured
+    squad.loc[1, "fixture_count"] = 0        # blank
+    squad.loc[1, "play_prob"] = 0.0          # blank AND injured -> counts once
+    stress = fh_squad_stress(squad, {"Arsenal": 5.0}, tough_from=3.3)
+    # Every player is at max stress 1.0 (tough=1.0 at difficulty 5) -> 15, not more.
+    assert abs(stress["total"] - 15.0) < 1e-9
+    assert stress["n_blanking"] == 1
+    assert stress["n_unavailable"] == 1      # the blank+injured player is a blank, not a doubt
+    assert stress["unavailable_names"] == ["P1"]
+
+
+def test_fh_stress_gate_opens_on_injuries_plus_hard_away_week(monkeypatch):
+    """Neither hard trigger fires (0 blanks, difficulty 3.6 < 4.0) but three
+    unavailable players plus a squad-wide hard week clears the blended bar."""
+    monkeypatch.setattr(config, "CHIP_PLAN_FH_MIN_STRESS", 4.0, raising=False)
+    monkeypatch.setattr(config, "CHIP_PLAN_FH_STRESS_TOUGH_FROM", 3.3, raising=False)
+    squad = _squad_15_single_team(team="Arsenal")
+    squad["play_prob"] = 1.0
+    squad.loc[squad.index[:3], "play_prob"] = 0.0
+    market = _market_for(squad, gw_xpts=2.0)
+    diff = {5: {"Arsenal": 3.6}}
+    recs = score_free_hit(squad, {5: market}, [5], budget_m=100.0,
+                          team_difficulty_by_gw=diff)
+    assert len(recs) == 1
+    assert any("Squad stress" in r and "3 unavailable/doubtful" in r for r in recs[0].reasoning)
+    assert recs[0].confidence >= 0.8
+
+
+def test_fh_stress_gate_closed_on_one_doubt_and_ordinary_fixtures(monkeypatch):
+    monkeypatch.setattr(config, "CHIP_PLAN_FH_MIN_STRESS", 4.0, raising=False)
+    monkeypatch.setattr(config, "CHIP_PLAN_FH_STRESS_TOUGH_FROM", 3.3, raising=False)
+    squad = _squad_15_single_team(team="Arsenal")
+    squad["play_prob"] = 1.0
+    squad.loc[0, "play_prob"] = 0.25        # one doubt = 0.75 stress
+    market = _market_for(squad, gw_xpts=2.0)
+    diff = {5: {"Arsenal": 3.6}}            # 14 x 0.176 = 2.5 -> total ~3.2 < 4
+    recs = score_free_hit(squad, {5: market}, [5], budget_m=100.0,
+                          team_difficulty_by_gw=diff)
+    assert recs == []
+
+
+def test_fh_stress_without_play_prob_column_matches_legacy_gate(monkeypatch):
+    """A squad frame without availability (older callers, route fakes) counts
+    everyone fit — a hard-ish week alone doesn't open the gate."""
+    monkeypatch.setattr(config, "CHIP_PLAN_FH_MIN_STRESS", 4.0, raising=False)
+    monkeypatch.setattr(config, "CHIP_PLAN_FH_STRESS_TOUGH_FROM", 3.3, raising=False)
+    squad = _squad_15_single_team(team="Arsenal")
+    market = _market_for(squad, gw_xpts=2.0)
+    recs = score_free_hit(squad, {5: market}, [5], budget_m=100.0,
+                          team_difficulty_by_gw={5: {"Arsenal": 3.6}})
+    assert recs == []
+
+
+def test_fh_stress_gate_disabled_at_zero(monkeypatch):
+    monkeypatch.setattr(config, "CHIP_PLAN_FH_MIN_STRESS", 0.0, raising=False)
+    squad = _squad_15_single_team(team="Arsenal")
+    squad["play_prob"] = 0.0                 # whole squad out — stress 15
+    market = _market_for(squad, gw_xpts=2.0)
+    recs = score_free_hit(squad, {5: market}, [5], budget_m=100.0,
+                          team_difficulty_by_gw={5: {"Arsenal": 2.5}})
+    assert recs == []
+
+
+def test_fh_injury_driven_stress_carries_transfer_check_risk(monkeypatch):
+    monkeypatch.setattr(config, "CHIP_PLAN_FH_MIN_STRESS", 4.0, raising=False)
+    squad = _squad_15_single_team(team="Arsenal")
+    squad["play_prob"] = 1.0
+    squad.loc[squad.index[:4], "play_prob"] = 0.0   # 4 out, easy fixtures
+    market = _market_for(squad, gw_xpts=2.0)
+    recs = score_free_hit(squad, {5: market}, [5], budget_m=100.0,
+                          team_difficulty_by_gw={5: {"Arsenal": 2.5}})
+    assert len(recs) == 1
+    assert any("free transfers" in r for r in recs[0].risks)

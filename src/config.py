@@ -307,6 +307,22 @@ BREAK_GAP_DAYS = 10.0           # deadline-to-deadline gap marking a post-intern
 CHIP_PLAN_BREAK_CONFIDENCE_MULT = 0.85  # confidence haircut on recs targeting a post-break GW
 CHIP_PLAN_FH_MIN_TOUGH = 6      # squad players on tough fixtures that open the FH gate
 CHIP_PLAN_FH_TOUGH_DIFFICULTY = 4.0  # ticker difficulty counting as "tough"
+# Blended "squad stress" opener (2026-09-18). The two hard triggers above are
+# all-or-nothing: 3 blanks OR 6 players at difficulty >= 4.0. A squad with
+# three unavailable players and a handful of away trips to top sides trips
+# neither, yet that is exactly the week a manager asks "should I Free Hit?".
+# Per squad player, stress = max(blank, 1 - play_prob, tough_weight), where
+# tough_weight ramps linearly from 0 at STRESS_TOUGH_FROM (the ticker's
+# "medium" band ceiling — a medium fixture adds nothing) to 1 at difficulty
+# 5. The sum over the 15 (0..15 "player-equivalents") opens the FH gate at
+# MIN_STRESS; the EV bar (CHIP_PLAN_MIN_EV) still applies afterwards. The
+# hard triggers stay as fast paths, so no week that opened before closes
+# now. Availability comes from the squad frame's `play_prob` column
+# (api.chat._build_context_for_entry, from FPL status + chance_of_playing);
+# absent -> every player counted fit, i.e. the pre-2026-09-18 behaviour.
+# 0 disables the blended opener.
+CHIP_PLAN_FH_MIN_STRESS = 4.0
+CHIP_PLAN_FH_STRESS_TOUGH_FROM = 3.3
 # Difficulty→multiplier for the TC haul-prob lambda (mirrors the projection
 # engine's FDR multipliers; keyed on round(difficulty)).
 CHIP_PLAN_TC_DIFF_MULT = {1: 1.25, 2: 1.12, 3: 1.0, 4: 0.88, 5: 0.75}

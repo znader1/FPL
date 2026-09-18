@@ -81,6 +81,7 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
     # Local import to avoid circular and keep startup fast
     from src import fpl_client, transforms, projections, optimizer, config
     from src.breaks import international_break_gws
+    from src.chip_advisor import play_prob_from_availability
 
     bootstrap = fpl_client.get_bootstrap()
     # Reuses the bootstrap already fetched above — no extra network call.
@@ -119,8 +120,9 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
     # Build squad DataFrame
     pick_ids = [int(p["element"]) for p in picks]
     captain_id = next((int(p["element"]) for p in picks if p.get("is_captain")), None)
+    availability_cols = [c for c in ("status", "chance_of_playing_next_round") if c in elements.columns]
     squad_rows = elements[elements["id"].isin(pick_ids)][
-        ["id", "web_name", "team", "element_type", "now_cost"]
+        ["id", "web_name", "team", "element_type", "now_cost", *availability_cols]
     ].copy()
     pos_map = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
     team_name_map = dict(zip(teams["id"], teams["name"]))
@@ -130,6 +132,9 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
         "pos": squad_rows["element_type"].map(pos_map).values,
         "team": squad_rows["team"].map(team_name_map).values,
         "price_m": (squad_rows["now_cost"] / 10.0).values,
+        # P(available) from FPL status + chance_of_playing — feeds the Free
+        # Hit squad-stress opener (chip_advisor.fh_squad_stress).
+        "play_prob": play_prob_from_availability(squad_rows).values,
     })
 
     # Project next N GWs
