@@ -44,11 +44,31 @@ def _red_flag(r):
     return status in statuses or (chance is not None and chance <= max_chance)
 
 
+def _avail_risk(status, chance):
+    """Availability-risk scalar for the injured-sell-preference bonus (not
+    xPts): 1.0 for an i/s/u status; a doubtful player scales as
+    min(1.0, 2*(100-chance)/100) (75% chance -> 0.5); a "d" status with an
+    unknown chance defaults to 0.5; everything else (fit, chance==100) is 0."""
+    if status in ("i", "s", "u"):
+        return 1.0
+    if chance is not None and chance < 100:
+        return min(1.0, 2 * (100 - chance) / 100)
+    if status == "d":
+        return 0.5
+    return 0.0
+
+
 def _build_info(proj, gws):
     df = proj.drop_duplicates("id")
     info = {}
     for _, r in df.iterrows():
         pid = int(r["id"])
+        status = str(r.get("status") or "a").lower()
+        chance_raw = r.get("chance_of_playing_next_round")
+        try:
+            chance = float(chance_raw)
+        except (TypeError, ValueError):
+            chance = None
         info[pid] = {
             "id": pid,
             "name": r.get("web_name"),
@@ -57,6 +77,9 @@ def _build_info(proj, gws):
             "price": _num(r.get("price_m")),
             "xg": {g: _num(r.get(f"xpts_gw{g}")) for g in gws},
             "red_flag": _red_flag(r),
+            "status": status,
+            "chance": chance,
+            "avail_risk": _avail_risk(status, chance),
         }
     return info
 
@@ -94,15 +117,20 @@ def _h2h_conflicts(buy_pos, buy_team, seller, squad_all, info, opps_gw):
 
 
 def _best_swap(squad, info, unowned, hz, bank, team_counts, xi=None,
-               squad_all=None, opps_gw=None, h2h_pen=0.0):
+               squad_all=None, opps_gw=None, h2h_pen=0.0, injured_bonus=0.0):
     """Best single like-for-like swap: maximizes remaining-horizon gain subject
     to budget and the 3-per-club cap. Returns {sell, buy, pos, gain} or None.
 
     With `xi` (from _xi_floors), a bench seller's swap only counts the points
     the buyer would add by displacing the weakest same-position XI member —
-    upgrading a player who stays on the bench is worth nothing."""
+    upgrading a player who stays on the bench is worth nothing.
+
+    `injured_bonus` breaks ties (and near-ties) toward selling the seller with
+    more availability risk first -- a PREFERENCE, not extra xPts: it only
+    weights which candidate is picked, the returned `gain` is always the true,
+    bonus-free number (see TRANSFER_PLAN_INJURED_SELL_BONUS)."""
     xi_ids, xi_min_by_pos, xi_min_overall = xi if xi else (None, None, None)
-    best = None
+    best, best_score = None, None
     for s in squad:
         si = info[s]
         s_hz, s_price, s_team, s_pos = hz[s], si["price"], si["team"], si["pos"]
@@ -127,14 +155,19 @@ def _best_swap(squad, info, unowned, hz, bank, team_counts, xi=None,
                 conflicts = _h2h_conflicts(s_pos, bi["team"], s,
                                            squad_all or squad, info, opps_gw)
                 gain -= h2h_pen * len(conflicts)
-            if best is None or gain > best["gain"]:
+            score = gain + injured_bonus * si.get("avail_risk", 0.0)
+            if best is None or score > best_score:
+                best_score = score
                 best = {"sell": s, "buy": b, "pos": s_pos, "gain": gain,
-                        "conflicts": conflicts}
+                        "conflicts": conflicts,
+                        "sell_avail_risk": si.get("avail_risk", 0.0),
+                        "sell_status": si.get("status", "a"),
+                        "sell_chance": si.get("chance")}
     return best
 
 
 def _ranked_swaps(squad, info, unowned, hz, bank, team_counts, xi, opps_gw, h2h_pen,
-                  min_gain, pos_mult, n):
+                  min_gain, pos_mult, n, injured_bonus=0.0):
     """One best-swap candidate per squad member, ranked by horizon gain, then
     walked to keep only DISTINCT buy targets (each player appears at most
     once) and at most two candidates per position. Several sellers tying on
@@ -152,7 +185,8 @@ def _ranked_swaps(squad, info, unowned, hz, bank, team_counts, xi, opps_gw, h2h_
     cands = []
     for s in squad:
         best = _best_swap({s}, info, unowned, hz, bank, team_counts, xi=xi,
-                          squad_all=squad, opps_gw=opps_gw, h2h_pen=h2h_pen)
+                          squad_all=squad, opps_gw=opps_gw, h2h_pen=h2h_pen,
+                          injured_bonus=injured_bonus)
         if best is None or best["gain"] <= 0:
             continue
         bar = float(min_gain) * float(pos_mult.get(best["pos"], 1.0))
@@ -189,12 +223,16 @@ def _move_record(m, info, gw=None):
         rec["forced_injury"] = True
     if m.get("conflicts"):
         rec["h2h_conflicts"] = [info[p]["name"] for p in m["conflicts"]]
+    sell_status = m.get("sell_status", s.get("status", "a"))
+    sell_chance = m.get("sell_chance", s.get("chance"))
+    if sell_status != "a" or (sell_chance is not None and sell_chance < 100):
+        rec["sell_availability"] = {"status": sell_status, "chance": sell_chance}
     return rec
 
 
 def _detail_move(m):
     """Compact move for verdict_detail from a `_move_record` output."""
-    return {
+    d = {
         "sell": m["sell"],
         "buy": m["buy"],
         "position": m.get("position"),
@@ -203,6 +241,9 @@ def _detail_move(m):
         "forced_injury": bool(m.get("forced_injury", False)),
         "h2h_conflicts": list(m.get("h2h_conflicts") or []),
     }
+    if m.get("sell_availability"):
+        d["sell_availability"] = m["sell_availability"]
+    return d
 
 
 def _verdict_detail(result, min_gain, rejected=None, runner_ups=None):
@@ -284,8 +325,10 @@ def scaled_min_gain(n_gws, base=None, ref_gws=None):
 
 def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
                    hit_penalty=4.0, allow_hits=True, min_gain=2.0, max_moves_per_gw=3,
-                   opponents_by_gw=None, _skip_first_gw=False):
+                   opponents_by_gw=None, _skip_first_gw=False, prioritize_injured=True):
     info = _build_info(proj, gws)
+    injured_bonus = (float(getattr(config, "TRANSFER_PLAN_INJURED_SELL_BONUS", 1.0))
+                      if prioritize_injured else 0.0)
     squad = set(int(x) for x in squad_ids if int(x) in info)
     bank = float(itb_m)
     ft = int(start_ft)
@@ -346,7 +389,8 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
             unowned0 = [x for x in info if x not in squad]
             runner_up_cands = _ranked_swaps(
                 squad, info, unowned0, hz, bank, team_counts, xi, opps_gw, h2h_pen,
-                min_gain, pos_mult, int(getattr(config, "TRANSFER_PLAN_RUNNER_UPS", 5)))
+                min_gain, pos_mult, int(getattr(config, "TRANSFER_PLAN_RUNNER_UPS", 5)),
+                injured_bonus=injured_bonus)
 
         moves, hits = [], 0
         # A player this GW's plan just bought must never be eligible as a
@@ -404,7 +448,8 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
             best = None
             while pool:
                 cand = _best_swap(pool, info, unowned, hz, bank, team_counts, xi=xi,
-                                  squad_all=squad, opps_gw=opps_gw, h2h_pen=h2h_pen)
+                                  squad_all=squad, opps_gw=opps_gw, h2h_pen=h2h_pen,
+                                  injured_bonus=injured_bonus)
                 if cand is None:
                     break
                 bar = threshold * float(pos_mult.get(cand["pos"], 1.0))
@@ -494,7 +539,7 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
             proj, squad_ids, gws, itb_m=itb_m, start_ft=start_ft, ft_cap=ft_cap,
             hit_penalty=hit_penalty, allow_hits=allow_hits, min_gain=min_gain,
             max_moves_per_gw=alt_cap, opponents_by_gw=opponents_by_gw,
-            _skip_first_gw=True,
+            _skip_first_gw=True, prioritize_injured=prioritize_injured,
         )
         alt_net = round(float(alt["total_net_gain"]), 2)
         result["roll_alternative_net_gain"] = float(alt_net)

@@ -975,6 +975,7 @@ def build_recommendations(payload):
     chip_strategy_raw = payload.get("chip_strategy")
     chip_strategy = normalize_chip_strategy(chip_strategy_raw)
     chip_differential = parse_bool(payload.get("differential"), default=False)
+    prioritize_injured = parse_bool(payload.get("prioritize_injured"), default=True)
     latest_n_matches_raw = payload.get("latest_n_matches", getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3))
     apply_transfer_count_raw = payload.get("apply_transfer_count")
 
@@ -1491,7 +1492,8 @@ def build_recommendations(payload):
                 allow_hits=bool(getattr(config, "TRANSFER_PLAN_ALLOW_HITS", False)),
                 max_moves_per_gw=int(getattr(config, "TRANSFER_PLAN_MAX_MOVES_PER_GW", 1)),
                 min_gain=transfer_planner.scaled_min_gain(len(plan_gws)),
-                opponents_by_gw=_opps_by_gw)
+                opponents_by_gw=_opps_by_gw,
+                prioritize_injured=prioritize_injured)
         except Exception as e:  # noqa: BLE001 - planning must never fail the recommendation
             logger.warning("horizon transfer plan failed: %s", e)
 
@@ -2032,6 +2034,7 @@ def recommendations_get(
     horizon_gws=3, chip_horizon_gws=None, chip_play_event_id=None,
     chip_strategy="none", latest_n_matches=3, include_transfers=False,
     apply_transfer_count=None, itb_m=None, free_transfers=None, hit_cap=0, panel_limit=5,
+    prioritize_injured=None,
     api_key=None, x_api_key=Header(None), authorization=Header(None),
 ):
     err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
@@ -2044,6 +2047,7 @@ def recommendations_get(
         "latest_n_matches": latest_n_matches, "include_transfers": include_transfers,
         "apply_transfer_count": apply_transfer_count, "itb_m": itb_m,
         "free_transfers": free_transfers, "hit_cap": hit_cap, "panel_limit": panel_limit,
+        "prioritize_injured": prioritize_injured,
     }
     out = build_recommendations(payload)
     return JSONResponse(content=jsonable_encoder(out))

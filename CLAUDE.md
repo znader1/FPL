@@ -116,6 +116,7 @@ Greedy per-GW walk across the projection horizon, separate from the single-GW be
 - **Positional bars**: GKP/DEF swaps need `POS_GAIN_MULT` × min_gain (2.0 / 2.25) — shared with the beam search.
 - **Head-to-head hedge nudge**: buys directly opposing an owned GKP/DEF↔attacker pair that GW get `TRANSFER_H2H_CONFLICT_PENALTY` (variance preference, deliberately small) and an `h2h_conflicts` warning on the move record.
 - **Horizon = slider**: `MIN_HORIZON_GWS` is 1 (was a hard floor of 3 until 2026-09-17). "1 GW" ranks moves on this week alone and skips roll-vs-move (needs a next week); 3 GW default unchanged. The gain bar scales with the horizon (`scaled_min_gain`: `TRANSFER_PLAN_MIN_GAIN` 2.0 over `TRANSFER_PLAN_MIN_GAIN_REF_GWS` 3 → 0.67 at 1 GW), so a short horizon is not silently stricter.
+- **Injury-priority preference (2026-09-18)**: when tied/near-tied swaps land on the same buy, `TRANSFER_PLAN_INJURED_SELL_BONUS` (default 1.0, tie-break only — reported `score_gain` never changes) nudges `_best_swap`'s selection toward selling the availability-risk player first; toggle via `plan_transfers(prioritize_injured=...)` / API `prioritize_injured` (default true), and moves carry `sell_availability` when the seller has risk.
 
 ### Chip optimizer (`src/optimizer.py` + chip logic in `api/main.py`)
 

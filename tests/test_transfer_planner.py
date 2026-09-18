@@ -312,3 +312,91 @@ def test_h2h_penalty_prefers_the_clean_alternative():
     finally:
         config.TRANSFER_H2H_CONFLICT_PENALTY = saved
     assert out0["plan"][0]["moves"][0]["buy"]["id"] == 3
+
+
+# --- Injury-priority preference (src/transfer_planner.py, src/config.py) ---
+# When two swaps to the same buy tie on raw gain, prefer selling the player
+# with availability risk first (TRANSFER_PLAN_INJURED_SELL_BONUS) -- but the
+# reported score_gain must stay the honest, bonus-free number either way.
+
+def test_tied_swaps_prefer_selling_the_doubtful_player():
+    # 10 MIDs fill the likely XI; Maguire (DEF, fit) is the 11th/weakest XI
+    # member (the position floor); Shaw (DEF, doubtful 75%) is on the bench.
+    # A DEF buy scores an identical XI-aware gain either way it's sold.
+    players = [_player(i, "MID", price=5.0, xpts=5.0) for i in range(1, 11)]
+    players.append(_player(11, "DEF", price=5.0, xpts=2.0, status="a"))   # Maguire
+    players.append(_player(12, "DEF", price=4.0, xpts=1.0, status="d", chance=75))  # Shaw
+    players.append(_player(13, "DEF", price=5.0, xpts=8.0))               # buy target
+    proj = _proj_frame(players, gws=(10,))
+    squad_ids = list(range(1, 13))
+
+    out_on = tp.plan_transfers(proj, squad_ids, gws=[10], itb_m=1.0, start_ft=1,
+                               min_gain=2.0, prioritize_injured=True)
+    move_on = out_on["plan"][0]["moves"][0]
+    assert move_on["sell"]["id"] == 12   # Shaw (doubtful) sold
+    assert move_on["buy"]["id"] == 13
+    assert move_on["score_gain"] == 6.0
+
+    out_off = tp.plan_transfers(proj, squad_ids, gws=[10], itb_m=1.0, start_ft=1,
+                                min_gain=2.0, prioritize_injured=False)
+    move_off = out_off["plan"][0]["moves"][0]
+    assert move_off["sell"]["id"] == 11  # Maguire (fit) sold -- raw list order
+    assert move_off["buy"]["id"] == 13
+    assert move_off["score_gain"] == 6.0  # same reported gain -- bonus never leaks
+
+
+def test_injured_bonus_wins_small_gap_loses_large_gap():
+    # Direct unit test of _best_swap's selection score: an "i" seller (risk
+    # 1.0, bonus 1.0 -> +1.0) beats a fit seller whose OWN best swap is only
+    # 0.9 better, but loses when that gap grows to 1.2.
+    info = {
+        1: {"id": 1, "pos": "DEF", "team": "TI", "price": 4.0,
+            "status": "i", "chance": None, "avail_risk": 1.0},
+        2: {"id": 2, "pos": "DEF", "team": "TF", "price": 4.5,
+            "status": "a", "chance": 100, "avail_risk": 0.0},
+        3: {"id": 3, "pos": "DEF", "team": "TB3", "price": 4.0},
+        4: {"id": 4, "pos": "DEF", "team": "TB4", "price": 4.5},
+    }
+    hz_small = {1: 0.0, 2: 0.0, 3: 5.0, 4: 5.9}
+    best = tp._best_swap({1, 2}, info, [3, 4], hz_small, bank=0.0, team_counts={},
+                         injured_bonus=1.0)
+    assert best["sell"] == 1 and best["buy"] == 3  # i-seller wins the 0.9 gap
+
+    hz_large = {1: 0.0, 2: 0.0, 3: 5.0, 4: 6.2}
+    best2 = tp._best_swap({1, 2}, info, [3, 4], hz_large, bank=0.0, team_counts={},
+                          injured_bonus=1.0)
+    assert best2["sell"] == 2 and best2["buy"] == 4  # loses the 1.2 gap
+
+
+def test_sell_availability_present_for_doubtful_absent_for_fit():
+    proj_doubt = _proj_frame([
+        _player(1, "MID", price=5.0, xpts=2.0, status="d", chance=60),
+        _player(2, "MID", price=5.0, xpts=7.0),
+    ], gws=(10,))
+    out = tp.plan_transfers(proj_doubt, squad_ids=[1], gws=[10], itb_m=0.0,
+                            start_ft=1, min_gain=2.0)
+    move = out["plan"][0]["moves"][0]
+    assert move["sell_availability"] == {"status": "d", "chance": 60.0}
+
+    proj_fit = _proj_frame([
+        _player(1, "MID", price=5.0, xpts=2.0),
+        _player(2, "MID", price=5.0, xpts=7.0),
+    ], gws=(10,))
+    out2 = tp.plan_transfers(proj_fit, squad_ids=[1], gws=[10], itb_m=0.0,
+                             start_ft=1, min_gain=2.0)
+    move2 = out2["plan"][0]["moves"][0]
+    assert "sell_availability" not in move2
+
+
+def test_runner_ups_carry_sell_availability():
+    proj = _proj_frame([
+        _player(1, "MID", price=5.0, xpts=1.0),                            # sold (big gain)
+        _player(2, "DEF", price=4.0, xpts=2.0, status="d", chance=50),     # runner-up, doubtful
+        _player(3, "MID", price=5.0, xpts=8.0),                            # buy for seller 1
+        _player(4, "DEF", price=4.0, xpts=3.0),                            # buy for seller 2
+    ], gws=(10,))
+    out = tp.plan_transfers(proj, squad_ids=[1, 2], gws=[10], itb_m=0.0,
+                            start_ft=1, min_gain=2.0)
+    runner_ups = out["verdict_detail"]["runner_ups"]
+    ru = next(r for r in runner_ups if r["sell"]["id"] == 2)
+    assert ru["sell_availability"] == {"status": "d", "chance": 50.0}
