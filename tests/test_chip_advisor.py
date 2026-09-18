@@ -1178,3 +1178,58 @@ def test_fh_stress_counts_a_fit_but_benched_player(monkeypatch):
     reason = next(r for r in recs[0].reasoning if "Squad stress" in r)
     # three injured (0.0) list first; the benched player (0.25) is the "+1"
     assert "4 unlikely to play" in reason and "P2, P3, P4 +1" in reason
+
+
+# ---- held Free Hit still reports its stress reading (2026-09-18) ----
+
+from src.chip_advisor import fh_best_stress_row, describe_fh_stress
+
+
+def test_fh_best_stress_row_picks_the_worst_week(monkeypatch):
+    monkeypatch.setattr(config, "CHIP_PLAN_FH_MIN_STRESS", 4.0, raising=False)
+    squad = _squad_15_single_team(team="Arsenal")
+    squad["play_prob"] = 1.0
+    squad.loc[squad.index[:2], "play_prob"] = 0.0
+    projections = {5: _market_for(squad, gw_xpts=2.0), 6: _market_for(squad, gw_xpts=2.0)}
+    diff = {5: {"Arsenal": 3.4}, 6: {"Arsenal": 4.8}}   # GW6 is the harder week
+    row = fh_best_stress_row(squad, projections, [5, 6], diff)
+    assert row["gw"] == 6 and row["bar"] == 4.0
+    assert row["total"] > fh_best_stress_row(squad, projections, [5], diff)["total"]
+
+
+def test_fh_best_stress_row_none_when_opener_disabled(monkeypatch):
+    monkeypatch.setattr(config, "CHIP_PLAN_FH_MIN_STRESS", 0.0, raising=False)
+    squad = _squad_15_single_team(team="Arsenal")
+    assert fh_best_stress_row(squad, {5: _market_for(squad)}, [5], {5: {"Arsenal": 5.0}}) is None
+
+
+def test_describe_fh_stress_names_the_pressure():
+    text = describe_fh_stress({
+        "n_unavailable": 4, "unavailable_names": ["Shaw", "Hume", "Pedro", "X"],
+        "n_blanking": 0, "n_tough": 3,
+    })
+    assert "4 unlikely to play" in text and "Shaw, Hume, Pedro +1" in text
+    assert "3 on harder-than-average fixtures" in text
+    assert "blanking" not in text
+    assert describe_fh_stress({"n_unavailable": 0, "n_blanking": 0, "n_tough": 0}) == "no notable pressure"
+
+
+def test_held_fh_outlook_row_carries_stress_reading(monkeypatch):
+    """The gate holds, but the row must still show how close the squad came."""
+    monkeypatch.setattr(config, "CHIP_PLAN_FH_MIN_STRESS", 9.0, raising=False)  # unreachable
+    squad = _squad_15_single_team(team="Arsenal")
+    squad["play_prob"] = 1.0
+    squad.loc[squad.index[:2], "play_prob"] = 0.0
+    squad["price_m"] = 5.0
+    gw_projections = {g: _market_for(squad, gw_xpts=2.0) for g in range(5, 9)}
+    plan = build_chip_plan(
+        squad=squad, current_gw=5, gw_projections=gw_projections,
+        chips_played=[], itb_m=0.0, horizon_gws=4,
+        team_difficulty_by_gw={g: {"Arsenal": 3.6} for g in range(5, 9)},
+    )
+    fh = next(o for o in plan["outlook"] if o["chip"] == "free_hit")
+    assert fh["event_id"] is None and fh["status"] == "hold"
+    assert fh["stress"]["bar"] == 9.0 and fh["stress"]["total"] > 0
+    assert "Most stressed week is GW" in fh["reasons"][0]
+    assert "2 unlikely to play" in fh["reasons"][0]
+    assert "most stressed week so far" in fh["guidance"]

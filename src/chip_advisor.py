@@ -500,6 +500,55 @@ def fh_squad_stress(squad_with_xpts: pd.DataFrame, difficulty_by_team: dict[str,
     }
 
 
+def fh_stress_by_gw(squad: pd.DataFrame, gw_projections: dict[int, pd.DataFrame],
+                    candidate_gws: list[int],
+                    team_difficulty_by_gw: dict[int, dict[str, float]] | None = None) -> dict[int, dict]:
+    """`fh_squad_stress` for each candidate GW, so a held Free Hit can still
+    report how stressed the squad is and which week comes closest to the bar
+    (the gate itself lives in `score_free_hit`)."""
+    out = {}
+    for gw in candidate_gws:
+        market = gw_projections.get(gw)
+        if market is None or market.empty:
+            continue
+        swx = squad.merge(market[["player_id", "xpts", "fixture_count"]], on="player_id", how="left")
+        swx["xpts"] = swx["xpts"].fillna(0)
+        out[int(gw)] = fh_squad_stress(swx, (team_difficulty_by_gw or {}).get(gw) or {})
+    return out
+
+
+def fh_best_stress_row(squad: pd.DataFrame, gw_projections: dict[int, pd.DataFrame],
+                       candidate_gws: list[int],
+                       team_difficulty_by_gw: dict[int, dict[str, float]] | None = None):
+    """The most-stressed candidate GW, as a stress dict plus `gw` and the `bar`
+    it was measured against. None when there is nothing to report (no
+    candidates, or the blended opener is switched off)."""
+    bar = float(getattr(config, "CHIP_PLAN_FH_MIN_STRESS", 4.0))
+    if bar <= 0:
+        return None
+    by_gw = fh_stress_by_gw(squad, gw_projections, candidate_gws, team_difficulty_by_gw)
+    if not by_gw:
+        return None
+    gw, stress = max(by_gw.items(), key=lambda kv: kv[1]["total"])
+    return {**stress, "gw": int(gw), "bar": bar}
+
+
+def describe_fh_stress(stress: dict) -> str:
+    """One human clause for a stress reading: what is actually pressuring the
+    squad. Shared by the gate's reasoning and the hold row so they never drift."""
+    parts = []
+    if stress.get("n_unavailable"):
+        names = ", ".join(stress.get("unavailable_names", [])[:3])
+        more = stress["n_unavailable"] - min(3, len(stress.get("unavailable_names", [])))
+        parts.append(f"{stress['n_unavailable']} unlikely to play (injured/doubtful/benched)"
+                     + (f": {names}{f' +{more}' if more > 0 else ''}" if names else ""))
+    if stress.get("n_blanking"):
+        parts.append(f"{stress['n_blanking']} blanking")
+    if stress.get("n_tough"):
+        parts.append(f"{stress['n_tough']} on harder-than-average fixtures")
+    return ", ".join(parts) if parts else "no notable pressure"
+
+
 def score_free_hit(
     squad: pd.DataFrame,
     gw_projections: dict[int, pd.DataFrame],
@@ -614,20 +663,9 @@ def score_free_hit(
             reasoning.append(
                 f"{n_tough} of your 15 face difficulty ≥{tough_at:.1f} in GW{gw}")
         if stress_trigger:
-            parts = []
-            if stress["n_unavailable"]:
-                names = ", ".join(stress["unavailable_names"][:3])
-                more = stress["n_unavailable"] - min(3, len(stress["unavailable_names"]))
-                parts.append(
-                    f"{stress['n_unavailable']} unlikely to play (injured/doubtful/benched)"
-                    + (f": {names}{f' +{more}' if more > 0 else ''}" if names else ""))
-            if stress["n_blanking"]:
-                parts.append(f"{stress['n_blanking']} blanking")
-            if stress["n_tough"]:
-                parts.append(f"{stress['n_tough']} on harder-than-average fixtures")
             reasoning.append(
                 f"Squad stress {stress['total']:.1f}/15 in GW{gw} (bar {min_stress:.1f}): "
-                + (", ".join(parts) if parts else "mixed pressure"))
+                + describe_fh_stress(stress))
 
         risks = []
         if uplift < 5:
@@ -884,7 +922,7 @@ def _fh_structural_guidance(gw):
 
 
 def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon,
-                    transfer_plan_net_gain=0.0, structural_gw=None):
+                    transfer_plan_net_gain=0.0, structural_gw=None, stress=None):
     """Plain-language "why is this chip on hold" sentence for one outlook or
     recommendation row. Raises on a missing/unexpected field — callers use
     `_safe_chip_guidance` so a gap never breaks the payload."""
@@ -899,6 +937,13 @@ def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon,
     if event_id is None:
         if chip == "free_hit" and structural_gw is not None:
             return _fh_structural_guidance(structural_gw)
+        if chip == "free_hit" and stress is not None and stress["total"] > 0:
+            return (
+                f"Hold. GW{stress['gw']} is your most stressed week so far "
+                f"({stress['total']:.1f} of the {stress['bar']:.1f} bar): "
+                f"{describe_fh_stress(stress)}. Not enough to spend the chip — "
+                f"a transfer or two covers this. Best use: {prior}."
+            )
         text = f"Hold. Nothing in the next {horizon} GWs beats keeping it. Best use: {prior}."
         if chip == "wildcard" and transfer_plan_net_gain > 0:
             text += " Your squad plus free transfers already covers this stretch."
@@ -1008,12 +1053,24 @@ def build_chip_plan(
         in_window = [r for r in chip_recs if r.gw <= expires_gw]
         if not in_window:
             base_bar = float(getattr(config, "CHIP_PLAN_MIN_EV", {}).get(chip, 0.0))
+            # A held Free Hit should still show its reading: which week came
+            # closest to the stress bar and what is pressuring the squad, so
+            # "no window" is a number the manager can judge, not a dead end.
+            stress_row = None
+            if chip == "free_hit":
+                stress_row = fh_best_stress_row(
+                    squad, gw_projections,
+                    [g for g in range(current_gw, model_end + 1) if g <= expires_gw],
+                    team_difficulty_by_gw)
             no_window_reason = (
-                "No blank-heavy, injury-hit or tough-fixture week in the model horizon"
-                if chip == "free_hit"
-                else "No positive-EV window in the model horizon"
+                (f"Most stressed week is GW{stress_row['gw']}: {stress_row['total']:.1f}"
+                 f"/15 vs the {stress_row['bar']:.1f} bar — {describe_fh_stress(stress_row)}")
+                if stress_row is not None and stress_row["total"] > 0 else
+                ("No blank-heavy, injury-hit or tough-fixture week in the model horizon"
+                 if chip == "free_hit"
+                 else "No positive-EV window in the model horizon")
             )
-            outlook.append({
+            row = {
                 "chip": chip,
                 "event_id": None,
                 "ev_gain": None,
@@ -1024,8 +1081,12 @@ def build_chip_plan(
                     chip, status="hold", event_id=None, ev_gain=None, bar=base_bar,
                     distribution=None, horizon=horizon,
                     transfer_plan_net_gain=plan_net_gain,
-                    structural_gw=fh_structural_gw if chip == "free_hit" else None),
-            })
+                    structural_gw=fh_structural_gw if chip == "free_hit" else None,
+                    stress=stress_row if fh_structural_gw is None else None),
+            }
+            if stress_row is not None and stress_row["total"] > 0:
+                row["stress"] = stress_row
+            outlook.append(row)
             continue
         best = max(in_window, key=lambda r: r.expected_value)
         curve = []
