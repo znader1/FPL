@@ -1,18 +1,58 @@
+"""Runtime configuration.
+
+This file is the ONLY place a parameter value lives — read them as
+``config.NAME``, never ``getattr(config, "NAME", fallback)``. A call-site
+fallback is a second source of truth, and when the two drift the engine
+silently uses the wrong one (tests/test_config_single_source_of_truth.py).
+
+The FPL rulebook is NOT here — it is in src/rules.py (re-exported below).
+
+Every parameter carries a provenance tag saying where its value came from,
+so it is obvious which numbers you may change:
+
+  [tuned]        a backtest or sweep script exercises this value; change it
+                 by re-running that script, not by editing the number
+  [untested]     chosen by hand and never validated — the value is a guess.
+                 Changing it is not "breaking" anything, but neither was
+                 setting it. Promote to [tuned] by writing a sweep for it.
+  [operational]  paths, cache lifetimes, feed URLs. Not a modelling choice
+  [flag]         on/off switch for a code path, not a magnitude
+
+A new parameter must carry a tag; the test suite enforces it.
+"""
 # config.py
+# The FPL rulebook lives in src/rules.py — fixed by the game, never tuned.
+# Re-exported here so existing config.NAME reads keep working.
+from src.rules import (  # noqa: F401
+    CHIP_MAX_PER_TEAM,
+    CHIP_PLAN_PHASE_SPLIT_GW,
+    CHIP_PLAN_SEASON_END_GW,
+    FT_MAX,
+    OUTPUT_ASSIST_POINTS,
+    OUTPUT_CS_POINTS,
+    OUTPUT_DC_POINTS,
+    OUTPUT_DC_THRESHOLD,
+    OUTPUT_GOALS_CONCEDED_PENALTY_PER_2,
+    OUTPUT_GOAL_POINTS,
+    OUTPUT_SAVE_POINTS_PER_SAVE,
+    TRANSFER_HIT_POINTS_STEP,
+    TRANSFER_MAX_PER_TEAM,
+)
+
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
+      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")  # [operational]
 
 # If set, requests will use it. Else, system trust store.
 
 # Caching / API
-BOOTSTRAP_TTL = 300  # seconds
-EVENT_LIVE_TTL = 60  # live GW scores move during matches, so cache far shorter
+BOOTSTRAP_TTL = 300  # [operational] seconds
+EVENT_LIVE_TTL = 60  # [operational] live GW scores move during matches, so cache far shorter
 # Projections only change when the history is refreshed or bootstrap moves
 # (prices, injuries), so they can outlive the fixtures cache by a long way. On a
 # shared-cpu Fly machine a cold build is seconds, and this is what keeps a squad
 # load off that path.
-PROJECTIONS_TTL = 1800
-FIXTURES_TTL  = 300
+PROJECTIONS_TTL = 1800  # [operational]
+FIXTURES_TTL  = 300  # [operational]
 
 # Elements features you care about
 ELEMENTS_KEEP = [
@@ -33,7 +73,7 @@ ELEMENTS_KEEP = [
     # xG / expected-points stack (retained last-season per-90 aggregates pre-season)
     "expected_goals_per_90","expected_assists_per_90","expected_goals_conceded_per_90",
     "saves_per_90","starts",
-]
+]  # [operational]
 
 # Position labels to show
 
@@ -42,44 +82,44 @@ METRIC_MAP = {
     "Total points": "total_points",
     "Form": "form",
     "Pts per game": "points_per_game",
-}
+}  # [operational]
 
 # Output columns for the squad table
 SQUAD_COLUMNS = [
     "player_id","web_name","pos","team_short","team_name",
     "is_captain","is_vice_captain","multiplier"
-]
+]  # [operational]
 
 
 # -----------------------------
 # Projection tuning
 # -----------------------------
-PROJ_DEFAULT_LATEST_N_MATCHES = 3
+PROJ_DEFAULT_LATEST_N_MATCHES = 3  # [untested]
 # Default projection horizon. Was only ever a getattr fallback in api/main.py;
 # hoisted here so config.py is the single source of truth.
-PROJ_DEFAULT_HORIZON_GWS = 3
-PROJ_DEFAULT_PPG_WEIGHT = 0.55
-PROJ_DEFAULT_FORM_WEIGHT = 0.45
-PROJ_FORM_SCALE_PER_MATCH = 0.04
-PROJ_FORM_SCALE_BASE_MATCHES = 3
-PROJ_LATEST_N_MIN = 1
-PROJ_LATEST_N_MAX = 8
-PROJ_PLAYER_RECENT_GW_WINDOW = 5
-PROJ_PLAYER_RECENT_MIN_SAMPLES = 2
-PROJ_PLAYER_RECENT_BLEND_WEIGHT = 0.65
-PROJ_EP_NEXT_BLEND_WEIGHT = 0.50
-PROJ_DGW_EXTRA_FIXTURE_DISCOUNT = 0.65   # DGW extra fixture counts as 65% of a normal fixture
-PROJ_INJURY_FUTURE_GW_FADE = 0.50        # Future GW injury discount fades by 50% per GW
+PROJ_DEFAULT_HORIZON_GWS = 3  # [untested]
+PROJ_DEFAULT_PPG_WEIGHT = 0.55  # [untested]
+PROJ_DEFAULT_FORM_WEIGHT = 0.45  # [untested]
+PROJ_FORM_SCALE_PER_MATCH = 0.04  # [untested]
+PROJ_FORM_SCALE_BASE_MATCHES = 3  # [untested]
+PROJ_LATEST_N_MIN = 1  # [untested]
+PROJ_LATEST_N_MAX = 8  # [untested]
+PROJ_PLAYER_RECENT_GW_WINDOW = 5  # [untested]
+PROJ_PLAYER_RECENT_MIN_SAMPLES = 2  # [untested]
+PROJ_PLAYER_RECENT_BLEND_WEIGHT = 0.65  # [untested]
+PROJ_EP_NEXT_BLEND_WEIGHT = 0.50  # [untested]
+PROJ_DGW_EXTRA_FIXTURE_DISCOUNT = 0.65   # [untested] DGW extra fixture counts as 65% of a normal fixture
+PROJ_INJURY_FUTURE_GW_FADE = 0.50        # [untested] Future GW injury discount fades by 50% per GW
 
-PROJ_NEUTRAL_TEAM_PPG = 1.5
-PROJ_HOME_MULT_HOME = 1.06
-PROJ_HOME_MULT_AWAY = 0.94
-PROJ_OPP_FORM_FACTOR = 0.12
-PROJ_OPP_FORM_MIN = 0.86
-PROJ_OPP_FORM_MAX = 1.14
-PROJ_TEAM_FORM_FACTOR = 0.08
-PROJ_TEAM_FORM_MIN = 0.90
-PROJ_TEAM_FORM_MAX = 1.12
+PROJ_NEUTRAL_TEAM_PPG = 1.5  # [untested]
+PROJ_HOME_MULT_HOME = 1.06  # [untested]
+PROJ_HOME_MULT_AWAY = 0.94  # [untested]
+PROJ_OPP_FORM_FACTOR = 0.12  # [untested]
+PROJ_OPP_FORM_MIN = 0.86  # [untested]
+PROJ_OPP_FORM_MAX = 1.14  # [untested]
+PROJ_TEAM_FORM_FACTOR = 0.08  # [untested]
+PROJ_TEAM_FORM_MIN = 0.90  # [untested]
+PROJ_TEAM_FORM_MAX = 1.12  # [untested]
 
 # -----------------------------
 # Captain tuning
@@ -89,15 +129,15 @@ CAPTAIN_POSITION_MULTIPLIER = {
     "MID": 1.12,
     "DEF": 0.92,
     "GKP": 0.85,
-}
-CAPTAIN_PREMIUM_PRICE_FLOOR = 9.0
-CAPTAIN_PREMIUM_PRICE_BONUS_PER_M = 0.10
-CAPTAIN_FORM_CEILING_WEIGHT = 0.04
-CAPTAIN_SET_PIECE_PENALTY_WEIGHT = 0.55
+}  # [untested]
+CAPTAIN_PREMIUM_PRICE_FLOOR = 9.0  # [untested]
+CAPTAIN_PREMIUM_PRICE_BONUS_PER_M = 0.10  # [untested]
+CAPTAIN_FORM_CEILING_WEIGHT = 0.04  # [untested]
+CAPTAIN_SET_PIECE_PENALTY_WEIGHT = 0.55  # [untested]
 # Armband tilt per FDR step from neutral 3: captaincy is a ceiling game — a
 # D4/D5 fixture crushes haul probability more than mean xPts, so a near-tie
 # resolves toward the easier fixture. ±0.35/step only flips close calls.
-CAPTAIN_FIXTURE_DIFFICULTY_WEIGHT = 0.35
+CAPTAIN_FIXTURE_DIFFICULTY_WEIGHT = 0.35  # [untested]
 
 # -----------------------------
 # Transfer recommender tuning
@@ -107,64 +147,62 @@ TRANSFER_ATTACK_BONUS = {
     "MID": 0.55,
     "DEF": 0.12,
     "GKP": 0.0,
-}
+}  # [untested]
 
-TRANSFER_BASE_PPG_WEIGHT = 0.58
-TRANSFER_BASE_FORM_WEIGHT = 0.42
-TRANSFER_CONSISTENCY_TOTAL_POINTS_WEIGHT = 0.14
-TRANSFER_CONSISTENCY_MINUTES_WEIGHT = 0.34
-TRANSFER_CONSISTENCY_TOTAL_POINTS_SCALE = 120.0
-TRANSFER_CONSISTENCY_MINUTES_TARGET = 1800.0
-TRANSFER_HOT_FORM_WEIGHT = 0.52
-TRANSFER_HOT_PPG_WEIGHT = 0.26
-TRANSFER_HOT_MOMENTUM_WEIGHT = 0.10
-TRANSFER_HOT_SELECTED_WEIGHT = 0.12
-TRANSFER_HOT_SELECTED_SCALE = 10.0
-TRANSFER_HOT_SCORE_BLEND = 0.30
-TRANSFER_KEEP_CAPTAIN_PENALTY = 2.5
-TRANSFER_KEEP_VICE_PENALTY = 1.5
-TRANSFER_MIN_SCORE_GAIN = 0.60
-TRANSFER_HIT_POINTS_STEP = 4
-TRANSFER_MAX_MOVES = 5
-TRANSFER_DEFAULT_HOT_TOPN = 5
-FT_MAX = 5                              # 2026-27: free transfers bank up to 5
+TRANSFER_BASE_PPG_WEIGHT = 0.58  # [untested]
+TRANSFER_BASE_FORM_WEIGHT = 0.42  # [untested]
+TRANSFER_CONSISTENCY_TOTAL_POINTS_WEIGHT = 0.14  # [untested]
+TRANSFER_CONSISTENCY_MINUTES_WEIGHT = 0.34  # [untested]
+TRANSFER_CONSISTENCY_TOTAL_POINTS_SCALE = 120.0  # [untested]
+TRANSFER_CONSISTENCY_MINUTES_TARGET = 1800.0  # [untested]
+TRANSFER_HOT_FORM_WEIGHT = 0.52  # [untested]
+TRANSFER_HOT_PPG_WEIGHT = 0.26  # [untested]
+TRANSFER_HOT_MOMENTUM_WEIGHT = 0.10  # [untested]
+TRANSFER_HOT_SELECTED_WEIGHT = 0.12  # [untested]
+TRANSFER_HOT_SELECTED_SCALE = 10.0  # [untested]
+TRANSFER_HOT_SCORE_BLEND = 0.30  # [untested]
+TRANSFER_KEEP_CAPTAIN_PENALTY = 2.5  # [untested]
+TRANSFER_KEEP_VICE_PENALTY = 1.5  # [untested]
+TRANSFER_MIN_SCORE_GAIN = 0.60  # [untested]
+TRANSFER_MAX_MOVES = 5  # [untested]
+TRANSFER_DEFAULT_HOT_TOPN = 5  # [untested]
 
 TRANSFER_SET_PIECE_WEIGHTS = {
     "penalties": {1: 3.1, 2: 1.2, 3: 0.35},
     "direct_free_kicks": {1: 1.0, 2: 0.35},
     "corners_indirect": {1: 0.75, 2: 0.25},
-}
+}  # [untested]
 TRANSFER_SET_PIECE_PRIMARY_BONUS = {
     "penalties": 1.1,
     "direct_free_kicks": 0.35,
     "corners_indirect": 0.25,
-}
+}  # [untested]
 
-TRANSFER_SELL_STARTER_BOOST = 1.25
-TRANSFER_SELL_BENCH_PENALTY = 1.55
-TRANSFER_SELL_GKP_PENALTY = 1.8
-TRANSFER_SELL_PREMIUM_PRICE_FLOOR = 8.0
-TRANSFER_SELL_PREMIUM_BOOST = 0.32
-TRANSFER_SELL_INJURY_BOOST = 3.8
+TRANSFER_SELL_STARTER_BOOST = 1.25  # [untested]
+TRANSFER_SELL_BENCH_PENALTY = 1.55  # [untested]
+TRANSFER_SELL_GKP_PENALTY = 1.8  # [untested]
+TRANSFER_SELL_PREMIUM_PRICE_FLOOR = 8.0  # [untested]
+TRANSFER_SELL_PREMIUM_BOOST = 0.32  # [untested]
+TRANSFER_SELL_INJURY_BOOST = 3.8  # [untested]
 
-TRANSFER_BUY_PREMIUM_PRICE_FLOOR = 8.5
-TRANSFER_BUY_PREMIUM_BONUS = 0.26
-TRANSFER_BUY_OWNERSHIP_BONUS = 0.08
-TRANSFER_BUY_AVAILABILITY_WEIGHT = 0.9
-TRANSFER_MIN_SCORE_GAIN_BENCH = 0.85
-TRANSFER_MIN_SCORE_GAIN_GKP = 1.05
-TRANSFER_GUARDRAIL_INJURY_OVERRIDE = 2.5
-TRANSFER_BEAM_WIDTH = 8
-TRANSFER_BEAM_SELLERS = 8
-TRANSFER_BEAM_BUYERS = 6
+TRANSFER_BUY_PREMIUM_PRICE_FLOOR = 8.5  # [untested]
+TRANSFER_BUY_PREMIUM_BONUS = 0.26  # [untested]
+TRANSFER_BUY_OWNERSHIP_BONUS = 0.08  # [untested]
+TRANSFER_BUY_AVAILABILITY_WEIGHT = 0.9  # [untested]
+TRANSFER_MIN_SCORE_GAIN_BENCH = 0.85  # [untested]
+TRANSFER_MIN_SCORE_GAIN_GKP = 1.05  # [untested]
+TRANSFER_GUARDRAIL_INJURY_OVERRIDE = 2.5  # [untested]
+TRANSFER_BEAM_WIDTH = 8  # [untested]
+TRANSFER_BEAM_SELLERS = 8  # [untested]
+TRANSFER_BEAM_BUYERS = 6  # [untested]
 
 # --- Horizon planner injury gate (src/transfer_planner.py) ---
 # A squad player in the likely first-GW XI with one of these statuses is
 # force-sold ahead of the normal greedy roll/spend decision, even if the
 # best replacement's gain is below TRANSFER's min_gain threshold.
-TRANSFER_PLANNER_RED_FLAG_STATUSES = ("i", "s", "u")
+TRANSFER_PLANNER_RED_FLAG_STATUSES = ("i", "s", "u")  # [operational]
 # chance_of_playing_next_round at/below this also forces a sell (e.g. 0 == ruled out).
-TRANSFER_PLANNER_RED_FLAG_MAX_CHANCE = 0.0
+TRANSFER_PLANNER_RED_FLAG_MAX_CHANCE = 0.0  # [untested]
 
 # --- Early-season shrinkage (src/projections.py) ---
 # FPL's ppg/form over 1-3 games otherwise get taken at face value: a 4.1m
@@ -172,43 +210,43 @@ TRANSFER_PLANNER_RED_FLAG_MAX_CHANCE = 0.0
 # transfer planner chases him instead of rolling. Shrink each player's blended
 # baseline toward slope[element_type] × price_m, weighted by finished
 # gameweeks; fades as the season accumulates evidence. 0 disables.
-PROJ_SHRINKAGE_GAMES = 5.0
-PROJ_PRICE_PRIOR_SLOPE = {1: 0.55, 2: 0.50, 3: 0.45, 4: 0.42}  # element_type -> prior ppg per £1m
+PROJ_SHRINKAGE_GAMES = 5.0  # [untested]
+PROJ_PRICE_PRIOR_SLOPE = {1: 0.55, 2: 0.50, 3: 0.45, 4: 0.42}  # [untested] element_type -> prior ppg per £1m
 
 # First-choice penalty takers are worth ~a penalty every 3 games on top of
 # open play; ppg/form only sees that historically and shrinkage dilutes it
 # early season. Applied AFTER shrinkage so the duty survives a quiet sample.
 # The xG shadow model prices this properly — this is the baseline's stand-in
 # until that model earns its backtest win.
-PROJ_PENALTY_TAKER_UPLIFT = 0.45  # xPts/GW for penalties_order == 1; 0 disables
+PROJ_PENALTY_TAKER_UPLIFT = 0.45  # [untested] xPts/GW for penalties_order == 1; 0 disables
 
 # --- Positional bar for spending a free transfer (src/transfer_planner.py) ---
 # A GKP/DEF swap must clear a higher multiple of min_gain before it beats
 # rolling: back-line moves swing fewer real points, and a banked FT is worth
 # more than a sideways defender trade. Injury-forced sells bypass this.
-TRANSFER_PLAN_POS_GAIN_MULT = {"GKP": 2.0, "DEF": 2.25, "MID": 1.0, "FWD": 1.0}
+TRANSFER_PLAN_POS_GAIN_MULT = {"GKP": 2.0, "DEF": 2.25, "MID": 1.0, "FWD": 1.0}  # [untested]
 
 # XI-aware horizon planning (src/transfer_planner.py): a bench seller's swap
 # only credits the points the buyer would add by displacing the weakest
 # same-position XI member — upgrading a player who stays on the bench is
 # worth nothing, so the planner stops burning transfers (or hits) on subs.
-TRANSFER_PLAN_XI_AWARE = True
+TRANSFER_PLAN_XI_AWARE = True  # [flag]
 
 # One clear recommendation (user product rule, 2026-09-04): the headline plan
 # names at most one move per GW and never funds moves with hits. The verdict
 # explicitly compares moving now vs rolling for an extra transfer next week;
 # injury urgency is the only bypass.
-TRANSFER_PLAN_ALLOW_HITS = False
+TRANSFER_PLAN_ALLOW_HITS = False  # [flag]
 # Upper bound per GW; with MOVES_FOLLOW_FT the effective cap is the free
 # transfers actually banked that week (2 FT -> up to 2 moves, never hits).
-TRANSFER_PLAN_MAX_MOVES_PER_GW = 2
-TRANSFER_PLAN_MOVES_FOLLOW_FT = True
+TRANSFER_PLAN_MAX_MOVES_PER_GW = 2  # [untested]
+TRANSFER_PLAN_MOVES_FOLLOW_FT = True  # [flag]
 
 # Runner-ups (2026-09-16): how many "next best swap per other squad player"
 # candidates verdict_detail.runner_ups keeps, ranked by horizon gain. Purely
 # informational (the "Also considered" list) -- never changes which move the
 # planner recommends.
-TRANSFER_PLAN_RUNNER_UPS = 5
+TRANSFER_PLAN_RUNNER_UPS = 5  # [untested]
 
 # Head-to-head hedge nudge: buying a player who faces one of your own
 # GKP/DEF<->attacker pairs that gameweek cap the pair's joint ceiling (your
@@ -217,21 +255,21 @@ TRANSFER_PLAN_RUNNER_UPS = 5
 # by the user) is that transfers should REDUCE direct confrontations: a buy
 # that faces your own keeper/defence must beat the clean alternative by this
 # many xPts to still win. Was 0.75 (tie-break only) until 2026-09-17. 0 disables.
-TRANSFER_H2H_CONFLICT_PENALTY = 3.0  # xPts per directly-opposed own player
+TRANSFER_H2H_CONFLICT_PENALTY = 3.0  # [untested] xPts per directly-opposed own player
 
 # The display slider is the planner horizon. "1 GW" ranks moves on this
 # week alone (the roll-vs-move comparison needs a next week and is skipped;
 # the card then shows only the this-GW gain). The 3-GW default is unchanged.
 # Was a hard floor of 3 until 2026-09-17: users read the slider as "best move
 # for this week" and a 3-GW ranking contradicted the "+x this GW" number.
-TRANSFER_PLAN_MIN_HORIZON_GWS = 1
+TRANSFER_PLAN_MIN_HORIZON_GWS = 1  # [untested]
 
 # The planner's gain bar (min_gain) was tuned as "+2.0 xPts over a 3-GW
 # horizon". Gains scale with the number of GWs summed, so the bar must too:
 # effective bar = MIN_GAIN × horizon / REF_GWS. 3-GW default unchanged (2.0);
 # 1 GW → 0.67; 8 GW → 5.3. Positional multipliers still apply on top.
-TRANSFER_PLAN_MIN_GAIN = 2.0
-TRANSFER_PLAN_MIN_GAIN_REF_GWS = 3
+TRANSFER_PLAN_MIN_GAIN = 2.0  # [untested]
+TRANSFER_PLAN_MIN_GAIN_REF_GWS = 3  # [untested]
 
 # Preference (not xPts): when swaps score within noise of each other, sell the
 # player with availability risk first. Bonus added to a candidate's SELECTION
@@ -239,24 +277,22 @@ TRANSFER_PLAN_MIN_GAIN_REF_GWS = 3
 # counts as risk 1.0; a doubtful player counts (100 - chance)/100 × 2, capped
 # at 1.0 (75% chance → 0.5). 0 disables; the frontend toggle sends
 # prioritize_injured=false to disable per request.
-TRANSFER_PLAN_INJURED_SELL_BONUS = 1.0
+TRANSFER_PLAN_INJURED_SELL_BONUS = 1.0  # [untested]
 
 # -----------------------------
 # Strategy recommendation tuning
 # -----------------------------
-STRATEGY_MIN_GAIN_PER_TRANSFER_GW1 = 1.4
-STRATEGY_MIN_GAIN_PER_TRANSFER_MULTI = 1.1
-STRATEGY_CHIP_BENCH_BOOST_MIN_XPTS = 15.0
-STRATEGY_CHIP_TRIPLE_CAPTAIN_MIN_XPTS = 10.0
-STRATEGY_MAX_BENCH_MOVES = 6
+STRATEGY_MIN_GAIN_PER_TRANSFER_GW1 = 1.4  # [untested]
+STRATEGY_MIN_GAIN_PER_TRANSFER_MULTI = 1.1  # [untested]
+STRATEGY_CHIP_BENCH_BOOST_MIN_XPTS = 15.0  # [untested]
+STRATEGY_CHIP_TRIPLE_CAPTAIN_MIN_XPTS = 10.0  # [untested]
+STRATEGY_MAX_BENCH_MOVES = 6  # [untested]
 
 # -----------------------------
 # Chip plan tuning (src/chip_advisor.py — chip timing planner)
 # -----------------------------
-CHIP_PLAN_CACHE_TTL_S = 900.0   # /chips/plan result cache; a build costs minutes of CPU
-CHIP_PLAN_PHASE_SPLIT_GW = 19   # last GW of the first-half chip set
-CHIP_PLAN_SEASON_END_GW = 38
-CHIP_PLAN_HORIZON_GWS = 8       # model zone: full EV math over this many GWs
+CHIP_PLAN_CACHE_TTL_S = 900.0   # [operational] /chips/plan result cache; a build costs minutes of CPU
+CHIP_PLAN_HORIZON_GWS = 8       # [tuned] model zone: full EV math over this many GWs
 CHIP_PLAN_MIN_EV = {            # below this, "hold" beats playing the chip
     # Live spot-check (2026-09-02, entry 107342, GW3-10, no DGWs announced):
     # captain xPts clustered 9.9-13.5 and bench xPts clustered 5.2-6.4 every
@@ -290,25 +326,25 @@ CHIP_PLAN_MIN_EV = {            # below this, "hold" beats playing the chip
     # GW3 number, while staying reachable for a genuinely severe gap once
     # the projections bug is fixed and/or a real one shows up later.
     "wildcard": 120.0,
-}
-CHIP_PLAN_EXPIRY_RAMP_GWS = 5   # threshold decays linearly to 0 over the last N GWs
-CHIP_PLAN_NUDGE_MIN_EV = 4.0    # floor for the next-GW nudge surface
-CHIP_PLAN_FH_MIN_BLANKING = 3   # FH model-zone rec suppressed below this many squad blanks
-CHIP_PLAN_XPTS_CLAMP = 9.0      # stopgap clip on WC/FH dream-squad market xPts (outlier projections bug)
+}  # [untested]
+CHIP_PLAN_EXPIRY_RAMP_GWS = 5   # [untested] threshold decays linearly to 0 over the last N GWs
+CHIP_PLAN_NUDGE_MIN_EV = 4.0    # [untested] floor for the next-GW nudge surface
+CHIP_PLAN_FH_MIN_BLANKING = 3   # [untested] FH model-zone rec suppressed below this many squad blanks
+CHIP_PLAN_XPTS_CLAMP = 9.0      # [untested] stopgap clip on WC/FH dream-squad market xPts (outlier projections bug)
 # Position-aware dream-squad clamp. The flat CHIP_PLAN_XPTS_CLAMP treated a
 # promoted-team DEF outlier pinned at 9.0 as equal to a genuinely elite FWD
 # also pinned at 9.0, so WC drafts picked the junk on price. Legit single-GW
 # ceilings differ sharply by position; flat clamp remains the fallback when a
 # market has no `pos` column.
-CHIP_PLAN_XPTS_CLAMP_BY_POS = {"GKP": 7.0, "DEF": 8.0, "MID": 12.0, "FWD": 13.0}
-CHIP_PLAN_BLANK_TEAM_THRESHOLD = 14  # structural zone: <= this many teams playing = blank-heavy GW
-BREAK_GAP_DAYS = 10.0           # deadline-to-deadline gap marking a post-international-break GW
-CHIP_PLAN_BREAK_CONFIDENCE_MULT = 0.85  # confidence haircut on recs targeting a post-break GW
-CHIP_PLAN_FH_MIN_TOUGH = 6      # squad players on tough fixtures that open the FH gate
-CHIP_PLAN_FH_TOUGH_DIFFICULTY = 4.0  # ticker difficulty counting as "tough"
+CHIP_PLAN_XPTS_CLAMP_BY_POS = {"GKP": 7.0, "DEF": 8.0, "MID": 12.0, "FWD": 13.0}  # [untested]
+CHIP_PLAN_BLANK_TEAM_THRESHOLD = 14  # [untested] structural zone: <= this many teams playing = blank-heavy GW
+BREAK_GAP_DAYS = 10.0           # [untested] deadline-to-deadline gap marking a post-international-break GW
+CHIP_PLAN_BREAK_CONFIDENCE_MULT = 0.85  # [untested] confidence haircut on recs targeting a post-break GW
+CHIP_PLAN_FH_MIN_TOUGH = 6      # [untested] squad players on tough fixtures that open the FH gate
+CHIP_PLAN_FH_TOUGH_DIFFICULTY = 4.0  # [untested] ticker difficulty counting as "tough"
 # Difficulty→multiplier for the TC haul-prob lambda (mirrors the projection
 # engine's FDR multipliers; keyed on round(difficulty)).
-CHIP_PLAN_TC_DIFF_MULT = {1: 1.25, 2: 1.12, 3: 1.0, 4: 0.88, 5: 0.75}
+CHIP_PLAN_TC_DIFF_MULT = {1: 1.25, 2: 1.12, 3: 1.0, 4: 0.88, 5: 0.75}  # [untested]
 
 # Plain-language "why is this chip on hold" guidance (2026-09-17). One line
 # per chip, surfaced on every outlook/recommendation row so a fan understands
@@ -320,7 +356,7 @@ CHIP_PLAN_SEASON_PRIORS = {
     "bench_boost": "a double gameweek, usually GW24–26 or GW34–37",
     "triple_captain": "a double gameweek for your captain, usually GW24–26 or GW34–37",
     "wildcard": "a fixture swing or an injury pile-up; re-check after each international break",
-}
+}  # [operational]
 
 # European midweek congestion (src/european.py). The FPL API knows nothing
 # about the Champions League / Europa / Conference calendar, so the team list
@@ -329,11 +365,11 @@ CHIP_PLAN_SEASON_PRIORS = {
 # for a GW when one of its competition's matchdays falls inside the GW's
 # window (deadline -> next deadline) or in the EURO_WINDOW_BEFORE_DAYS before
 # the deadline (the midweek leading into the GW: fatigue + late rotation).
-CHIP_PLAN_EURO_WINDOW_BEFORE_DAYS = 5
-CHIP_PLAN_EURO_XPTS_MULT = 0.95          # rotation/fatigue haircut on every player of a team in a European week (1.0 = off); applied to BOTH the squad and the market side of a chip comparison
-CHIP_PLAN_EURO_CONFIDENCE_MULT = 0.90    # confidence haircut when the TC captain / >=EURO_BB_MIN_BENCH BB bench players are in European weeks
-CHIP_PLAN_EURO_BB_MIN_BENCH = 2          # bench players in European weeks before BB confidence is cut
-CHIP_PLAN_CUP_CLASH_BLANK_PROB = 0.70    # structural zone: likelihood an FA Cup clash weekend becomes a blank GW before FPL announces it
+CHIP_PLAN_EURO_WINDOW_BEFORE_DAYS = 5  # [untested]
+CHIP_PLAN_EURO_XPTS_MULT = 0.95          # [untested] rotation/fatigue haircut on every player of a team in a European week (1.0 = off); applied to BOTH the squad and the market side of a chip comparison
+CHIP_PLAN_EURO_CONFIDENCE_MULT = 0.90    # [untested] confidence haircut when the TC captain / >=EURO_BB_MIN_BENCH BB bench players are in European weeks
+CHIP_PLAN_EURO_BB_MIN_BENCH = 2          # [untested] bench players in European weeks before BB confidence is cut
+CHIP_PLAN_CUP_CLASH_BLANK_PROB = 0.70    # [untested] structural zone: likelihood an FA Cup clash weekend becomes a blank GW before FPL announces it
 
 # Per-GW points distributions for chip EV (src/chip_distribution.py). The EV
 # stays the mean; these describe its shape (P(return), P(haul), P(blank),
@@ -341,75 +377,73 @@ CHIP_PLAN_CUP_CLASH_BLANK_PROB = 0.70    # structural zone: likelihood an FA Cup
 # player cards use (points_distribution.player_points_pmf); the goal/assist/CS
 # lambdas are scaled so the pmf mean matches the engine's blended xPts minus
 # the continuous share (bonus, saves, goals-conceded) that the pmf excludes.
-CHIP_PLAN_DIST_CONTINUOUS_SHARE = {"GKP": 0.25, "DEF": 0.12, "MID": 0.10, "FWD": 0.10}
-CHIP_PLAN_DIST_RETURN_AT = 6             # "return" = at least this many points in the GW
-CHIP_PLAN_DIST_HAUL_AT = 10              # "haul" = at least this many points
-CHIP_PLAN_DIST_BLANK_AT = 2              # "blank" = at most this many points
-CHIP_PLAN_DIST_PRIOR_WEIGHT = 2.0        # pseudo-GWs of MINUTES_START_PRIOR mixed into a player's start rate
-CHIP_PLAN_DIST_MINUTES_SHARE = 0.85      # E[minutes]/90 given an appearance, for the per-GW lambda
-CHIP_PLAN_CS_PROB_BY_DIFF = {1: 0.50, 2: 0.42, 3: 0.33, 4: 0.25, 5: 0.18}  # per-fixture clean-sheet prob by round(difficulty)
+CHIP_PLAN_DIST_CONTINUOUS_SHARE = {"GKP": 0.25, "DEF": 0.12, "MID": 0.10, "FWD": 0.10}  # [untested]
+CHIP_PLAN_DIST_RETURN_AT = 6             # [untested] "return" = at least this many points in the GW
+CHIP_PLAN_DIST_HAUL_AT = 10              # [untested] "haul" = at least this many points
+CHIP_PLAN_DIST_BLANK_AT = 2              # [untested] "blank" = at most this many points
+CHIP_PLAN_DIST_PRIOR_WEIGHT = 2.0        # [untested] pseudo-GWs of MINUTES_START_PRIOR mixed into a player's start rate
+CHIP_PLAN_DIST_MINUTES_SHARE = 0.85      # [untested] E[minutes]/90 given an appearance, for the per-GW lambda
+CHIP_PLAN_CS_PROB_BY_DIFF = {1: 0.50, 2: 0.42, 3: 0.33, 4: 0.25, 5: 0.18}  # [untested] per-fixture clean-sheet prob by round(difficulty)
 
 # Fixture swing detection (src/fixture_difficulty.py -> compute_fixture_swings)
-SWING_WINDOW_GWS = 3            # fixture-swing comparison window (before vs after)
-SWING_MIN_DELTA = 0.8           # min avg-difficulty delta to call a swing
+SWING_WINDOW_GWS = 3            # [untested] fixture-swing comparison window (before vs after)
+SWING_MIN_DELTA = 0.8           # [untested] min avg-difficulty delta to call a swing
 
 # -----------------------------
 # Chip strategy tuning
 # -----------------------------
-CHIP_WILDCARD_DEFAULT_HORIZON_GWS = 5
+CHIP_WILDCARD_DEFAULT_HORIZON_GWS = 5  # [untested]
 # Own GK/DEF facing own attackers in the same GW cancel each other out (a
 # hedge — same mean, lower ceiling). Chip drafts dock a candidate's score by
 # this much per directly-opposed own XI player, mirroring the transfer
 # planner's TRANSFER_H2H_CONFLICT_PENALTY. Soft: a clearly better pick still
 # survives, and surviving pairs are reported as `h2h_conflicts`.
-CHIP_H2H_CONFLICT_PENALTY = 0.75
+CHIP_H2H_CONFLICT_PENALTY = 0.75  # [untested]
 # Chip-draft availability: injured/suspended/unavailable never enter the
 # market (XI or bench); bench fodder additionally prefers players with at
 # least this many season minutes — cheap is fine, ghosts are not. Soft
 # preference, not a hard filter: a thin market still builds.
-CHIP_MARKET_EXCLUDE_STATUS = ("i", "s", "u")
-CHIP_BENCH_MIN_MINUTES = 90.0
+CHIP_MARKET_EXCLUDE_STATUS = ("i", "s", "u")  # [operational]
+CHIP_BENCH_MIN_MINUTES = 90.0  # [untested]
 # Bench diversity: prefer a distinct-team bench body over a duplicate when one
 # exists at (cheapest + this margin). 0.0 = only free swaps, never pay extra.
-CHIP_BENCH_DIVERSITY_MAX_EXTRA_M = 0.0
+CHIP_BENCH_DIVERSITY_MAX_EXTRA_M = 0.0  # [untested]
 # Soft attacker-stack limit: from this many same-team attackers already in the
 # XI, the next one is docked the penalty — stacking survives only when the
 # stacked player is clearly better than the spread alternative.
-CHIP_ATTACKER_STACK_SOFT_LIMIT = 2
-CHIP_ATTACKER_STACK_PENALTY = 0.6
+CHIP_ATTACKER_STACK_SOFT_LIMIT = 2  # [untested]
+CHIP_ATTACKER_STACK_PENALTY = 0.6  # [untested]
 # Differential draft mode: dock a candidate's score by weight × ownership so
 # near-equal low-owned players displace the template. 0.35 → a 50%-owned
 # player loses ~17.5% of its score; mini-league differentiation, off by default.
-CHIP_DIFF_OWNERSHIP_WEIGHT = 0.35
+CHIP_DIFF_OWNERSHIP_WEIGHT = 0.35  # [untested]
 # Stack odds annotation (src/stack_odds.py): joint return/blank odds for
 # same-team attacker stacks in a draft XI. Slots ≈ scorer + assister per goal.
-CHIP_STACK_ODDS_MIN = 2
-CHIP_STACK_SLOTS_PER_GOAL = 2.0
-CHIP_MAX_PER_TEAM = 3
+CHIP_STACK_ODDS_MIN = 2  # [untested]
+CHIP_STACK_SLOTS_PER_GOAL = 2.0  # [untested]
 # Same FPL rule, enforced by the transfer recommender. Was only ever a
 # getattr fallback in src/recommender.py.
-TRANSFER_MAX_PER_TEAM = 3
 CHIP_SQUAD_SHAPE = {
     "GKP": 2,
     "DEF": 5,
     "MID": 5,
     "FWD": 3,
-}
-CHIP_UPGRADE_MAX_ITERS = 320
-CHIP_WILDCARD_GW_WEIGHTS = [1.0, 0.95, 0.9, 0.86, 0.82, 0.78, 0.74, 0.7]
-CHIP_WILDCARD_DGW_BONUS_PER_EXTRA_FIXTURE = 1.25
-CHIP_WILDCARD_DGW_XPTS_WEIGHT = 0.12
-CHIP_WILDCARD_LATE_DGW_WEIGHT_STEP = 0.08
-CHIP_WILDCARD_SHORT_HORIZON_DGW_MULTIPLIER = 1.4
-CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR = 8.5
-CHIP_WILDCARD_PREMIUM_ATTACKER_BASE_BONUS = 0.8
-CHIP_WILDCARD_CAPTAINCY_WEIGHT = 0.32
-CHIP_WILDCARD_FORM_BONUS_WEIGHT = 0.12
-CHIP_WILDCARD_OWNERSHIP_BONUS_WEIGHT = 0.55
-CHIP_WILDCARD_OWNERSHIP_BONUS_SCALE = 40.0
-CHIP_WILDCARD_MIN_PREMIUM_CAPTAINS = 1
-CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR = 10.5
-CHIP_WILDCARD_PREMIUM_CAPTAIN_POSITIONS = ["MID", "FWD"]
+}  # [untested]
+CHIP_UPGRADE_MAX_ITERS = 320  # [untested]
+CHIP_WILDCARD_GW_WEIGHTS = [1.0, 0.95, 0.9, 0.86, 0.82, 0.78, 0.74, 0.7]  # [untested]
+CHIP_WILDCARD_DGW_BONUS_PER_EXTRA_FIXTURE = 1.25  # [untested]
+CHIP_WILDCARD_DGW_XPTS_WEIGHT = 0.12  # [untested]
+CHIP_WILDCARD_LATE_DGW_WEIGHT_STEP = 0.08  # [untested]
+CHIP_WILDCARD_SHORT_HORIZON_DGW_MULTIPLIER = 1.4  # [untested]
+CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR = 8.5  # [untested]
+CHIP_WILDCARD_PREMIUM_ATTACKER_BASE_BONUS = 0.8  # [untested]
+CHIP_WILDCARD_CAPTAINCY_WEIGHT = 0.32  # [untested]
+CHIP_WILDCARD_FORM_BONUS_WEIGHT = 0.12  # [untested]
+CHIP_WILDCARD_OWNERSHIP_BONUS_WEIGHT = 0.55  # [untested]
+CHIP_WILDCARD_OWNERSHIP_BONUS_SCALE = 40.0  # [untested]
+CHIP_WILDCARD_MIN_PREMIUM_CAPTAINS = 1  # [untested]
+CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR = 10.5  # [untested]
+CHIP_WILDCARD_PREMIUM_CAPTAIN_POSITIONS = ["MID", "FWD"]  # [operational]
 
 # ---------------------------------------------------------------------------
 # xG expected-points model (fixture_difficulty / minutes_model / output_model)
@@ -418,39 +452,39 @@ CHIP_WILDCARD_PREMIUM_CAPTAIN_POSITIONS = ["MID", "FWD"]
 # ---------------------------------------------------------------------------
 
 # --- fixture_difficulty.py: xG-based team strength ---
-FDR_XG_HALFLIFE_DAYS = 60.0          # exponential time-decay half-life on team-match xG samples
-FDR_XG_SHRINKAGE_MATCHES = 6.0       # pseudo-matches of league-average prior (shrinks thin samples)
-FDR_HOME_XG_MULT = 1.10              # home attacking boost when projecting a fixture's xG
-FDR_AWAY_XG_MULT = 0.92              # away attacking penalty
-FDR_RATING_MIN = 0.50                # clamp on attack/defense rating multipliers
-FDR_RATING_MAX = 1.80
-FDR_LEAGUE_AVG_XG_FALLBACK = 1.40    # per-team per-match league-average xG when data is thin
-FDR_KNOWLEDGE_DISCOUNT_PATH = "data/models/knowledge_discount.json"
+FDR_XG_HALFLIFE_DAYS = 60.0          # [untested] exponential time-decay half-life on team-match xG samples
+FDR_XG_SHRINKAGE_MATCHES = 6.0       # [untested] pseudo-matches of league-average prior (shrinks thin samples)
+FDR_HOME_XG_MULT = 1.10              # [untested] home attacking boost when projecting a fixture's xG
+FDR_AWAY_XG_MULT = 0.92              # [untested] away attacking penalty
+FDR_RATING_MIN = 0.50                # [untested] clamp on attack/defense rating multipliers
+FDR_RATING_MAX = 1.80  # [untested]
+FDR_LEAGUE_AVG_XG_FALLBACK = 1.40    # [untested] per-team per-match league-average xG when data is thin
+FDR_KNOWLEDGE_DISCOUNT_PATH = "data/models/knowledge_discount.json"  # [operational]
 # Player-level knowledge (news/injury) for the squad picker.
-PLAYER_KNOWLEDGE_PATH = "data/models/player_knowledge.json"
-PLAYER_KNOWLEDGE_STALE_DAYS = 10
+PLAYER_KNOWLEDGE_PATH = "data/models/player_knowledge.json"  # [operational]
+PLAYER_KNOWLEDGE_STALE_DAYS = 10  # [untested]
 
 # News corpus (Approach B: RSS refresh routine -> news_digest reads this dir).
-NEWS_KB_DIR = "kb/auto/news"
-NEWS_MAX_AGE_DAYS = 14   # digest only items this fresh; prune older md
+NEWS_KB_DIR = "kb/auto/news"  # [operational]
+NEWS_MAX_AGE_DAYS = 14   # [untested] digest only items this fresh; prune older md
 NEWS_FEEDS = [           # RSS sources (verified live 2026-07-26)
     {"source": "sportsmole.co.uk", "url": "https://www.sportsmole.co.uk/football/rss.xml"},
     {"source": "football-talk.co.uk", "url": "https://football-talk.co.uk/feed/"},
     {"source": "betting.betfair.com", "url": "https://betting.betfair.com/football/rss.xml"},
-]
+]  # [operational]
 
 # Cross-season carryover (season-start cold start). At a new season's launch there
 # is no current-season xG, so ratings start from the prior season's frozen seed
 # (regressed toward the mean) and the live signal takes over as matches accrue.
-FDR_RATINGS_SEED_PATH = "data/models/team_ratings_seed.json"
-MINUTES_INSEASON_SHRINK_PSEUDO = 1.0 # pseudo-matches of 0.5 starts mixed into in-season p_start (small-sample damping)
-FDR_CS_PRIOR_WEIGHT = 0.35           # blend of clean-sheet-implied defense into the carryover rating (0 = off)
-FDR_CS_PRIOR_MIN_MATCHES = 6.0       # GK starts needed before the CS record counts as signal (guards season-reset stats)
-FDR_CARRYOVER_PRIOR_MATCHES = 8.0    # pseudo-matches of weight given to the prior-season seed
-FDR_CARRYOVER_REGRESSION = 0.30      # regress the prior-season rating this far toward 1.0 (mean)
+FDR_RATINGS_SEED_PATH = "data/models/team_ratings_seed.json"  # [operational]
+MINUTES_INSEASON_SHRINK_PSEUDO = 1.0 # [untested] pseudo-matches of 0.5 starts mixed into in-season p_start (small-sample damping)
+FDR_CS_PRIOR_WEIGHT = 0.35           # [untested] blend of clean-sheet-implied defense into the carryover rating (0 = off)
+FDR_CS_PRIOR_MIN_MATCHES = 6.0       # [untested] GK starts needed before the CS record counts as signal (guards season-reset stats)
+FDR_CARRYOVER_PRIOR_MATCHES = 8.0    # [untested] pseudo-matches of weight given to the prior-season seed
+FDR_CARRYOVER_REGRESSION = 0.30      # [untested] regress the prior-season rating this far toward 1.0 (mean)
 # Promoted teams have no top-flight xG and no seed: assume a weak default until games arrive.
-FDR_PROMOTED_DEFAULT_ATTACK = 0.82
-FDR_PROMOTED_DEFAULT_DEFENSE = 1.20  # >1 => concedes more xG than average (weaker defense)
+FDR_PROMOTED_DEFAULT_ATTACK = 0.82  # [untested]
+FDR_PROMOTED_DEFAULT_DEFENSE = 1.20  # [untested] >1 => concedes more xG than average (weaker defense)
 # Difficulty bands for the fixture ticker: (max_score, label, color). Score is the
 # attacking-difficulty a team faces (higher = harder), centered near 3.0 like FPL's FDR.
 FDR_TICKER_BANDS = [
@@ -459,43 +493,38 @@ FDR_TICKER_BANDS = [
     [3.3, "medium", "#fee08b"],
     [3.8, "hard", "#f46d43"],
     [9.9, "very_hard", "#d73027"],
-]
+]  # [untested]
 
 # --- minutes_model.py: P(start) + expected minutes ---
-MINUTES_HALFLIFE_GWS = 5.0           # decay half-life (in GWs) on start/minutes history
-MINUTES_START_PRIOR = 0.55           # prior P(start) for players with no history
-MINUTES_PRIOR_WEIGHT = 2.0           # pseudo-GWs of prior weight (shrinks thin samples)
-MINUTES_E_MIN_GIVEN_START = 82.0     # assumed E[minutes | started] with no history
-MINUTES_CAMEO_MINUTES = 22.0         # assumed E[minutes | sub appearance]
-MINUTES_SUB_APP_PROB = 0.45          # P(appear | did not start) baseline
-MINUTES_P60_GIVEN_START = 0.86       # P(>=60 min | started) baseline
+MINUTES_HALFLIFE_GWS = 5.0           # [untested] decay half-life (in GWs) on start/minutes history
+MINUTES_START_PRIOR = 0.55           # [untested] prior P(start) for players with no history
+MINUTES_PRIOR_WEIGHT = 2.0           # [untested] pseudo-GWs of prior weight (shrinks thin samples)
+MINUTES_E_MIN_GIVEN_START = 82.0     # [untested] assumed E[minutes | started] with no history
+MINUTES_CAMEO_MINUTES = 22.0         # [untested] assumed E[minutes | sub appearance]
+MINUTES_SUB_APP_PROB = 0.45          # [untested] P(appear | did not start) baseline
+MINUTES_P60_GIVEN_START = 0.86       # [untested] P(>=60 min | started) baseline
 MINUTES_STATUS_AVAILABILITY = {      # hard availability cap by FPL status code
     "a": 1.0, "d": 0.5, "i": 0.0, "s": 0.0, "u": 0.0, "n": 0.0,
-}
+}  # [untested]
 
 # --- output_model.py: xG-based structural points ---
-OUTPUT_XG_HALFLIFE_DAYS = 75.0       # decay half-life on player per-90 xG/xA samples
-OUTPUT_MIN_MINUTES_TRUST = 270.0     # minutes before a player's own rates are trusted over position prior
-OUTPUT_GOAL_POINTS = {"GKP": 6, "DEF": 6, "MID": 5, "FWD": 4}
-OUTPUT_ASSIST_POINTS = 3.0
-OUTPUT_CS_POINTS = {"GKP": 4, "DEF": 4, "MID": 1, "FWD": 0}
-OUTPUT_GOALS_CONCEDED_PENALTY_PER_2 = {"GKP": -1.0, "DEF": -1.0, "MID": 0.0, "FWD": 0.0}
-OUTPUT_SAVES_PER_XGA = 2.0           # rough expected saves per unit opponent xG (GKP)
+OUTPUT_XG_HALFLIFE_DAYS = 75.0       # [untested] decay half-life on player per-90 xG/xA samples
+OUTPUT_MIN_MINUTES_TRUST = 270.0     # [untested] minutes before a player's own rates are trusted over position prior
+OUTPUT_SAVES_PER_XGA = 2.0           # [untested] rough expected saves per unit opponent xG (GKP)
 # Keeper-specific shot-stopping volume. The flat OUTPUT_SAVES_PER_XGA gives every
 # keeper the same save rate; this scales it by the keeper's own saves_per_90
 # relative to the league median, shrunk toward 1.0 by minutes played.
-OUTPUT_APPLY_KEEPER_SAVE_RATE = True
-OUTPUT_SAVE_RATIO_CLAMP = (0.6, 1.6)  # a keeper cannot be 3x the league at stopping shots
-OUTPUT_SAVE_POINTS_PER_SAVE = 1.0 / 3.0
-OUTPUT_BONUS_PER_XGI = 0.9           # rough bonus points per expected goal involvement
+OUTPUT_APPLY_KEEPER_SAVE_RATE = True  # [flag]
+OUTPUT_SAVE_RATIO_CLAMP = (0.6, 1.6)  # [untested] a keeper cannot be 3x the league at stopping shots
+OUTPUT_BONUS_PER_XGI = 0.9           # [untested] rough bonus points per expected goal involvement
 # Defensive bonus: BPS from clean sheets, clearances, blocks, recoveries earns
 # defenders/keepers bonus that attacking xGI misses. Bonus points per expected
 # clean sheet, by position (0 for FWD).
-OUTPUT_CS_BONUS_PER_CS = {"GKP": 1.0, "DEF": 1.2, "MID": 0.3, "FWD": 0.0}
-OUTPUT_POSITION_BASE_XG90 = {"GKP": 0.01, "DEF": 0.06, "MID": 0.12, "FWD": 0.30}
-OUTPUT_POSITION_BASE_XA90 = {"GKP": 0.01, "DEF": 0.06, "MID": 0.14, "FWD": 0.16}
-OUTPUT_MAX_GOALS_PER_GAME = 2.5      # sanity clamp on a single player's expected goals
-OUTPUT_MAX_ASSISTS_PER_GAME = 2.0
+OUTPUT_CS_BONUS_PER_CS = {"GKP": 1.0, "DEF": 1.2, "MID": 0.3, "FWD": 0.0}  # [untested]
+OUTPUT_POSITION_BASE_XG90 = {"GKP": 0.01, "DEF": 0.06, "MID": 0.12, "FWD": 0.30}  # [untested]
+OUTPUT_POSITION_BASE_XA90 = {"GKP": 0.01, "DEF": 0.06, "MID": 0.14, "FWD": 0.16}  # [untested]
+OUTPUT_MAX_GOALS_PER_GAME = 2.5      # [untested] sanity clamp on a single player's expected goals
+OUTPUT_MAX_ASSISTS_PER_GAME = 2.0  # [untested]
 
 # Defensive-contribution points (2025-26 rule): a player banks +2 for reaching a
 # per-match action threshold (DEF/GKP 10, MID/FWD 12). output_model was blind to
@@ -507,17 +536,15 @@ OUTPUT_MAX_ASSISTS_PER_GAME = 2.0
 # know that a player has just been handed penalties. Applied to the position
 # PRIOR and tapered away as a player's own minutes sample grows, since their own
 # expected_goals already contains the penalties they have taken.
-OUTPUT_APPLY_SETPIECE = True          # off restores exact pre-set-piece behaviour
-OUTPUT_SETPIECE_PEN_XG90 = 0.11       # league-average penalty xG per 90 for a first-choice taker
-OUTPUT_SETPIECE_FK_XG90 = 0.03        # direct free-kick xG per 90 for the designated taker
-OUTPUT_SETPIECE_CORNER_XA90 = 0.05    # xA per 90 uplift for the primary corner taker
+OUTPUT_APPLY_SETPIECE = True          # [flag] off restores exact pre-set-piece behaviour
+OUTPUT_SETPIECE_PEN_XG90 = 0.11       # [untested] league-average penalty xG per 90 for a first-choice taker
+OUTPUT_SETPIECE_FK_XG90 = 0.03        # [untested] direct free-kick xG per 90 for the designated taker
+OUTPUT_SETPIECE_CORNER_XA90 = 0.05    # [untested] xA per 90 uplift for the primary corner taker
 
-OUTPUT_APPLY_DC = True                # off restores exact pre-DC output_model behaviour
-OUTPUT_DC_POINTS = 2.0                # points banked for clearing the threshold
-OUTPUT_DC_HALFLIFE_DAYS = 75.0        # decay half-life on the clearance-rate samples
-OUTPUT_DC_MIN_GAMES_TRUST = 6.0       # 60'+ games before own rate is trusted over the prior
-OUTPUT_DC_THRESHOLD = {"GKP": 10, "DEF": 10, "MID": 12, "FWD": 12}
-OUTPUT_DC_BASE_RATE = {"GKP": 0.0, "DEF": 0.12, "MID": 0.06, "FWD": 0.0}  # shrink prior (GKP/FWD ~never clear)
+OUTPUT_APPLY_DC = True                # [flag] off restores exact pre-DC output_model behaviour
+OUTPUT_DC_HALFLIFE_DAYS = 75.0        # [untested] decay half-life on the clearance-rate samples
+OUTPUT_DC_MIN_GAMES_TRUST = 6.0       # [untested] 60'+ games before own rate is trusted over the prior
+OUTPUT_DC_BASE_RATE = {"GKP": 0.0, "DEF": 0.12, "MID": 0.06, "FWD": 0.0}  # [untested] shrink prior (GKP/FWD ~never clear)
 
 # --- blend of the xG model into the baseline projection ---
 # Set from the Task 8 sweep (docs/superpowers/plans/2026-08-25-transfer-planner-v2.md
@@ -534,7 +561,7 @@ OUTPUT_DC_BASE_RATE = {"GKP": 0.0, "DEF": 0.12, "MID": 0.06, "FWD": 0.0}  # shri
 # 10.97→10.88 (both within noise). Flipped on no-regression + unification:
 # one difficulty truth across engine, ticker, chips, stack odds AND the
 # (Dn) badges; knowledge_discount nudges now move everything consistently.
-PROJ_DIFFICULTY_SOURCE = "xg_ratings"
+PROJ_DIFFICULTY_SOURCE = "xg_ratings"  # [tuned]
 
 # GK fixture-sensitivity damp: fraction of the combined context multiplier's
 # deviation from 1.0 that applies to GOALKEEPERS. 1.0 = legacy (full stack on
@@ -546,7 +573,7 @@ PROJ_DIFFICULTY_SOURCE = "xg_ratings"
 # rule arithmetic, not a backtest win: CS is ~40-50% of GK expected points,
 # appearance+saves are fixture-flat — full elasticity overstated GK transfer
 # gains ~2x (live case: a GK swap topped the plan at +11.6/5GW).
-PROJ_GK_FIXTURE_DAMP = 0.5
+PROJ_GK_FIXTURE_DAMP = 0.5  # [tuned]
 
 # -----------------------------
 # Bookmaker odds (src/odds_client.py / odds_model.py)
@@ -556,13 +583,13 @@ PROJ_GK_FIXTURE_DAMP = 0.5
 # supremacy split) blend into the stack-odds lambda at this weight when odds
 # are available for the fixture; 0 disables. Key: ODDS_API_KEY env var
 # (free tier ~500 credits/month — cache + archive protect the quota).
-ODDS_LAMBDA_BLEND_WEIGHT = 0.7
+ODDS_LAMBDA_BLEND_WEIGHT = 0.7  # [untested]
 # Market difficulty into the projections' FIRST horizon GW (and the chip
 # planner's current-GW difficulty map). Odds only cover the next fixture,
 # so later GWs stay pure xG ratings. 0 disables.
-ODDS_DIFFICULTY_BLEND_WEIGHT = 0.5
-ODDS_CACHE_TTL_S = 21600.0   # 6h — aligned with the data-refresh cadence
-ODDS_TEAM_ALIASES = {}       # extra {fpl_name: odds_api_name} fixes if naming drifts
+ODDS_DIFFICULTY_BLEND_WEIGHT = 0.5  # [untested]
+ODDS_CACHE_TTL_S = 21600.0   # [operational] 6h — aligned with the data-refresh cadence
+ODDS_TEAM_ALIASES = {}       # [operational] extra {fpl_name: odds_api_name} fixes if naming drifts
 
 # weight 0.5 beat weight 0.0 on every metric (MAE -0.202/-9.47%, captain hit +0.042,
 # top10 +0.029, regret -0.334), with MAE improving monotonically across the whole
@@ -572,17 +599,17 @@ ODDS_TEAM_ALIASES = {}       # extra {fpl_name: odds_api_name} fixes if naming d
 # (MAE 1.902/1.897 — noise-level apart), degrades from 0.8, and 1.0 drops
 # captain hit back to baseline. 0.5 is confirmed at-optimum; do not raise
 # past 0.6 without new evidence.
-PROJ_MODEL_BLEND_WEIGHT = 0.5
+PROJ_MODEL_BLEND_WEIGHT = 0.5  # [tuned]
 
 # --- minutes/rotation-risk multiplier (surgical, applied in projections.py) ---
 # Master flag: when True, project_elements_next_gws replaces the crude
 # chance_of_playing discount with a rotation-risk multiplier. Default off so
 # committed behavior is unchanged; flip True after scripts/spotcheck_minutes.py.
-PROJ_APPLY_MINUTES_MODEL = False
-MINUTES_NAILED_START_REF = 0.85   # prob_start at/above which a player is "nailed" (mult caps at 1.0)
-MINUTES_CAMEO_POINT_VALUE = 0.30  # value of a likely cameo relative to a start
+PROJ_APPLY_MINUTES_MODEL = False  # [tuned]
+MINUTES_NAILED_START_REF = 0.85   # [tuned] prob_start at/above which a player is "nailed" (mult caps at 1.0)
+MINUTES_CAMEO_POINT_VALUE = 0.30  # [tuned] value of a likely cameo relative to a start
 
 # --- mini-league ownership-adjusted EV (src/ownership_ev.py + league_strategy.py) ---
-LEAGUE_EV_RANKING = True                      # rank candidates by differential EV (False = legacy raw-xPts sort)
-LEAGUE_EV_CAPTAIN_PREMIUM_FLOOR = 85          # now_cost (tenths) floor for a "premium" captain (£8.5m)
-LEAGUE_EV_CAPTAIN_DIFF_MAX_OWNERSHIP = 0.10   # alternative must be under this league ownership to flag
+LEAGUE_EV_RANKING = True                      # [tuned] rank candidates by differential EV (False = legacy raw-xPts sort)
+LEAGUE_EV_CAPTAIN_PREMIUM_FLOOR = 85          # [untested] now_cost (tenths) floor for a "premium" captain (£8.5m)
+LEAGUE_EV_CAPTAIN_DIFF_MAX_OWNERSHIP = 0.10   # [untested] alternative must be under this league ownership to flag
