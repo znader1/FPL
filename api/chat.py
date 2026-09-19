@@ -139,6 +139,13 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
         gw_start=current_gw, horizon_gws=horizon,
     )
 
+    # Injury/minutes knowledge before the market is reshaped, so every
+    # specialist agent reasons on the same availability-adjusted xPts the
+    # decision card does.
+    from src import player_knowledge
+    proj, _pk_notes = player_knowledge.apply(
+        proj, list(range(current_gw, current_gw + horizon)))
+
     # Reshape into the simulator's market schema, one DataFrame per GW
     from src.chip_advisor import team_fixture_counts
 

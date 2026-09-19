@@ -23,7 +23,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, projections, recommender, seed_models, transfer_planner, transforms
+from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, recommender, seed_models, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key, require_user, authenticated_subject
 from src.ratelimit import (
     LLM_LIMIT, MAX_REQUEST_BYTES, _client_ip, _user_key, limiter,
@@ -855,6 +855,11 @@ def optimize_squad(payload, owner=None):
         gw_start=int(optimize_event_id), horizon_gws=horizon_gws, latest_n_matches=latest_n,
         finished_gw_max=finished_gw_max,
     )
+    proj_all, _pk_notes = player_knowledge.apply(
+        proj_all,
+        list(range(int(optimize_event_id), int(optimize_event_id) + int(horizon_gws))),
+        request_pk=payload.get("player_knowledge"),
+    )
     proj_by_id = {}
     if proj_all is not None and not proj_all.empty:
         for r in proj_all.itertuples():
@@ -1158,6 +1163,15 @@ def build_recommendations(payload):
             latest_n_matches=latest_n_matches,
             finished_gw_max=finished_gw_max,
         )
+        # Injury/minutes knowledge, same rail the squad picker uses. Without it
+        # a player flagged "out until GW9" still carried full xPts here.
+        proj_all, pk_notes = player_knowledge.apply(
+            proj_all,
+            list(range(int(projection_start_event_id),
+                       int(projection_start_event_id) + int(projection_horizon_gws))),
+            request_pk=payload.get("player_knowledge"),
+        )
+        notes.extend(pk_notes)
         if wildcard_is_active:
             proj_all = projections.add_wildcard_scores(
                 projections_df=proj_all,
@@ -2115,6 +2129,8 @@ def league_strategy_post(
             horizon_gws=horizon_gws,
             latest_n_matches=latest_n_matches,
         )
+        proj_df, _pk_notes = player_knowledge.apply(
+            proj_df, list(range(int(event_id), int(event_id) + int(horizon_gws))))
     except Exception as e:
         proj_error = str(e)
 
