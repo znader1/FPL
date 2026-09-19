@@ -72,11 +72,11 @@ def player_priors_from_elements(elements, finished_gws: int = 0) -> dict[int, di
     if el.empty or "id" not in el.columns:
         return {}
 
-    start_prior = float(getattr(config, "MINUTES_START_PRIOR", 0.55))
-    prior_w = float(getattr(config, "CHIP_PLAN_DIST_PRIOR_WEIGHT", 2.0))
-    p60_given = float(getattr(config, "MINUTES_P60_GIVEN_START", 0.86))
-    base_xg = getattr(config, "OUTPUT_POSITION_BASE_XG90", {})
-    base_xa = getattr(config, "OUTPUT_POSITION_BASE_XA90", {})
+    start_prior = float(config.MINUTES_START_PRIOR)
+    prior_w = float(config.CHIP_PLAN_DIST_PRIOR_WEIGHT)
+    p60_given = float(config.MINUTES_P60_GIVEN_START)
+    base_xg = config.OUTPUT_POSITION_BASE_XG90
+    base_xa = config.OUTPUT_POSITION_BASE_XA90
     n_gws = max(0, int(finished_gws or 0))
 
     def col(name):
@@ -119,11 +119,11 @@ def player_priors_from_elements(elements, finished_gws: int = 0) -> dict[int, di
 def _pmf_for(pos, prior, n_fix, dmult, cs_prob, scale, appear_mult, max_points):
     p_appear = float(np.clip(prior["p_appear"] * appear_mult, 0.0, 1.0))
     p_60 = float(np.clip(prior["p_60"] * appear_mult, 0.0, p_appear))
-    mins_share = float(getattr(config, "CHIP_PLAN_DIST_MINUTES_SHARE", 0.85))
+    mins_share = float(config.CHIP_PLAN_DIST_MINUTES_SHARE)
     # Goal/assist exposure scales with the chance of being on the pitch — a
     # doubtful player's lambda shrinks with him, so a 0% player is a 0 spike.
     exposure = n_fix * mins_share * dmult * p_appear
-    dc_base = float(getattr(config, "OUTPUT_DC_BASE_RATE", {}).get(pos, 0.0))
+    dc_base = float(config.OUTPUT_DC_BASE_RATE.get(pos, 0.0))
     return points_distribution.player_points_pmf(
         pos=pos,
         prob_appear=p_appear,
@@ -163,8 +163,8 @@ def player_gw_pmf(pos: str, xpts: float, prior: dict | None, n_fixtures: int = 1
         pmf = np.zeros(max_points + 1)
         pmf[0] = 1.0
         return pmf
-    mult_map = getattr(config, "CHIP_PLAN_TC_DIFF_MULT", {})
-    cs_map = getattr(config, "CHIP_PLAN_CS_PROB_BY_DIFF", {})
+    mult_map = config.CHIP_PLAN_TC_DIFF_MULT
+    cs_map = config.CHIP_PLAN_CS_PROB_BY_DIFF
     if difficulty is not None and np.isfinite(difficulty):
         d = int(round(float(difficulty)))
         dmult = float(mult_map.get(d, 1.0))
@@ -172,7 +172,7 @@ def player_gw_pmf(pos: str, xpts: float, prior: dict | None, n_fixtures: int = 1
     else:
         dmult, cs_prob = 1.0, float(cs_map.get(3, 0.33))
 
-    share = float(getattr(config, "CHIP_PLAN_DIST_CONTINUOUS_SHARE", {}).get(pos, 0.1))
+    share = float(config.CHIP_PLAN_DIST_CONTINUOUS_SHARE.get(pos, 0.1))
     target = float(xpts) * (1.0 - share)
 
     def mean_at(scale):
@@ -225,7 +225,7 @@ def continuous_share(entries) -> float:
     bar quoted in FULL xPts therefore sits on a different axis than the pmf, so
     it must be scaled by the same factor before any P(pmf >= bar) comparison.
     """
-    shares = getattr(config, "CHIP_PLAN_DIST_CONTINUOUS_SHARE", {})
+    shares = config.CHIP_PLAN_DIST_CONTINUOUS_SHARE
     total_x = 0.0
     total_c = 0.0
     for pos, xp in entries or []:
@@ -268,9 +268,9 @@ def summarize(pmf: np.ndarray | None, bar: float | None = None,
     if high >= top and pmf[top] > 0:
         out["p80_open"] = True   # band runs off the axis: quote it as "high+"
     if player_thresholds:
-        ret_at = int(getattr(config, "CHIP_PLAN_DIST_RETURN_AT", 6))
-        haul_at = int(getattr(config, "CHIP_PLAN_DIST_HAUL_AT", 10))
-        blank_at = int(getattr(config, "CHIP_PLAN_DIST_BLANK_AT", 2))
+        ret_at = int(config.CHIP_PLAN_DIST_RETURN_AT)
+        haul_at = int(config.CHIP_PLAN_DIST_HAUL_AT)
+        blank_at = int(config.CHIP_PLAN_DIST_BLANK_AT)
         out["p_return"] = round(float(pmf[ret_at:].sum()) if ret_at < pmf.size else 0.0, 3)
         out["p_haul"] = round(float(pmf[haul_at:].sum()) if haul_at < pmf.size else 0.0, 3)
         out["p_blank"] = round(float(pmf[: blank_at + 1].sum()), 3)

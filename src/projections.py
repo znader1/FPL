@@ -168,7 +168,7 @@ def shrink_toward_price_prior(blended_base, now_cost, element_type, gw_start):
     many gameweeks of evidence the season has produced; the effect fades as
     games accumulate. PROJ_SHRINKAGE_GAMES = 0 disables entirely.
     """
-    shrink_k = float(getattr(config, "PROJ_SHRINKAGE_GAMES", 0.0) or 0.0)
+    shrink_k = float(config.PROJ_SHRINKAGE_GAMES or 0.0)
     season_games = max(0, int(gw_start) - 1)
     # Pre-season (0 finished GWs) the ppg/form columns carry curated or
     # last-season signal, not small-sample noise — leave them alone. The
@@ -177,7 +177,7 @@ def shrink_toward_price_prior(blended_base, now_cost, element_type, gw_start):
         return blended_base
     if now_cost is None or element_type is None:
         return blended_base
-    slopes = getattr(config, "PROJ_PRICE_PRIOR_SLOPE", {}) or {}
+    slopes = config.PROJ_PRICE_PRIOR_SLOPE or {}
     price_m = pd.to_numeric(now_cost, errors="coerce")
     if not isinstance(price_m, pd.Series):
         return blended_base
@@ -190,7 +190,7 @@ def shrink_toward_price_prior(blended_base, now_cost, element_type, gw_start):
 
 def penalty_taker_uplift(penalties_order, index=None):
     """Additive xPts/GW for first-choice penalty takers (see config note)."""
-    uplift = float(getattr(config, "PROJ_PENALTY_TAKER_UPLIFT", 0.0) or 0.0)
+    uplift = float(config.PROJ_PENALTY_TAKER_UPLIFT or 0.0)
     order = pd.to_numeric(penalties_order, errors="coerce")
     if not isinstance(order, pd.Series):
         order = pd.Series(order, index=index)
@@ -324,7 +324,7 @@ def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/
         return pd.DataFrame()
 
     gw_start = int(gw_start)
-    window = max(1, int(window or getattr(config, "PROJ_PLAYER_RECENT_GW_WINDOW", 5) or 5))
+    window = max(1, int(window or config.PROJ_PLAYER_RECENT_GW_WINDOW or 5))
     window_start = max(1, int(gw_start) - int(window))
     # Exclusive upper bound for "prior" GWs. Normally gw_start itself (only GWs
     # strictly before the planning GW count). When finished_gw_max is set, also
@@ -516,10 +516,10 @@ def project_elements_next_gws(
         latest_n_matches=latest_n_matches,
     )
 
-    recent_window = max(1, int(getattr(config, "PROJ_PLAYER_RECENT_GW_WINDOW", 5) or 5))
-    recent_min_samples = max(1, int(getattr(config, "PROJ_PLAYER_RECENT_MIN_SAMPLES", 2) or 2))
-    recent_blend_weight = clamp(getattr(config, "PROJ_PLAYER_RECENT_BLEND_WEIGHT", 0.65), 0.0, 1.0)
-    ep_next_blend_weight = clamp(getattr(config, "PROJ_EP_NEXT_BLEND_WEIGHT", 0.45), 0.0, 1.0)
+    recent_window = max(1, int(config.PROJ_PLAYER_RECENT_GW_WINDOW or 5))
+    recent_min_samples = max(1, int(config.PROJ_PLAYER_RECENT_MIN_SAMPLES or 2))
+    recent_blend_weight = clamp(config.PROJ_PLAYER_RECENT_BLEND_WEIGHT, 0.0, 1.0)
+    ep_next_blend_weight = clamp(config.PROJ_EP_NEXT_BLEND_WEIGHT, 0.0, 1.0)
 
     recent_gw = player_recent_gw_map(gw_start=gw_start, window=recent_window, fixtures=fixtures, finished_gw_max=finished_gw_max)
     recent_history_max_gw = None
@@ -579,7 +579,7 @@ def project_elements_next_gws(
     else:
         play_prob = pd.Series(1.0, index=df.index)
 
-    apply_minutes = bool(getattr(config, "PROJ_APPLY_MINUTES_MODEL", False))
+    apply_minutes = bool(config.PROJ_APPLY_MINUTES_MODEL)
     minutes_hist = None
     if apply_minutes:
         try:
@@ -594,7 +594,7 @@ def project_elements_next_gws(
     # multiplier (and the published diff_avg_gw{n}) come from our own xG
     # attack/defence ratings instead of FPL's official FDR. Fail-soft: no
     # usable ratings → the legacy FPL-FDR path below runs unchanged.
-    diff_source = str(getattr(config, "PROJ_DIFFICULTY_SOURCE", "fpl"))
+    diff_source = str(config.PROJ_DIFFICULTY_SOURCE)
     xg_diff_ratings = (
         resolve_projection_difficulty_ratings(teams_short_map)
         if diff_source == "xg_ratings" else None
@@ -608,7 +608,7 @@ def project_elements_next_gws(
     # and motivation that decayed xG can't see.
     market_diff = {}
     if xg_diff_ratings is not None and "team_name" in df.columns:
-        odds_w = float(getattr(config, "ODDS_DIFFICULTY_BLEND_WEIGHT", 0.5))
+        odds_w = float(config.ODDS_DIFFICULTY_BLEND_WEIGHT)
         if odds_w > 0:
             names_by_id = {}
             for t, n in zip(pd.to_numeric(df["team"], errors="coerce"), df["team_name"]):
@@ -622,7 +622,7 @@ def project_elements_next_gws(
             if xg_diff_ratings is not None else None
         )
         if xg_map is not None and i == 0 and market_diff:
-            odds_w = float(getattr(config, "ODDS_DIFFICULTY_BLEND_WEIGHT", 0.5))
+            odds_w = float(config.ODDS_DIFFICULTY_BLEND_WEIGHT)
             for t, d in market_diff.items():
                 if t in xg_map:
                     xg_map[t] = odds_w * float(d) + (1.0 - odds_w) * xg_map[t]
@@ -668,7 +668,7 @@ def project_elements_next_gws(
         # clean-sheet share is fixture-elastic — so the full stack overstates
         # GK fixture sensitivity and inflates GK transfer gains.
         ctx_mult = diff_mult * home_away_mult * opp_form_mult * team_form_mult
-        gk_damp = float(getattr(config, "PROJ_GK_FIXTURE_DAMP", 1.0))
+        gk_damp = float(config.PROJ_GK_FIXTURE_DAMP)
         if gk_damp != 1.0:
             if "element_type" in df.columns:
                 is_gk = pd.to_numeric(df["element_type"], errors="coerce") == 1
@@ -697,7 +697,7 @@ def project_elements_next_gws(
             except Exception:
                 minutes_mult = None
 
-        dgw_discount = float(getattr(config, "PROJ_DGW_EXTRA_FIXTURE_DISCOUNT", 0.65))
+        dgw_discount = float(config.PROJ_DGW_EXTRA_FIXTURE_DISCOUNT)
         extra_fixtures = (fixture_count - 1.0).clip(lower=0.0)
         effective_fixtures = fixture_count.clip(upper=1.0) + extra_fixtures * dgw_discount
         effective_fixtures = effective_fixtures.where(fixture_count > 0, 0.0)
@@ -723,7 +723,7 @@ def project_elements_next_gws(
                 xpts = xpts * minutes_mult
             elif i <= 2:
                 # Partial injury discount for next 2 GWs (availability often resolves).
-                injury_fade = float(getattr(config, "PROJ_INJURY_FUTURE_GW_FADE", 0.5))
+                injury_fade = float(config.PROJ_INJURY_FUTURE_GW_FADE)
                 future_play_prob = 1.0 - (1.0 - play_prob) * injury_fade
                 xpts = xpts * future_play_prob
 
@@ -742,7 +742,7 @@ def project_elements_next_gws(
     # Optional: blend in the xG-based structural model (fixture_difficulty +
     # minutes_model + output_model). Default weight 0.0 leaves baseline untouched
     # and preserves backtest parity; never let a model error break projections.
-    blend_weight = clamp(getattr(config, "PROJ_MODEL_BLEND_WEIGHT", 0.0), 0.0, 1.0)
+    blend_weight = clamp(config.PROJ_MODEL_BLEND_WEIGHT, 0.0, 1.0)
     if blend_weight > 0.0:
         try:
             from . import expected_points as _xg_model
@@ -847,15 +847,15 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws):
     out = projections_df.copy()
 
     weights = _weight_list(
-        getattr(config, "CHIP_WILDCARD_GW_WEIGHTS", []),
+        config.CHIP_WILDCARD_GW_WEIGHTS,
         length=horizon_gws,
         fallback=1.0,
     )
-    dgw_bonus_per_extra_fixture = float(getattr(config, "CHIP_WILDCARD_DGW_BONUS_PER_EXTRA_FIXTURE", 1.25) or 1.25)
-    dgw_xpts_weight = float(getattr(config, "CHIP_WILDCARD_DGW_XPTS_WEIGHT", 0.12) or 0.12)
-    late_dgw_weight_step = float(getattr(config, "CHIP_WILDCARD_LATE_DGW_WEIGHT_STEP", 0.08) or 0.08)
+    dgw_bonus_per_extra_fixture = float(config.CHIP_WILDCARD_DGW_BONUS_PER_EXTRA_FIXTURE or 1.25)
+    dgw_xpts_weight = float(config.CHIP_WILDCARD_DGW_XPTS_WEIGHT or 0.12)
+    late_dgw_weight_step = float(config.CHIP_WILDCARD_LATE_DGW_WEIGHT_STEP or 0.08)
     short_horizon_dgw_multiplier = float(
-        getattr(config, "CHIP_WILDCARD_SHORT_HORIZON_DGW_MULTIPLIER", 1.4) or 1.4
+        config.CHIP_WILDCARD_SHORT_HORIZON_DGW_MULTIPLIER or 1.4
     )
 
     weighted_xpts = pd.Series(0.0, index=out.index, dtype="float64")
@@ -890,26 +890,22 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws):
     pos_mult = pos.map(config.CAPTAIN_POSITION_MULTIPLIER).fillna(1.0).astype(float)
 
     premium_floor = float(
-        getattr(
-            config,
-            "CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR",
-            getattr(config, "CAPTAIN_PREMIUM_PRICE_FLOOR", 9.0),
-        )
-        or getattr(config, "CAPTAIN_PREMIUM_PRICE_FLOOR", 9.0)
+        config.CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR
+        or config.CAPTAIN_PREMIUM_PRICE_FLOOR
     )
-    premium_base_bonus = float(getattr(config, "CHIP_WILDCARD_PREMIUM_ATTACKER_BASE_BONUS", 0.8) or 0.8)
-    captaincy_weight = float(getattr(config, "CHIP_WILDCARD_CAPTAINCY_WEIGHT", 0.32) or 0.32)
-    form_bonus_weight = float(getattr(config, "CHIP_WILDCARD_FORM_BONUS_WEIGHT", 0.12) or 0.12)
-    ownership_bonus_weight = float(getattr(config, "CHIP_WILDCARD_OWNERSHIP_BONUS_WEIGHT", 0.55) or 0.55)
-    ownership_bonus_scale = float(getattr(config, "CHIP_WILDCARD_OWNERSHIP_BONUS_SCALE", 40.0) or 40.0)
+    premium_base_bonus = float(config.CHIP_WILDCARD_PREMIUM_ATTACKER_BASE_BONUS or 0.8)
+    captaincy_weight = float(config.CHIP_WILDCARD_CAPTAINCY_WEIGHT or 0.32)
+    form_bonus_weight = float(config.CHIP_WILDCARD_FORM_BONUS_WEIGHT or 0.12)
+    ownership_bonus_weight = float(config.CHIP_WILDCARD_OWNERSHIP_BONUS_WEIGHT or 0.55)
+    ownership_bonus_scale = float(config.CHIP_WILDCARD_OWNERSHIP_BONUS_SCALE or 40.0)
 
     captain_signal = (
         next_xpts * pos_mult
-        + ((price_m - premium_floor).clip(lower=0.0) * float(getattr(config, "CAPTAIN_PREMIUM_PRICE_BONUS_PER_M", 0.1)) * is_attacker)
-        + (form * float(getattr(config, "CAPTAIN_FORM_CEILING_WEIGHT", 0.04)) * is_attacker)
+        + ((price_m - premium_floor).clip(lower=0.0) * float(config.CAPTAIN_PREMIUM_PRICE_BONUS_PER_M) * is_attacker)
+        + (form * float(config.CAPTAIN_FORM_CEILING_WEIGHT) * is_attacker)
         + (
             (penalties_order == 1.0).astype(float)
-            * float(getattr(config, "CAPTAIN_SET_PIECE_PENALTY_WEIGHT", 0.55))
+            * float(config.CAPTAIN_SET_PIECE_PENALTY_WEIGHT)
             * is_attacker
         )
     )

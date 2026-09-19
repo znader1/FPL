@@ -59,6 +59,9 @@ UI_FIXTURES_TO_SHOW = 3
 # Projection tuning
 # -----------------------------
 PROJ_DEFAULT_LATEST_N_MATCHES = 3
+# Default projection horizon. Was only ever a getattr fallback in api/main.py;
+# hoisted here so config.py is the single source of truth.
+PROJ_DEFAULT_HORIZON_GWS = 3
 PROJ_DEFAULT_PPG_WEIGHT = 0.55
 PROJ_DEFAULT_FORM_WEIGHT = 0.45
 PROJ_FORM_SCALE_PER_MATCH = 0.04
@@ -387,6 +390,9 @@ CHIP_DIFF_OWNERSHIP_WEIGHT = 0.35
 CHIP_STACK_ODDS_MIN = 2
 CHIP_STACK_SLOTS_PER_GOAL = 2.0
 CHIP_MAX_PER_TEAM = 3
+# Same FPL rule, enforced by the transfer recommender. Was only ever a
+# getattr fallback in src/recommender.py.
+TRANSFER_MAX_PER_TEAM = 3
 CHIP_SQUAD_SHAPE = {
     "GKP": 2,
     "DEF": 5,

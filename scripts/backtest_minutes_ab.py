@@ -28,7 +28,7 @@ def _project(target_gw, apply_minutes, horizon=3):
     elements, fixtures, teams_short, history_df = build_engine_inputs(target_gw, horizon=horizon)
     orig_recent = projections.load_latest_player_gw_history
     orig_minutes = minutes_model.load_minutes_history
-    orig_flag = getattr(config, "PROJ_APPLY_MINUTES_MODEL", False)
+    orig_flag = config.PROJ_APPLY_MINUTES_MODEL
     projections.load_latest_player_gw_history = lambda *a, **k: history_df
     minutes_model.load_minutes_history = lambda *a, **k: history_df
     config.PROJ_APPLY_MINUTES_MODEL = apply_minutes

@@ -9,10 +9,8 @@ from src.utils import clean_value
 
 router = APIRouter(prefix="/squad-picker", tags=["squad-picker"])
 
-KNOWLEDGE_PATH = getattr(config, "FDR_KNOWLEDGE_DISCOUNT_PATH",
-                         "data/models/knowledge_discount.json")
-PLAYER_KNOWLEDGE_PATH = getattr(config, "PLAYER_KNOWLEDGE_PATH",
-                                "data/models/player_knowledge.json")
+KNOWLEDGE_PATH = config.FDR_KNOWLEDGE_DISCOUNT_PATH
+PLAYER_KNOWLEDGE_PATH = config.PLAYER_KNOWLEDGE_PATH
 
 
 def _sanitize(obj):

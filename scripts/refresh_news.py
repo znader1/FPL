@@ -63,8 +63,8 @@ def main(argv=None):
     if args.dry_run:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
-        feeds = getattr(config, "NEWS_FEEDS", [])
-        max_age = args.max_age_days or getattr(config, "NEWS_MAX_AGE_DAYS", 14)
+        feeds = config.NEWS_FEEDS
+        max_age = args.max_age_days or config.NEWS_MAX_AGE_DAYS
         total = pl = 0
         for feed in feeds:
             try:

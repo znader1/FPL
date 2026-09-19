@@ -71,7 +71,7 @@ def _parse_article(text, path):
 
 
 def load_news_articles(kb_dir=None):
-    kb_dir = kb_dir or getattr(config, "NEWS_KB_DIR", "kb/auto/news")
+    kb_dir = kb_dir or config.NEWS_KB_DIR
     out = []
     for path in sorted(glob.glob(os.path.join(kb_dir, "**", "*.md"), recursive=True)):
         try:

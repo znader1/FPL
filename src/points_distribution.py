@@ -132,10 +132,10 @@ def player_points_pmf(pos, prob_appear, prob_60, exp_goals, exp_assists,
 
     Returns an array indexed by points, summing to 1.
     """
-    goal_pts = int(getattr(config, "OUTPUT_GOAL_POINTS", {}).get(pos, 4))
-    assist_pts = int(getattr(config, "OUTPUT_ASSIST_POINTS", 3.0))
-    cs_pts = int(getattr(config, "OUTPUT_CS_POINTS", {}).get(pos, 0))
-    dc_pts = int(getattr(config, "OUTPUT_DC_POINTS", 2.0))
+    goal_pts = int(config.OUTPUT_GOAL_POINTS.get(pos, 4))
+    assist_pts = int(config.OUTPUT_ASSIST_POINTS)
+    cs_pts = int(config.OUTPUT_CS_POINTS.get(pos, 0))
+    dc_pts = int(config.OUTPUT_DC_POINTS)
 
     # Enough counts to cover the clamped expected goals/assists tail.
     max_count = max(1, int(max_points // max(1, goal_pts)) + 2)
@@ -159,10 +159,10 @@ def discrete_expected_points(pos, prob_appear, prob_60, exp_goals, exp_assists,
     Mirrors the corresponding terms in ``output_model.expected_points``. Used to
     assert the distribution reproduces the model rather than drifting from it.
     """
-    goal_pts = int(getattr(config, "OUTPUT_GOAL_POINTS", {}).get(pos, 4))
-    assist_pts = float(getattr(config, "OUTPUT_ASSIST_POINTS", 3.0))
-    cs_pts = float(getattr(config, "OUTPUT_CS_POINTS", {}).get(pos, 0))
-    dc_pts = float(getattr(config, "OUTPUT_DC_POINTS", 2.0))
+    goal_pts = int(config.OUTPUT_GOAL_POINTS.get(pos, 4))
+    assist_pts = float(config.OUTPUT_ASSIST_POINTS)
+    cs_pts = float(config.OUTPUT_CS_POINTS.get(pos, 0))
+    dc_pts = float(config.OUTPUT_DC_POINTS)
 
     p_appear = float(np.clip(prob_appear, 0.0, 1.0))
     p_60 = float(np.clip(prob_60, 0.0, p_appear))

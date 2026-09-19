@@ -36,8 +36,8 @@ def effective_min_ev(chip, target_gw, expires_gw):
     CHIP_PLAN_EXPIRY_RAMP_GWS gameweeks before expiry it decays linearly to 0,
     so a modest-EV chip gets recommended rather than expiring unused.
     """
-    base = float(getattr(config, "CHIP_PLAN_MIN_EV", {}).get(chip, 0.0))
-    ramp = int(getattr(config, "CHIP_PLAN_EXPIRY_RAMP_GWS", 5))
+    base = float(config.CHIP_PLAN_MIN_EV.get(chip, 0.0))
+    ramp = int(config.CHIP_PLAN_EXPIRY_RAMP_GWS)
     gws_left = max(0, int(expires_gw) - int(target_gw))
     if ramp <= 0 or gws_left >= ramp:
         return base
@@ -51,8 +51,8 @@ def chip_windows(chips_played, current_gw, phase_split_gw=None, season_end_gw=No
     A chip logged in current_gw itself still counts as available — we advise
     FOR current_gw, so only strictly-earlier plays consume the chip.
     """
-    split = int(phase_split_gw or getattr(config, "CHIP_PLAN_PHASE_SPLIT_GW", 19))
-    end = int(season_end_gw or getattr(config, "CHIP_PLAN_SEASON_END_GW", 38))
+    split = int(phase_split_gw or config.CHIP_PLAN_PHASE_SPLIT_GW)
+    end = int(season_end_gw or config.CHIP_PLAN_SEASON_END_GW)
     current_gw = int(current_gw)
     in_phase_1 = current_gw <= split
     lo, hi = (1, split) if in_phase_1 else (split + 1, end)
@@ -173,8 +173,8 @@ def _clip_market_xpts(market: pd.DataFrame, col: str = "xpts") -> pd.DataFrame:
     """
     if market is None or col not in market.columns:
         return market
-    flat = float(getattr(config, "CHIP_PLAN_XPTS_CLAMP", 9.0))
-    by_pos = getattr(config, "CHIP_PLAN_XPTS_CLAMP_BY_POS", None)
+    flat = float(config.CHIP_PLAN_XPTS_CLAMP)
+    by_pos = config.CHIP_PLAN_XPTS_CLAMP_BY_POS
     out = market.copy()
     xp = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
     if by_pos and "pos" in out.columns:
@@ -257,7 +257,7 @@ def score_triple_captain(
             if per90 > 0:
                 dmap = (team_difficulty_by_gw or {}).get(gw) or {}
                 d = dmap.get(captain_row.get("team"))
-                mult_map = getattr(config, "CHIP_PLAN_TC_DIFF_MULT", {})
+                mult_map = config.CHIP_PLAN_TC_DIFF_MULT
                 mult = float(mult_map.get(int(round(d)), 1.0)) if d is not None else 1.0
                 n_fix = max(1, int(captain_row.get("fixture_count", 1)))
                 lam = per90 * mult * n_fix
@@ -269,7 +269,7 @@ def score_triple_captain(
 
         euro = (euro_by_gw or {}).get(gw, {}).get(captain_row.get("team"))
         if euro:
-            confidence *= float(getattr(config, "CHIP_PLAN_EURO_CONFIDENCE_MULT", 0.9))
+            confidence *= float(config.CHIP_PLAN_EURO_CONFIDENCE_MULT)
             risks.append(_euro_line(captain_row["name"], captain_row.get("team"), euro, gw))
 
         pmf = None
@@ -371,8 +371,8 @@ def score_bench_boost(
             names = ", ".join(str(r["name"]) for r in exposed[:4])
             risks.append(
                 f"{len(exposed)} of your bench 4 are in European weeks around GW{gw} ({names}) — rotation risk")
-            if len(exposed) >= int(getattr(config, "CHIP_PLAN_EURO_BB_MIN_BENCH", 2)):
-                confidence *= float(getattr(config, "CHIP_PLAN_EURO_CONFIDENCE_MULT", 0.9))
+            if len(exposed) >= int(config.CHIP_PLAN_EURO_BB_MIN_BENCH):
+                confidence *= float(config.CHIP_PLAN_EURO_CONFIDENCE_MULT)
         n_squad_euro = int(squad_with_xpts["team"].isin(list(euro_gw)).sum()) if euro_gw else 0
         if n_squad_euro:
             reasoning.append(f"{n_squad_euro}/15 squad players in European weeks around GW{gw}")
@@ -489,13 +489,13 @@ def score_free_hit(
         n_tough = 0
         if team_difficulty_by_gw:
             dmap = team_difficulty_by_gw.get(gw) or {}
-            tough_at = float(getattr(config, "CHIP_PLAN_FH_TOUGH_DIFFICULTY", 4.0))
+            tough_at = float(config.CHIP_PLAN_FH_TOUGH_DIFFICULTY)
             n_tough = int(sum(
                 1 for t in squad_with_xpts["team"].tolist()
                 if dmap.get(t) is not None and float(dmap[t]) >= tough_at))
 
-        min_blanking = int(getattr(config, "CHIP_PLAN_FH_MIN_BLANKING", 3))
-        min_tough = int(getattr(config, "CHIP_PLAN_FH_MIN_TOUGH", 6))
+        min_blanking = int(config.CHIP_PLAN_FH_MIN_BLANKING)
+        min_tough = int(config.CHIP_PLAN_FH_MIN_TOUGH)
         blank_trigger = n_blanking >= min_blanking
         tough_trigger = n_tough >= min_tough
         if not blank_trigger and not tough_trigger:
@@ -510,7 +510,7 @@ def score_free_hit(
         if blank_trigger:
             reasoning.append(f"{n_blanking} squad players blanking — strong FH candidate")
         if tough_trigger:
-            tough_at = float(getattr(config, "CHIP_PLAN_FH_TOUGH_DIFFICULTY", 4.0))
+            tough_at = float(config.CHIP_PLAN_FH_TOUGH_DIFFICULTY)
             reasoning.append(
                 f"{n_tough} of your 15 face difficulty ≥{tough_at:.1f} in GW{gw}")
 
@@ -714,13 +714,13 @@ def recommend_chips(
     if "wildcard" in chips_remaining:
         all_recs.extend(score_wildcard(
             squad, gw_projections, candidate_gws,
-            horizon=int(getattr(config, "CHIP_WILDCARD_DEFAULT_HORIZON_GWS", 4)),
+            horizon=int(config.CHIP_WILDCARD_DEFAULT_HORIZON_GWS),
             transfer_plan_net_gain=transfer_plan_net_gain,
             budget_m=bank_m,
         ))
 
     if breaks:
-        mult = float(getattr(config, "CHIP_PLAN_BREAK_CONFIDENCE_MULT", 0.85))
+        mult = float(config.CHIP_PLAN_BREAK_CONFIDENCE_MULT)
         for r in all_recs:
             if r.gw in breaks:
                 r.confidence *= mult
@@ -797,7 +797,7 @@ def _safe_chip_guidance(chip, **kwargs):
         return _chip_guidance(chip, **kwargs)
     except Exception:
         logger.warning("chip guidance builder failed for %s", chip, exc_info=True)
-        prior = getattr(config, "CHIP_PLAN_SEASON_PRIORS", {}).get(
+        prior = config.CHIP_PLAN_SEASON_PRIORS.get(
             chip, "the right structural window for this chip")
         return f"Hold. Best use: {prior}."
 
@@ -837,7 +837,7 @@ def build_chip_plan(
     team_labels: {team_id: label} so DGW/BGW teams can be named.
     """
     current_gw = int(current_gw)
-    horizon = int(horizon_gws or getattr(config, "CHIP_PLAN_HORIZON_GWS", 8))
+    horizon = int(horizon_gws or config.CHIP_PLAN_HORIZON_GWS)
     windows = chip_windows(chips_played, current_gw)
     remaining = [c for c, w in windows.items() if w["available"]]
     plan_net_gain = float((transfer_plan or {}).get("total_net_gain", 0.0) or 0.0)
@@ -848,7 +848,7 @@ def build_chip_plan(
     # European midweeks: every player of a team in a European week that GW
     # carries the rotation/fatigue haircut — on the squad AND the market side,
     # so a FH/WC dream squad can't dodge it.
-    euro_mult = float(getattr(config, "CHIP_PLAN_EURO_XPTS_MULT", 1.0))
+    euro_mult = float(config.CHIP_PLAN_EURO_XPTS_MULT)
     if euro_by_gw:
         gw_projections = european.discount_projections(gw_projections, euro_by_gw, euro_mult)
 
@@ -869,12 +869,12 @@ def build_chip_plan(
 
     recommendations = []
     nudge = None
-    nudge_floor = float(getattr(config, "CHIP_PLAN_NUDGE_MIN_EV", 4.0))
+    nudge_floor = float(config.CHIP_PLAN_NUDGE_MIN_EV)
     model_end = current_gw + horizon - 1
     fh_structural_gw = (
         _fh_structural_cup_clash_gw(
             cup_clashes, fixtures, model_end, windows["free_hit"]["expires_gw"],
-            int(getattr(config, "CHIP_PLAN_BLANK_TEAM_THRESHOLD", 14)))
+            int(config.CHIP_PLAN_BLANK_TEAM_THRESHOLD))
         if "free_hit" in remaining else None
     )
 
@@ -888,7 +888,7 @@ def build_chip_plan(
         # Model-zone candidates only run to the chip's expiry.
         in_window = [r for r in chip_recs if r.gw <= expires_gw]
         if not in_window:
-            base_bar = float(getattr(config, "CHIP_PLAN_MIN_EV", {}).get(chip, 0.0))
+            base_bar = float(config.CHIP_PLAN_MIN_EV.get(chip, 0.0))
             no_window_reason = (
                 "No blank-heavy or tough-fixture week in the model horizon"
                 if chip == "free_hit"
@@ -992,14 +992,14 @@ def build_chip_plan(
     # Structural zone: announced DGWs/BGWs beyond the model horizon, up to expiry.
     recommended_chips = {r["chip"] for r in recommendations}
     if fixtures is not None and not fixtures.empty:
-        season_end = int(getattr(config, "CHIP_PLAN_SEASON_END_GW", 38))
+        season_end = int(config.CHIP_PLAN_SEASON_END_GW)
         for g in range(model_end + 1, season_end + 1):
             counts = team_fixture_counts(fixtures, g)
             if not counts:
                 continue
             n_teams = len(counts)
             has_dgw = any(v >= 2 for v in counts.values())
-            blank_team_threshold = int(getattr(config, "CHIP_PLAN_BLANK_TEAM_THRESHOLD", 14))
+            blank_team_threshold = int(config.CHIP_PLAN_BLANK_TEAM_THRESHOLD)
             is_blank_heavy = n_teams <= blank_team_threshold  # several teams missing → blank GW
             for chip, wants, label in (
                 ("bench_boost", has_dgw, "double gameweek"),
@@ -1028,7 +1028,7 @@ def build_chip_plan(
     # for it instead of burning it on an ordinary week.
     if (cup_clashes and "free_hit" in remaining and "free_hit" not in recommended_chips
             and fh_structural_gw is not None):
-        blank_prob = float(getattr(config, "CHIP_PLAN_CUP_CLASH_BLANK_PROB", 0.7))
+        blank_prob = float(config.CHIP_PLAN_CUP_CLASH_BLANK_PROB)
         g = fh_structural_gw
         info = cup_clashes[g]
         comp = str(info.get("competition", "cup")).replace("_", " ").upper()
@@ -1086,14 +1086,14 @@ def build_calendar(squad, current_gw, horizon, events=None, fixtures=None, break
     flagged `in_model_zone`; the rest is the structural outlook. Every field
     degrades to None/empty when its signal is missing.
     """
-    last_gw = int(getattr(config, "CHIP_PLAN_SEASON_END_GW", 38))
+    last_gw = int(config.CHIP_PLAN_SEASON_END_GW)
     deadlines = {}
     for e in events or []:
         try:
             deadlines[int(e.get("id"))] = e.get("deadline_time")
         except (TypeError, ValueError):
             continue
-    blank_team_threshold = int(getattr(config, "CHIP_PLAN_BLANK_TEAM_THRESHOLD", 14))
+    blank_team_threshold = int(config.CHIP_PLAN_BLANK_TEAM_THRESHOLD)
     all_team_ids = set(team_labels or {})
 
     rows = []

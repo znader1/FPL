@@ -64,8 +64,7 @@ def main():
     teams_short_map = _teams_short_map_from_bootstrap(bootstrap_path)
 
     from src import config
-    out_path = args.out or getattr(config, "FDR_RATINGS_SEED_PATH",
-                                   "data/models/team_ratings_seed.json")
+    out_path = args.out or config.FDR_RATINGS_SEED_PATH
     payload = fd.freeze_ratings(ratings, teams_short_map, out_path, season=args.season)
 
     n = len(payload.get("teams", {}))

@@ -113,7 +113,7 @@ def _ep(p):
 
 def _rank_and_slice(candidates, templates, top_n=10):
     """Rank by differential EV (flag on) or legacy raw xPts (flag off), then slice."""
-    if bool(getattr(config, "LEAGUE_EV_RANKING", True)) and templates:
+    if bool(config.LEAGUE_EV_RANKING) and templates:
         ranked = ownership_ev.annotate_candidates(candidates, templates)
         ranked.sort(key=lambda c: c.get("differential_ev", 0.0), reverse=True)
     else:
@@ -128,8 +128,8 @@ def detect_captain_differential(analysis, elements_meta, templates, fixture_tick
     flag dict, or None when any condition is unmet.
     """
     ownership = analysis.get("league_ownership") or {}
-    premium_floor = float(getattr(config, "LEAGUE_EV_CAPTAIN_PREMIUM_FLOOR", 85))
-    max_own = float(getattr(config, "LEAGUE_EV_CAPTAIN_DIFF_MAX_OWNERSHIP", 0.10))
+    premium_floor = float(config.LEAGUE_EV_CAPTAIN_PREMIUM_FLOOR)
+    max_own = float(config.LEAGUE_EV_CAPTAIN_DIFF_MAX_OWNERSHIP)
     runs = _fixture_run_lookup(fixture_ticker)
 
     consensus, best_own = None, -1.0

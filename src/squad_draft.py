@@ -166,13 +166,12 @@ def _premium_params(params):
     premium_floor = params.get("premium_floor")
     if premium_floor is None:
         premium_floor = float(
-            getattr(config, "CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR",
-                    getattr(config, "CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR", 9.0)) or 9.0)
+            config.CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR or 9.0)
     premium_positions = list(
-        getattr(config, "CHIP_WILDCARD_PREMIUM_CAPTAIN_POSITIONS", ["MID", "FWD"]) or ["MID", "FWD"])
+        config.CHIP_WILDCARD_PREMIUM_CAPTAIN_POSITIONS or ["MID", "FWD"])
     min_premium = params.get("min_premium_attackers")
     if min_premium is None:
-        min_premium = int(getattr(config, "CHIP_WILDCARD_MIN_PREMIUM_CAPTAINS", 1) or 0)
+        min_premium = int(config.CHIP_WILDCARD_MIN_PREMIUM_CAPTAINS or 0)
     return float(premium_floor), premium_positions, int(min_premium)
 
 
@@ -269,7 +268,7 @@ def project_pool(elements, fixtures, teams_short, params):
     notes = _notable_exclusion_notes(elements)
     gw_start = int(p["gw_start"])
     horizon = int(p["horizon_gws"]) if p["horizon_gws"] is not None \
-        else int(getattr(config, "CHIP_WILDCARD_DEFAULT_HORIZON_GWS", 5) or 5)
+        else int(config.CHIP_WILDCARD_DEFAULT_HORIZON_GWS or 5)
     horizon = max(1, min(8, horizon))
     gws = list(range(gw_start, gw_start + horizon))
 
@@ -318,7 +317,7 @@ def project_pool(elements, fixtures, teams_short, params):
     by_id, pk_notes = player_knowledge.resolve_keys(pk, proj)
     notes.extend(pk_notes)
     stale = player_knowledge.staleness_note(
-        pk.get("as_of"), getattr(config, "PLAYER_KNOWLEDGE_STALE_DAYS", 10))
+        pk.get("as_of"), config.PLAYER_KNOWLEDGE_STALE_DAYS)
     if stale:
         notes.append(stale)
     proj = _apply_player_knowledge(proj, gws, by_id)
@@ -332,7 +331,7 @@ def build_squad_from_frames(elements, fixtures, teams_short, params):
     objective = str(p["objective"])
     budget_m = float(p["budget_m"])
     max_per_team = int(p["max_per_team"]) if p["max_per_team"] is not None \
-        else int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3)
+        else int(config.CHIP_MAX_PER_TEAM or 3)
     premium_floor, premium_positions, min_premium = _premium_params(p)
 
     # Auto-build only: optionally cap price per player so the optimizer doesn't
@@ -595,7 +594,7 @@ def _validate_squad(picked, params):
     p = {**DEFAULT_PARAMS, **(params or {})}
     budget_m = float(p["budget_m"])
     max_per_team = int(p["max_per_team"]) if p["max_per_team"] is not None \
-        else int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3)
+        else int(config.CHIP_MAX_PER_TEAM or 3)
     v = []
     if len(picked) != 15:
         v.append(f"Squad must have 15 players (has {len(picked)}).")

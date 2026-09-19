@@ -33,7 +33,7 @@ def to_number(value, default=0.0):
 
 def _chip_shape(shape=None):
     """Return normalized 15-player shape map used for wildcard/free-hit drafts."""
-    raw = shape or getattr(config, "CHIP_SQUAD_SHAPE", None) or {}
+    raw = shape or config.CHIP_SQUAD_SHAPE or {}
     out = {
         "GKP": int(raw.get("GKP", 2)),
         "DEF": int(raw.get("DEF", 5)),
@@ -105,7 +105,7 @@ def _prepare_chip_market(elements_all, score_col, shape):
     # not in the XI and not as bench fodder. Column-guarded: engine callers
     # whose markets carry no status column are unaffected.
     if "status" in market.columns:
-        excluded = tuple(getattr(config, "CHIP_MARKET_EXCLUDE_STATUS", ("i", "s", "u")))
+        excluded = tuple(config.CHIP_MARKET_EXCLUDE_STATUS)
         market = market[~market["status"].astype(str).str.lower().isin(excluded)].copy()
 
     market["id"] = pd.to_numeric(market.get("id"), errors="coerce")
@@ -141,7 +141,7 @@ def _apply_differential(market):
     displace the template. No-op when ownership data is missing."""
     if market is None or market.empty or "selected_by_percent" not in market.columns:
         return market
-    w = float(getattr(config, "CHIP_DIFF_OWNERSHIP_WEIGHT", 0.35))
+    w = float(config.CHIP_DIFF_OWNERSHIP_WEIGHT)
     own = (
         pd.to_numeric(market["selected_by_percent"], errors="coerce").fillna(0.0) / 100.0
     ).clip(0.0, 1.0)
@@ -420,7 +420,7 @@ def _bench_sort(pool):
     ascending, then WORST scorer so a price tie never eats an XI candidate.
     Preference, not a filter — a thin market falls through to the ghosts."""
     pool = pool.copy()
-    floor = float(getattr(config, "CHIP_BENCH_MIN_MINUTES", 90.0))
+    floor = float(config.CHIP_BENCH_MIN_MINUTES)
     if "minutes" in pool.columns:
         pool["_bench_pref"] = (
             pd.to_numeric(pool["minutes"], errors="coerce").fillna(0.0) >= floor
@@ -470,7 +470,7 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None, o
     This reflects real free-hit usage: the bench only exists to satisfy the
     squad rules, not to score points.
     """
-    max_per_team = int(max_per_team or getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3)
+    max_per_team = int(max_per_team or config.CHIP_MAX_PER_TEAM or 3)
     budget_m = float(to_number(budget_m, 100.0))
 
     market = _prepare_chip_market(
@@ -518,7 +518,7 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None, o
         bench_outfield = []
         team_counts_bench = _team_counts(bench_gkp)
         bench_teams = set(team_counts_bench.keys())
-        diversity_extra = float(getattr(config, "CHIP_BENCH_DIVERSITY_MAX_EXTRA_M", 0.0))
+        diversity_extra = float(config.CHIP_BENCH_DIVERSITY_MAX_EXTRA_M)
         ok = True
         for pos, need in [("DEF", bench_d), ("MID", bench_m), ("FWD", bench_f)]:
             pool = _bench_sort(market[
@@ -572,7 +572,7 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None, o
         # which attackers it would directly oppose. Conflicts only pair
         # defensive picks (GK/DEF) with attackers, so within one position
         # group the penalty is constant and can be computed per pool.
-        h2h_penalty = float(getattr(config, "CHIP_H2H_CONFLICT_PENALTY", 0.75))
+        h2h_penalty = float(config.CHIP_H2H_CONFLICT_PENALTY)
         xi_rows = []
         team_counts_xi = {}
         # Merge bench team counts since they share the same 15-man squad
@@ -595,8 +595,8 @@ def build_free_hit_squad(elements_all, score_col, budget_m, max_per_team=None, o
                 # Soft attacker-stack limit: from the Nth same-team attacker
                 # already in the XI, the next one pays a penalty — stacking
                 # survives only when clearly better than the spread option.
-                stack_pen = float(getattr(config, "CHIP_ATTACKER_STACK_PENALTY", 0.6))
-                stack_lim = int(getattr(config, "CHIP_ATTACKER_STACK_SOFT_LIMIT", 2))
+                stack_pen = float(config.CHIP_ATTACKER_STACK_PENALTY)
+                stack_lim = int(config.CHIP_ATTACKER_STACK_SOFT_LIMIT)
                 if pos in ("MID", "FWD") and stack_pen > 0:
                     atk_counts: dict[int, int] = {}
                     for r in xi_rows:
@@ -723,7 +723,7 @@ def build_chip_squad(
     `differential=True` docks scores by ownership (see _apply_differential).
     """
     shape_map = _chip_shape(shape)
-    max_per_team = int(max_per_team or getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3)
+    max_per_team = int(max_per_team or config.CHIP_MAX_PER_TEAM or 3)
     budget_m = float(to_number(budget_m, 100.0))
     market = _prepare_chip_market(elements_all, score_col=score_col, shape=shape_map)
     if market.empty:
@@ -765,7 +765,7 @@ def build_chip_squad(
         premium_positions=premium_positions,
     )
 
-    max_iters = int(getattr(config, "CHIP_UPGRADE_MAX_ITERS", 320) or 320)
+    max_iters = int(config.CHIP_UPGRADE_MAX_ITERS or 320)
     for _ in range(max_iters):
         cost_now = float(pd.to_numeric(selected["price_m"], errors="coerce").fillna(0.0).sum())
         budget_left = max(0.0, float(budget_m - cost_now))
@@ -925,7 +925,7 @@ def optimize_lineup(squad_df, projections_df, score_col, formations=None):
                     # D4/D5 fixtures faster than the mean does. ± per FDR
                     # step from neutral 3 — flips near-ties, never a monster.
                     (3.0 - to_number(r.get("fixture_difficulty"), 3.0))
-                    * float(getattr(config, "CAPTAIN_FIXTURE_DIFFICULTY_WEIGHT", 0.35))
+                    * float(config.CAPTAIN_FIXTURE_DIFFICULTY_WEIGHT)
                     if str(r.get("pos")) in ["MID", "FWD"]
                     else 0.0
                 )
