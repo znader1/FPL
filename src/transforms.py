@@ -135,47 +135,6 @@ def fixtures_string(
     return " | ".join(labels)
 
 
-def top_performers(
-    elements,
-    pos_filter,
-    metric_label,
-    topn,
-    fx,
-    teams_short_map,
-    gw_from,
-    nfx,
-):
-    """
-    Rank players by a chosen metric and append a compact next-fixtures string.
-    metric_label must exist in config.METRIC_MAP; falls back safely.
-    """
-    df = elements.copy()
-    if pos_filter:
-        df = df[df["pos"].isin(pos_filter)]
-
-    col = config.METRIC_MAP.get(metric_label, "total_points")
-    if col not in df.columns:
-        # graceful fallback
-        col = "total_points" if "total_points" in df.columns else None
-
-    if col:
-        df = df.sort_values(col, ascending=False)
-
-    df = df.head(int(topn)).copy()
-    df["next_fixtures"] = df.apply(
-        lambda r: fixtures_string(fx, int(r["team"]), teams_short_map, gw_from, nfx), axis=1
-    )
-
-    keep = ["web_name", "pos", "team_short", "next_fixtures"]
-    if col:
-        keep.insert(3, col)  # after team_short
-    keep = [c for c in keep if c in df.columns]
-    out = df[keep].copy()
-    if col and metric_label != col:
-        out = out.rename(columns={col: metric_label})
-    return out
-
-
 # -----------------------------
 # Next-GW players utilities
 # -----------------------------
@@ -289,56 +248,3 @@ def annotate_elements_with_gw_fixtures(
     return df
 
 
-def players_for_gw(
-    elements,
-    fx,
-    gw,
-    teams_short_map,
-    pos_filter=None,
-    only_with_fixture=True,
-    sort_by="ep_next",
-    topn=None,
-):
-    """
-    Build a player table for the requested GW with fixture annotations.
-    - Filters to players whose team has a fixture (or doubles) if only_with_fixture=True.
-    - Sorts by sort_by (falls back to total_points if missing/empty).
-    - Returns a tidy subset of columns, optionally head(topn).
-    """
-    df = annotate_elements_with_gw_fixtures(elements, fx, int(gw), teams_short_map)
-
-    if pos_filter:
-        df = df[df["pos"].isin(pos_filter)]
-
-    if only_with_fixture:
-        df = df[df["gw_fixture_count"] > 0]
-
-    # Choose sort column safely
-    if sort_by not in df.columns or df[sort_by].isna().all():
-        sort_by = "total_points" if "total_points" in df.columns else None
-
-    if sort_by:
-        df = df.sort_values(sort_by, ascending=False)
-
-    keep = [
-        "web_name",
-        "pos",
-        "team_short",
-        "price_m",
-        "form",
-        "points_per_game",
-        "total_points",
-        "selected_by_percent",
-        "ep_next",
-        "gw_fixtures",
-        "gw_fixture_count",
-        "gw_diff_sum",
-        "gw_diff_avg",
-    ]
-    keep = [c for c in keep if c in df.columns]
-    out = df[keep].copy()
-
-    if topn:
-        out = out.head(int(topn))
-
-    return out

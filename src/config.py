@@ -3,7 +3,6 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36")
 
 # If set, requests will use it. Else, system trust store.
-REQUESTS_CA_BUNDLE_ENV = "REQUESTS_CA_BUNDLE"
 
 # Caching / API
 BOOTSTRAP_TTL = 300  # seconds
@@ -37,7 +36,6 @@ ELEMENTS_KEEP = [
 ]
 
 # Position labels to show
-POS_CHOICES = ["GKP","DEF","MID","FWD"]
 
 # Metrics exposed in UI → underlying column
 METRIC_MAP = {
@@ -52,8 +50,6 @@ SQUAD_COLUMNS = [
     "is_captain","is_vice_captain","multiplier"
 ]
 
-UI_TOPN_DEFAULT = 15
-UI_FIXTURES_TO_SHOW = 3
 
 # -----------------------------
 # Projection tuning
