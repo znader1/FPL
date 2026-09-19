@@ -133,7 +133,7 @@ def european_weeks_by_gw(events, calendar: dict, before_days: float | None = Non
     if not calendar or not isinstance(calendar.get("teams"), dict):
         return {}
     before_days = float(before_days if before_days is not None
-                        else getattr(config, "CHIP_PLAN_EURO_WINDOW_BEFORE_DAYS", 5))
+                        else config.CHIP_PLAN_EURO_WINDOW_BEFORE_DAYS)
     windows = gw_windows(events)
     if not windows:
         return {}
@@ -224,7 +224,7 @@ def discount_projections(gw_projections: dict[int, pd.DataFrame],
     Returns a new dict (untouched frames are shared, discounted ones copied).
     A mult of 1.0 or an empty map returns the input as-is.
     """
-    mult = float(mult if mult is not None else getattr(config, "CHIP_PLAN_EURO_XPTS_MULT", 1.0))
+    mult = float(mult if mult is not None else config.CHIP_PLAN_EURO_XPTS_MULT)
     if not euro_by_gw or mult >= 1.0 or mult <= 0.0:
         return gw_projections
     out = {}

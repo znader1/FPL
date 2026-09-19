@@ -118,7 +118,7 @@ def compute_minutes_features(history_df, gw, halflife_gws=None):
         hist_appear_rate, eff_samples
     """
     halflife_gws = float(halflife_gws if halflife_gws is not None
-                         else getattr(config, "MINUTES_HALFLIFE_GWS", 5.0))
+                         else config.MINUTES_HALFLIFE_GWS)
     if history_df is None or history_df.empty:
         return pd.DataFrame(columns=[
             "player_id", "hist_start_rate", "hist_min_given_start",
@@ -149,7 +149,7 @@ def compute_minutes_features(history_df, gw, halflife_gws=None):
         if start_w > 0:
             min_given_start = float((g["start_minutes"] * g["w"]).sum() / start_w)
         else:
-            min_given_start = float(getattr(config, "MINUTES_E_MIN_GIVEN_START", 82.0))
+            min_given_start = float(config.MINUTES_E_MIN_GIVEN_START)
         rows.append({
             "player_id": int(pid),
             "hist_start_rate": start_rate,
@@ -177,7 +177,7 @@ def _availability_series(elements_df):
     avail = (chance / 100.0).clip(lower=0.0, upper=1.0)
     avail = avail.fillna(1.0)  # unknown -> assume available
 
-    status_map = getattr(config, "MINUTES_STATUS_AVAILABILITY", {})
+    status_map = config.MINUTES_STATUS_AVAILABILITY
     if "status" in elements_df.columns:
         status_cap = elements_df["status"].astype(str).str.strip().str.lower().map(status_map)
         status_cap = pd.to_numeric(status_cap, errors="coerce").fillna(1.0)
@@ -200,12 +200,12 @@ def minutes_projection(elements_df, history_df, gw):
     Returns a DataFrame indexed by player id (``id``) with:
         prob_start, prob_appear, prob_60, exp_minutes
     """
-    start_prior = float(getattr(config, "MINUTES_START_PRIOR", 0.55))
-    prior_w = float(getattr(config, "MINUTES_PRIOR_WEIGHT", 2.0))
-    e_min_start_default = float(getattr(config, "MINUTES_E_MIN_GIVEN_START", 82.0))
-    cameo = float(getattr(config, "MINUTES_CAMEO_MINUTES", 22.0))
-    sub_app_prob = float(getattr(config, "MINUTES_SUB_APP_PROB", 0.45))
-    p60_given_start = float(getattr(config, "MINUTES_P60_GIVEN_START", 0.86))
+    start_prior = float(config.MINUTES_START_PRIOR)
+    prior_w = float(config.MINUTES_PRIOR_WEIGHT)
+    e_min_start_default = float(config.MINUTES_E_MIN_GIVEN_START)
+    cameo = float(config.MINUTES_CAMEO_MINUTES)
+    sub_app_prob = float(config.MINUTES_SUB_APP_PROB)
+    p60_given_start = float(config.MINUTES_P60_GIVEN_START)
 
     df = elements_df.copy()
     if "id" not in df.columns:
@@ -286,9 +286,9 @@ def rotation_minutes_multiplier(prob_start_eff, prob_appear=None,
     misaligned positional arithmetic.
     """
     nailed_ref = float(nailed_ref if nailed_ref is not None
-                       else getattr(config, "MINUTES_NAILED_START_REF", 0.85))
+                       else config.MINUTES_NAILED_START_REF)
     cameo_value = float(cameo_value if cameo_value is not None
-                        else getattr(config, "MINUTES_CAMEO_POINT_VALUE", 0.30))
+                        else config.MINUTES_CAMEO_POINT_VALUE)
     nailed_ref = max(1e-6, nailed_ref)
 
     ps = pd.to_numeric(pd.Series(prob_start_eff).reset_index(drop=True), errors="coerce")
@@ -328,7 +328,7 @@ def compute_gw_minutes_multiplier(mins_df, ids, gw_offset, injury_future_fade=No
     rotation discount stays at full strength.
     """
     fade = float(injury_future_fade if injury_future_fade is not None
-                 else getattr(config, "PROJ_INJURY_FUTURE_GW_FADE", 0.5))
+                 else config.PROJ_INJURY_FUTURE_GW_FADE)
     ids = pd.Series(list(ids)).reset_index(drop=True)
     if mins_df is None or mins_df.empty:
         return pd.Series([1.0] * len(ids))

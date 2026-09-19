@@ -363,5 +363,5 @@ def build_bench_moves(squad_df, starting_records, bench_records):
             "xpts": round_float(rec.get("xpts"), 2, 0.0),
         })
 
-    limit = int(getattr(config, "STRATEGY_MAX_BENCH_MOVES", 6) or 6)
+    limit = int(config.STRATEGY_MAX_BENCH_MOVES or 6)
     return moves[: max(1, limit)]

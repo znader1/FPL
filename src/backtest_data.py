@@ -17,12 +17,6 @@ def _data_dir(season: str, base: str | Path = "data/vaastav") -> Path:
     return Path(base) / season
 
 
-def load_players_raw(season: str = "2025-26", base: str | Path = "data/vaastav") -> pd.DataFrame:
-    df = pd.read_csv(_data_dir(season, base) / "players_raw.csv")
-    df["price_m"] = pd.to_numeric(df.get("now_cost"), errors="coerce") / 10.0
-    return df
-
-
 def load_teams(season: str = "2025-26", base: str | Path = "data/vaastav") -> pd.DataFrame:
     return pd.read_csv(_data_dir(season, base) / "teams.csv")
 
@@ -79,14 +73,3 @@ def player_actuals_at(gw: int, season: str = "2025-26", base: str | Path = "data
     return load_gw(gw, season, base)
 
 
-def fixtures_through(gw: int, season: str = "2025-26", base: str | Path = "data/vaastav") -> pd.DataFrame:
-    """Fixtures with event <= gw (results known)."""
-    fx = load_fixtures(season, base)
-    fx = fx[pd.to_numeric(fx.get("event"), errors="coerce").fillna(0).astype(int) <= int(gw)]
-    return fx
-
-
-def fixtures_for(gw: int, season: str = "2025-26", base: str | Path = "data/vaastav") -> pd.DataFrame:
-    """Just GW `gw` fixtures (for projecting that GW)."""
-    fx = load_fixtures(season, base)
-    return fx[pd.to_numeric(fx.get("event"), errors="coerce").fillna(0).astype(int) == int(gw)]

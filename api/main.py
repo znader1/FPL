@@ -203,7 +203,7 @@ def _cache_set(cache, data):
 
 
 def get_bootstrap_cached():
-    ttl = int(getattr(config, "BOOTSTRAP_TTL", 300) or 300)
+    ttl = int(config.BOOTSTRAP_TTL or 300)
     hit = _cache_get(_bootstrap_cache, ttl)
     if hit is not None:
         return hit
@@ -211,7 +211,7 @@ def get_bootstrap_cached():
 
 
 def get_fixtures_cached():
-    ttl = int(getattr(config, "FIXTURES_TTL", 300) or 300)
+    ttl = int(config.FIXTURES_TTL or 300)
     hit = _cache_get(_fixtures_cache, ttl)
     if hit is not None:
         return hit
@@ -230,7 +230,7 @@ def get_event_live_cached(event_id):
     if event_id is None:
         return {}
     key = int(event_id)
-    ttl = int(getattr(config, "EVENT_LIVE_TTL", 60) or 60)
+    ttl = int(config.EVENT_LIVE_TTL or 60)
     cache = _event_live_cache.setdefault(key, {"ts": 0.0, "data": None})
     hit = _cache_get(cache, ttl)
     if hit is not None:
@@ -256,7 +256,7 @@ def get_projections_cached(gw_start, horizon_gws, finished_gw_max=None):
     every squad load.
     """
     key = (int(gw_start), int(horizon_gws))
-    ttl = int(getattr(config, "PROJECTIONS_TTL", 1800) or 1800)
+    ttl = int(config.PROJECTIONS_TTL or 1800)
     cache = _projections_cache.setdefault(key, {"ts": 0.0, "data": None})
     hit = _cache_get(cache, ttl)
     if hit is not None:
@@ -271,7 +271,7 @@ def get_projections_cached(gw_start, horizon_gws, finished_gw_max=None):
         teams_short_map=teams.set_index("id")["short_name"].to_dict(),
         gw_start=int(gw_start),
         horizon_gws=int(horizon_gws),
-        latest_n_matches=getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3),
+        latest_n_matches=config.PROJ_DEFAULT_LATEST_N_MATCHES,
         finished_gw_max=finished_gw_max,
     )
     return _cache_set(cache, proj)
@@ -285,7 +285,7 @@ def get_team_ratings_cached(teams_short_map):
     xG team ratings: current-season xG blended with the prior-season carryover
     seed, plus the manual knowledge discount. Cached on the fixtures TTL.
     """
-    ttl = int(getattr(config, "FIXTURES_TTL", 300) or 300)
+    ttl = int(config.FIXTURES_TTL or 300)
     hit = _cache_get(_team_ratings_cache, ttl)
     if hit is not None:
         return hit
@@ -847,7 +847,7 @@ def optimize_squad(payload, owner=None):
     itb_m = ctx.get("derived_itb_m") or 0.0
 
     optimize_event_id = _default_optimize_event_id(bootstrap)
-    latest_n = getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3)
+    latest_n = config.PROJ_DEFAULT_LATEST_N_MATCHES
     finished_events = [safe_int(e.get("id")) for e in bootstrap.get("events", []) if e.get("finished")]
     finished_gw_max = max([e for e in finished_events if e], default=None)
     proj_all = projections.project_elements_next_gws(
@@ -878,7 +878,7 @@ def optimize_squad(payload, owner=None):
     cur_itb = float(itb_m)
     rounds = 0
     applied_moves = 0
-    engine_cap = int(getattr(config, "TRANSFER_MAX_MOVES", 5))
+    engine_cap = int(config.TRANSFER_MAX_MOVES)
     for _ in range(max_rounds):
         # Per round, request at most the remaining allowance (budget-feasible set).
         remaining = engine_cap if max_swaps is None else max(0, int(max_swaps) - applied_moves)
@@ -976,7 +976,7 @@ def build_recommendations(payload):
     chip_strategy = normalize_chip_strategy(chip_strategy_raw)
     chip_differential = parse_bool(payload.get("differential"), default=False)
     prioritize_injured = parse_bool(payload.get("prioritize_injured"), default=True)
-    latest_n_matches_raw = payload.get("latest_n_matches", getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3))
+    latest_n_matches_raw = payload.get("latest_n_matches", config.PROJ_DEFAULT_LATEST_N_MATCHES)
     apply_transfer_count_raw = payload.get("apply_transfer_count")
 
     include_transfers = parse_bool(payload.get("include_transfers"), default=False)
@@ -1082,7 +1082,7 @@ def build_recommendations(payload):
     if chip_strategy == "wildcard":
         chip_build_horizon_gws = safe_int(chip_horizon_gws_raw)
         if chip_build_horizon_gws is None:
-            chip_build_horizon_gws = int(getattr(config, "CHIP_WILDCARD_DEFAULT_HORIZON_GWS", 5) or 5)
+            chip_build_horizon_gws = int(config.CHIP_WILDCARD_DEFAULT_HORIZON_GWS or 5)
             if chip_horizon_gws_raw is None or str(chip_horizon_gws_raw).strip() == "":
                 notes.append(f"wildcard build horizon defaulted to {int(chip_build_horizon_gws)} GWs.")
             else:
@@ -1104,11 +1104,11 @@ def build_recommendations(payload):
 
     latest_n_matches = safe_int(latest_n_matches_raw)
     if latest_n_matches is None:
-        notes.append(f"Invalid latest_n_matches; using {int(getattr(config, 'PROJ_DEFAULT_LATEST_N_MATCHES', 3))}.")
-        latest_n_matches = int(getattr(config, "PROJ_DEFAULT_LATEST_N_MATCHES", 3))
+        notes.append(f"Invalid latest_n_matches; using {int(config.PROJ_DEFAULT_LATEST_N_MATCHES)}.")
+        latest_n_matches = int(config.PROJ_DEFAULT_LATEST_N_MATCHES)
     latest_n_matches = max(
-        int(getattr(config, "PROJ_LATEST_N_MIN", 1)),
-        min(int(getattr(config, "PROJ_LATEST_N_MAX", 8)), int(latest_n_matches)),
+        int(config.PROJ_LATEST_N_MIN),
+        min(int(config.PROJ_LATEST_N_MAX), int(latest_n_matches)),
     )
 
     fixtures = ctx["fixtures"]
@@ -1133,7 +1133,7 @@ def build_recommendations(payload):
     # horizon is 1, or roll-vs-move has no next week to compare against.
     plan_horizon_gws = max(
         int(display_horizon_gws),
-        max(1, int(getattr(config, "TRANSFER_PLAN_MIN_HORIZON_GWS", 3))),
+        max(1, int(config.TRANSFER_PLAN_MIN_HORIZON_GWS)),
     )
     projection_end_event_id = max(
         int(projection_end_event_id), int(optimize_event_id) + plan_horizon_gws - 1
@@ -1174,7 +1174,7 @@ def build_recommendations(payload):
         if not hist_vals.empty:
             recent_history_max_gw = int(hist_vals.max())
     if recent_history_max_gw is not None:
-        recent_window = int(getattr(config, "PROJ_PLAYER_RECENT_GW_WINDOW", 5) or 5)
+        recent_window = int(config.PROJ_PLAYER_RECENT_GW_WINDOW or 5)
         notes.append(
             f"Player baseline blends the last {int(recent_window)} gameweeks on file (latest player-history GW available: {int(recent_history_max_gw)})."
         )
@@ -1208,15 +1208,14 @@ def build_recommendations(payload):
             itb_m=safe_float(itb_m, default=0.0) or 0.0,
         )
         premium_floor = float(
-            getattr(config, "CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR",
-                    getattr(config, "CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR", 9.0))
-            or getattr(config, "CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR", 9.0)
+            config.CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR
+            or config.CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR
         )
         premium_positions = list(
-            getattr(config, "CHIP_WILDCARD_PREMIUM_CAPTAIN_POSITIONS", ["MID", "FWD"]) or ["MID", "FWD"]
+            config.CHIP_WILDCARD_PREMIUM_CAPTAIN_POSITIONS or ["MID", "FWD"]
         )
         min_premium_attackers = (
-            int(getattr(config, "CHIP_WILDCARD_MIN_PREMIUM_CAPTAINS", 1) or 0)
+            int(config.CHIP_WILDCARD_MIN_PREMIUM_CAPTAINS or 0)
             if chip_strategy == "wildcard"
             else 0
         )
@@ -1237,7 +1236,7 @@ def build_recommendations(payload):
                 elements_all=proj_all,
                 score_col=chip_objective_col,
                 budget_m=budget_m,
-                max_per_team=int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3),
+                max_per_team=int(config.CHIP_MAX_PER_TEAM or 3),
                 opponents=fh_opponents,
                 differential=chip_differential,
             )
@@ -1246,7 +1245,7 @@ def build_recommendations(payload):
                 elements_all=proj_all,
                 score_col=chip_objective_col,
                 budget_m=budget_m,
-                max_per_team=int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3),
+                max_per_team=int(config.CHIP_MAX_PER_TEAM or 3),
                 min_premium_attackers=min_premium_attackers,
                 premium_floor=premium_floor,
                 premium_positions=premium_positions,
@@ -1321,7 +1320,7 @@ def build_recommendations(payload):
             # Fail-soft: no key/odds → pure xG lambdas as before.
             try:
                 from src import odds_client
-                odds_w = float(getattr(config, "ODDS_LAMBDA_BLEND_WEIGHT", 0.7))
+                odds_w = float(config.ODDS_LAMBDA_BLEND_WEIGHT)
                 if odds_w > 0:
                     fpl_names = {int(t["id"]): t["name"]
                                  for t in get_bootstrap_cached().get("teams", [])}
@@ -1489,8 +1488,8 @@ def build_recommendations(payload):
                 _plan_proj, _squad_ids, plan_gws,
                 itb_m=safe_float(itb_m, default=0.0) or 0.0,
                 start_ft=int(free_transfers_value), ft_cap=5,
-                allow_hits=bool(getattr(config, "TRANSFER_PLAN_ALLOW_HITS", False)),
-                max_moves_per_gw=int(getattr(config, "TRANSFER_PLAN_MAX_MOVES_PER_GW", 1)),
+                allow_hits=bool(config.TRANSFER_PLAN_ALLOW_HITS),
+                max_moves_per_gw=int(config.TRANSFER_PLAN_MAX_MOVES_PER_GW),
                 min_gain=transfer_planner.scaled_min_gain(len(plan_gws)),
                 opponents_by_gw=_opps_by_gw,
                 prioritize_injured=prioritize_injured)
@@ -1719,7 +1718,7 @@ def admin_refresh(
         finished_max = max(
             [safe_int(e.get("id")) for e in bootstrap.get("events", []) if e.get("finished")] or [0]
         ) or None
-        for horizon in (1, int(getattr(config, "PROJ_DEFAULT_HORIZON_GWS", 3) or 3)):
+        for horizon in (1, int(config.PROJ_DEFAULT_HORIZON_GWS or 3)):
             try:
                 get_projections_cached(next_gw, horizon, finished_max)
                 warmed.append({"gw": next_gw, "horizon": horizon})
@@ -1833,7 +1832,7 @@ def build_model_snapshot():
         "season": season_label_from_bootstrap(bootstrap),
         "next_gw": gw,
         "deadline_utc": next_ev.get("deadline_time"),
-        "blend_weight": float(getattr(config, "PROJ_MODEL_BLEND_WEIGHT", 0.0)),
+        "blend_weight": float(config.PROJ_MODEL_BLEND_WEIGHT),
         "finished_gws": sorted({e for e in finished if e}),
         "players": players,
     }

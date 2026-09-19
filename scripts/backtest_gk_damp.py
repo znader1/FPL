@@ -58,7 +58,7 @@ def _project(target_gw, damp, name_to_id, horizon=1):
     orig_recent = projections.load_latest_player_gw_history
     orig_minutes = minutes_model.load_minutes_history
     orig_match = fixture_difficulty.load_match_history
-    orig_damp = getattr(config, "PROJ_GK_FIXTURE_DAMP", 1.0)
+    orig_damp = config.PROJ_GK_FIXTURE_DAMP
 
     projections.load_latest_player_gw_history = lambda *a, **k: history_df
     minutes_model.load_minutes_history = lambda *a, **k: history_df

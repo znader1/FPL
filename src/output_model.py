@@ -54,11 +54,11 @@ def compute_player_rates(match_df, gw, halflife_days=None, min_minutes_trust=Non
         player_id, xg90, xa90, minutes_sample, pos
     """
     halflife_days = float(halflife_days if halflife_days is not None
-                          else getattr(config, "OUTPUT_XG_HALFLIFE_DAYS", 75.0))
+                          else config.OUTPUT_XG_HALFLIFE_DAYS)
     min_trust = float(min_minutes_trust if min_minutes_trust is not None
-                      else getattr(config, "OUTPUT_MIN_MINUTES_TRUST", 270.0))
-    base_xg90 = getattr(config, "OUTPUT_POSITION_BASE_XG90", {})
-    base_xa90 = getattr(config, "OUTPUT_POSITION_BASE_XA90", {})
+                      else config.OUTPUT_MIN_MINUTES_TRUST)
+    base_xg90 = config.OUTPUT_POSITION_BASE_XG90
+    base_xa90 = config.OUTPUT_POSITION_BASE_XA90
 
     if match_df is None or match_df.empty:
         return pd.DataFrame(columns=["player_id", "xg90", "xa90", "minutes_sample", "pos"])
@@ -138,11 +138,11 @@ def compute_dc_rates(match_df, gw, halflife_days=None, min_games_trust=None):
     absent (older history) so the caller degrades to no DC term.
     """
     halflife_days = float(halflife_days if halflife_days is not None
-                          else getattr(config, "OUTPUT_DC_HALFLIFE_DAYS", 75.0))
+                          else config.OUTPUT_DC_HALFLIFE_DAYS)
     min_trust = float(min_games_trust if min_games_trust is not None
-                      else getattr(config, "OUTPUT_DC_MIN_GAMES_TRUST", 6.0))
-    thresholds = getattr(config, "OUTPUT_DC_THRESHOLD", {})
-    base_rate = getattr(config, "OUTPUT_DC_BASE_RATE", {})
+                      else config.OUTPUT_DC_MIN_GAMES_TRUST)
+    thresholds = config.OUTPUT_DC_THRESHOLD
+    base_rate = config.OUTPUT_DC_BASE_RATE
 
     empty = pd.DataFrame(columns=["player_id", "dc_clear_rate", "pos"])
     if match_df is None or match_df.empty:
@@ -222,7 +222,7 @@ def _setpiece_uplift(row, minutes_sample, min_trust):
     cannot yet see, and tapers to zero as the player's own sample grows --
     otherwise an established taker's penalties would be counted twice.
     """
-    if not bool(getattr(config, "OUTPUT_APPLY_SETPIECE", True)):
+    if not bool(config.OUTPUT_APPLY_SETPIECE):
         return 0.0, 0.0
 
     conf = min(1.0, float(minutes_sample) / min_trust) if min_trust > 0 else 1.0
@@ -232,11 +232,11 @@ def _setpiece_uplift(row, minutes_sample, min_trust):
 
     xg_add = xa_add = 0.0
     if _is_first_choice(row.get("penalties_order")):
-        xg_add += float(getattr(config, "OUTPUT_SETPIECE_PEN_XG90", 0.11))
+        xg_add += float(config.OUTPUT_SETPIECE_PEN_XG90)
     if _is_first_choice(row.get("direct_freekicks_order")):
-        xg_add += float(getattr(config, "OUTPUT_SETPIECE_FK_XG90", 0.03))
+        xg_add += float(config.OUTPUT_SETPIECE_FK_XG90)
     if _is_first_choice(row.get("corners_and_indirect_freekicks_order")):
-        xa_add += float(getattr(config, "OUTPUT_SETPIECE_CORNER_XA90", 0.05))
+        xa_add += float(config.OUTPUT_SETPIECE_CORNER_XA90)
     return xg_add * untrusted, xa_add * untrusted
 
 
@@ -267,19 +267,19 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
     except Exception:  # pragma: no cover
         import transforms  # type: ignore
 
-    goal_pts = getattr(config, "OUTPUT_GOAL_POINTS", {})
-    assist_pts = float(getattr(config, "OUTPUT_ASSIST_POINTS", 3.0))
-    cs_pts = getattr(config, "OUTPUT_CS_POINTS", {})
-    conceded_pen = getattr(config, "OUTPUT_GOALS_CONCEDED_PENALTY_PER_2", {})
-    saves_per_xga = float(getattr(config, "OUTPUT_SAVES_PER_XGA", 2.0))
-    save_pts_per = float(getattr(config, "OUTPUT_SAVE_POINTS_PER_SAVE", 1.0 / 3.0))
-    bonus_per_xgi = float(getattr(config, "OUTPUT_BONUS_PER_XGI", 0.9))
-    cs_bonus_per = getattr(config, "OUTPUT_CS_BONUS_PER_CS", {})
-    min_minutes_trust = float(getattr(config, "OUTPUT_MIN_MINUTES_TRUST", 270.0))
-    max_goals = float(getattr(config, "OUTPUT_MAX_GOALS_PER_GAME", 2.5))
-    max_assists = float(getattr(config, "OUTPUT_MAX_ASSISTS_PER_GAME", 2.0))
-    home_mult = float(getattr(config, "FDR_HOME_XG_MULT", 1.10))
-    away_mult = float(getattr(config, "FDR_AWAY_XG_MULT", 0.92))
+    goal_pts = config.OUTPUT_GOAL_POINTS
+    assist_pts = float(config.OUTPUT_ASSIST_POINTS)
+    cs_pts = config.OUTPUT_CS_POINTS
+    conceded_pen = config.OUTPUT_GOALS_CONCEDED_PENALTY_PER_2
+    saves_per_xga = float(config.OUTPUT_SAVES_PER_XGA)
+    save_pts_per = float(config.OUTPUT_SAVE_POINTS_PER_SAVE)
+    bonus_per_xgi = float(config.OUTPUT_BONUS_PER_XGI)
+    cs_bonus_per = config.OUTPUT_CS_BONUS_PER_CS
+    min_minutes_trust = float(config.OUTPUT_MIN_MINUTES_TRUST)
+    max_goals = float(config.OUTPUT_MAX_GOALS_PER_GAME)
+    max_assists = float(config.OUTPUT_MAX_ASSISTS_PER_GAME)
+    home_mult = float(config.FDR_HOME_XG_MULT)
+    away_mult = float(config.FDR_AWAY_XG_MULT)
 
     if elements_df is None or elements_df.empty or "id" not in elements_df.columns:
         return pd.DataFrame(columns=["exp_points"])
@@ -290,8 +290,8 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
         player_rates is not None and not player_rates.empty) else pd.DataFrame()
     mins = minutes_df if (minutes_df is not None and not minutes_df.empty) else pd.DataFrame()
 
-    apply_dc = bool(getattr(config, "OUTPUT_APPLY_DC", True))
-    dc_points = float(getattr(config, "OUTPUT_DC_POINTS", 2.0))
+    apply_dc = bool(config.OUTPUT_APPLY_DC)
+    dc_points = float(config.OUTPUT_DC_POINTS)
     dcr = dc_rates.set_index("player_id") if (
         apply_dc and dc_rates is not None and not dc_rates.empty) else pd.DataFrame()
 
@@ -303,8 +303,8 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
     # League-median keeper save volume, used to turn a keeper's own saves_per_90
     # into a ratio against the flat OUTPUT_SAVES_PER_XGA prior. Median, not mean,
     # so a single backup with a freak rate cannot move the baseline.
-    apply_save_rate = bool(getattr(config, "OUTPUT_APPLY_KEEPER_SAVE_RATE", True))
-    save_ratio_clamp = tuple(getattr(config, "OUTPUT_SAVE_RATIO_CLAMP", (0.6, 1.6)))
+    apply_save_rate = bool(config.OUTPUT_APPLY_KEEPER_SAVE_RATE)
+    save_ratio_clamp = tuple(config.OUTPUT_SAVE_RATIO_CLAMP)
     median_saves90 = None
     if apply_save_rate and "saves_per_90" in el.columns and "element_type" in el.columns:
         keepers = pd.to_numeric(
@@ -334,8 +334,8 @@ def expected_points(elements_df, fixtures, ratings, player_rates, minutes_df, gw
             minutes_sample = float(rates.loc[pid, "minutes_sample"]) if (
                 "minutes_sample" in rates.columns) else 0.0
         else:
-            xg90 = float(getattr(config, "OUTPUT_POSITION_BASE_XG90", {}).get(pos, 0.05))
-            xa90 = float(getattr(config, "OUTPUT_POSITION_BASE_XA90", {}).get(pos, 0.05))
+            xg90 = float(config.OUTPUT_POSITION_BASE_XG90.get(pos, 0.05))
+            xa90 = float(config.OUTPUT_POSITION_BASE_XA90.get(pos, 0.05))
             minutes_sample = 0.0
 
         # Set-piece duty the per-90 history cannot see yet.

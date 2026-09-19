@@ -52,8 +52,8 @@ def chips_plan(
     horizon: Optional[int] = Query(None, ge=2, le=12),
 ):
     current_gw = _resolve_current_gw()
-    model_horizon = int(horizon or getattr(config, "CHIP_PLAN_HORIZON_GWS", 8))
-    ttl = float(getattr(config, "CHIP_PLAN_CACHE_TTL_S", 900.0) or 0.0)
+    model_horizon = int(horizon or config.CHIP_PLAN_HORIZON_GWS)
+    ttl = float(config.CHIP_PLAN_CACHE_TTL_S or 0.0)
     cache_key = (int(entry_id), int(current_gw), int(model_horizon))
     hit = _plan_cache.get(cache_key)
     if hit and ttl > 0 and (time.time() - hit["ts"]) < ttl:
@@ -132,7 +132,7 @@ def build_chip_signals(bootstrap: dict, current_gw: int, model_horizon: int,
     # be a circular import; importing at request time avoids the cycle.
     from api.main import build_fixture_difficulty_payload
     from src.fixture_difficulty import compute_fixture_swings
-    window = int(getattr(config, "SWING_WINDOW_GWS", 3))
+    window = int(config.SWING_WINDOW_GWS)
     ticker = build_fixture_difficulty_payload(
         gw_start=current_gw, horizon_gws=model_horizon + window)
     team_difficulty_by_gw = {}
@@ -157,7 +157,7 @@ def build_chip_signals(bootstrap: dict, current_gw: int, model_horizon: int,
     # later GWs stay pure xG ratings. Never fatal: odds miss → unchanged map.
     try:
         from src import odds_client
-        odds_w = float(getattr(config, "ODDS_DIFFICULTY_BLEND_WEIGHT", 0.5))
+        odds_w = float(config.ODDS_DIFFICULTY_BLEND_WEIGHT)
         if odds_w > 0:
             market_diff = odds_client.market_difficulty_by_team(id_to_name)
             gw_map = team_difficulty_by_gw.get(int(current_gw))
