@@ -22,6 +22,7 @@ import pandas as pd
 from anthropic import Anthropic
 
 from src.transfer_advisor import recommend_transfer
+from src import llm_usage
 
 
 MODEL = "claude-haiku-4-5-20251001"  # fast specialist
@@ -142,6 +143,7 @@ def run_transfer_agent(
             tools=TOOLS,
             messages=messages,
         )
+        llm_usage.record_usage(response, feature="transfer_agent", model=MODEL, gw=current_gw)
 
         if response.stop_reason == "tool_use":
             tool_uses = [b for b in response.content if b.type == "tool_use"]

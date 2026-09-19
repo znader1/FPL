@@ -17,6 +17,7 @@ from datetime import date, timedelta
 
 from src import config
 from src.player_knowledge import _norm
+from src import llm_usage
 
 _MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
            "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
@@ -241,6 +242,7 @@ def _anthropic_generate(prompt, model=None):
     msg = client.messages.create(
         model=model, max_tokens=400, system=SYSTEM,
         messages=[{"role": "user", "content": prompt}])
+    llm_usage.record_usage(msg, feature="news_digest", model=model)
     return msg.content[0].text
 
 
