@@ -17,6 +17,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from src import auth
+from src import llm_usage
 
 # Starlette buffers the whole body before deserialization and the production VM
 # has 512MB, so an unbounded POST is an OOM kill. 2MB comfortably fits the
@@ -59,6 +60,7 @@ def _user_key(request):
         claims = auth.verify_supabase_jwt(token)
         sub = (claims or {}).get("sub")
         if sub:
+            llm_usage.bind_user(sub)  # tag this request's LLM usage records
             return f"user:{sub}"
     return _client_ip(request)
 

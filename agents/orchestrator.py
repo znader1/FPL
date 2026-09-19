@@ -28,6 +28,7 @@ from anthropic import Anthropic
 from agents.chip_agent import run_chip_agent
 from agents.transfer_agent import run_transfer_agent
 from agents.captain_agent import run_captain_agent
+from src import llm_usage
 
 
 MODEL = "claude-sonnet-4-6"
@@ -166,6 +167,7 @@ def run_orchestrator(
             tools=TOOLS,
             messages=messages,
         )
+        llm_usage.record_usage(response, feature="orchestrator", model=MODEL, gw=current_gw)
 
         if response.stop_reason == "tool_use":
             # Handle ALL tool_use blocks in this turn (Claude may issue parallel calls)

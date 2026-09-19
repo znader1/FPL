@@ -2,6 +2,7 @@ import os
 
 from src import league, ownership_ev
 from src import config
+from src import llm_usage
 
 
 VALID_MODES = ("chase", "defend", "differential")
@@ -359,6 +360,7 @@ def _llm_narrative(analysis, mode, candidates, model=None, fixture_ticker=None, 
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_msg}],
         )
+        llm_usage.record_usage(resp, feature="league_strategy", model=chosen_model)
     except Exception as exc:
         return {"error": f"anthropic api call failed: {exc}", "model": chosen_model}
 
