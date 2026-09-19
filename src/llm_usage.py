@@ -15,9 +15,47 @@ import contextvars
 import json
 import logging
 import os
+import sys
 import time
 
 logger = logging.getLogger("fpl.llm_usage")
+
+
+class _StdoutHandler(logging.StreamHandler):
+    """StreamHandler that resolves ``sys.stdout`` at emit time, so output
+    follows any later redirection (test capture, supervisors) instead of the
+    stream object that existed at import."""
+
+    def __init__(self):
+        super().__init__(sys.stdout)
+
+    @property
+    def stream(self):
+        return sys.stdout
+
+    @stream.setter
+    def stream(self, _value):  # StreamHandler.__init__ assigns it; ignore
+        pass
+
+
+def _ensure_visible() -> None:
+    """Make the INFO lines reach stdout under uvicorn's default logging.
+
+    Nothing in the API configures the root logger, so root sits at WARNING and
+    uvicorn only attaches handlers to its own loggers — an INFO record here
+    would be dropped and the whole measurement would silently produce nothing
+    in Fly logs. Own handler, own level, no propagation: root config untouched.
+    """
+    if logger.handlers:
+        return
+    handler = _StdoutHandler()
+    handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+
+_ensure_visible()
 
 # The authenticated Supabase ``sub`` for the request in flight. Bound by the
 # rate-limiter key function (it already verifies the JWT on every LLM route),

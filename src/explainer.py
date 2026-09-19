@@ -162,7 +162,7 @@ def explain(recommendations, model=None):
         messages=_build_messages(context),
     )
     llm_usage.record_usage(resp, feature="explain", model=chosen_model,
-                           gw=recommendations.get("gw") if isinstance(recommendations, dict) else None)
+                           gw=recommendations.get("event_id") if isinstance(recommendations, dict) else None)
 
     text = ""
     for block in resp.content or []:

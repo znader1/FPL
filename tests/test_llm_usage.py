@@ -5,7 +5,6 @@ cost per user per gameweek — the only line item that scales with users — was
 a guess. These tests pin the accounting helper and its wiring.
 """
 import json
-import logging
 from types import SimpleNamespace
 
 from src import llm_usage
@@ -70,11 +69,13 @@ def test_jsonl_sink_appends_one_row_per_call(monkeypatch, tmp_path):
     assert rows[1]["output_tokens"] == 100
 
 
-def test_log_line_carries_the_fields_ops_will_grep(monkeypatch, caplog):
+def test_log_line_reaches_stdout_without_any_root_logging_config(monkeypatch, capsys):
+    """uvicorn leaves root at WARNING; the record must still print, or Fly logs
+    show nothing for the whole measurement window."""
     monkeypatch.delenv("FPL_LLM_USAGE_LOG", raising=False)
-    with caplog.at_level(logging.INFO, logger="fpl.llm_usage"):
-        llm_usage.record_usage(_resp(), feature="explain", gw=6, user="u1")
-    line = caplog.text
+    assert llm_usage.logger.handlers, "module must attach its own stdout handler"
+    llm_usage.record_usage(_resp(), feature="explain", gw=6, user="u1")
+    line = capsys.readouterr().out
     assert "llm_usage feature=explain" in line and "usd=0.004" in line and "gw=6" in line
 
 
@@ -101,5 +102,5 @@ def test_explainer_records_usage_for_its_call(monkeypatch):
     seen = []
     monkeypatch.setattr(llm_usage, "record_usage", lambda resp, feature, **kw: seen.append((feature, kw)) or {})
 
-    explainer.explain({"gw": 6, "transfers": [], "unique": "no-cache-hit-please"})
-    assert seen and seen[0][0] == "explain"
+    explainer.explain({"event_id": 6, "transfers": [], "unique": "no-cache-hit-please"})
+    assert seen and seen[0][0] == "explain" and seen[0][1]["gw"] == 6
