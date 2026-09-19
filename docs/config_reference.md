@@ -1,21 +1,30 @@
 # Config Reference (`src/config.py`)
 
-This file explains every parameter in `src/config.py`, what it controls, and where the logic is implemented.
+> **Superseded for provenance.** Every parameter in `src/config.py` now carries an
+> inline tag — `[tuned]`, `[untested]`, `[operational]`, `[flag]` — saying where its
+> value came from. Read the file itself for that; it cannot drift from the code.
+> The FPL rulebook moved to `src/rules.py` and is not tunable at all.
+>
+> This page remains useful for the "Logic lives in" column — which module consumes a
+> parameter. It covers 89 of ~215 parameters and parts of it are dated (it predates
+> the xG stack), so treat a missing entry as undocumented, not as "unused".
 
 ## How to tune safely
 
-1. Change values only in `src/config.py`.
-2. Test locally with:
+1. Change values only in `src/config.py` — never add a `getattr(config, "X", default)`
+   fallback; that creates a second source of truth and the test suite rejects it.
+2. Check the parameter's tag first. `[untested]` means the current value was never
+   validated; `[tuned]` means a sweep script owns it and you should re-run that
+   script rather than edit the number.
+3. Test locally with:
    - `uvicorn api.main:app --reload --port 8001`
    - `curl "http://127.0.0.1:8001/recommendations?entry_id=<ENTRY>&include_transfers=true"`
-3. If behavior is wrong, adjust the **script listed in the “Logic lives in” column**, not the frontend.
+4. If behavior is wrong, adjust the **script listed in the “Logic lives in” column**, not the frontend.
 
 ## 1) HTTP / networking
 
 | Parameter | What it controls | Logic lives in |
 |---|---|---|
-| `UA` | Default browser user-agent string intended for HTTP calls. | Currently not wired. Runtime UA is in `src/fpl_client.py` (`UA_PC`, `UA_ANDROID`). To wire config, edit `src/fpl_client.py` in `new_session`. |
-| `REQUESTS_CA_BUNDLE_ENV` | Name of env var for custom CA bundle. | Currently not wired. TLS verify reads `REQUESTS_CA_BUNDLE` directly in `src/fpl_client.py` (`_verify`). |
 
 ## 2) Cache / API frequency
 
