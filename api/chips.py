@@ -71,6 +71,36 @@ SIGNAL_KEYS = ("breaks", "team_difficulty_by_gw", "swings", "xgi_per90",
                "player_priors", "euro_by_gw", "cup_clashes", "events", "team_labels")
 
 
+def european_weeks_from_bootstrap(bootstrap: dict, calendar_path: str | None = None) -> dict:
+    """{euro_by_gw, cup_clashes} from the user-maintained European calendar.
+
+    Calendar keys may be FPL full names, short names or ids — normalized to
+    the full names the markets (and the projection frame's `team_name`) use.
+    Cheap: no ticker, no projections — safe to call from /recommendations so
+    the wildcard / free-hit DRAFT can carry the same European-week haircut
+    the chip planner applies. Returns empty maps when the calendar is
+    missing or has no teams (the signal is simply off).
+    """
+    from src import european
+
+    events = list(bootstrap.get("events", []))
+    aliases: dict[str, str] = {}
+    for t in bootstrap.get("teams", []):
+        name = t.get("name")
+        if not name:
+            continue
+        aliases[str(name)] = name
+        if t.get("short_name"):
+            aliases[str(t["short_name"])] = name
+        aliases[str(t.get("id"))] = name
+    calendar = european.normalize_calendar_teams(
+        european.load_european_calendar(calendar_path), aliases)
+    return {
+        "euro_by_gw": european.european_weeks_by_gw(events, calendar),
+        "cup_clashes": european.cup_clashes_by_gw(events, calendar),
+    }
+
+
 def build_chip_signals(bootstrap: dict, current_gw: int, model_horizon: int,
                        calendar_path: str | None = None) -> dict:
     """Build the strategy signals from an already-fetched bootstrap payload.
@@ -99,21 +129,11 @@ def build_chip_signals(bootstrap: dict, current_gw: int, model_horizon: int,
     player_priors = chip_distribution.player_priors_from_elements(
         bootstrap.get("elements", []), finished_gws=finished_gws)
 
-    # European midweeks + domestic-cup clashes. Calendar keys may be full
-    # names, short names or ids — normalize to the full names the markets use.
-    aliases: dict[str, str] = {}
-    for t in bootstrap.get("teams", []):
-        name = t.get("name")
-        if not name:
-            continue
-        aliases[str(name)] = name
-        if t.get("short_name"):
-            aliases[str(t["short_name"])] = name
-        aliases[str(t.get("id"))] = name
-    calendar = european.normalize_calendar_teams(
-        european.load_european_calendar(calendar_path), aliases)
-    euro_by_gw = european.european_weeks_by_gw(events, calendar)
-    cup_clashes = european.cup_clashes_by_gw(events, calendar)
+    # European midweeks + domestic-cup clashes (shared with the chip drafts
+    # in /recommendations via european_weeks_from_bootstrap).
+    euro_cal = european_weeks_from_bootstrap(bootstrap, calendar_path)
+    euro_by_gw = euro_cal["euro_by_gw"]
+    cup_clashes = euro_cal["cup_clashes"]
     el = pd.DataFrame(bootstrap.get("elements", []))
     xgi_per90 = None
     if not el.empty and "expected_goals_per_90" in el.columns:

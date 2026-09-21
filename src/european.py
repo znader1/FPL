@@ -240,6 +240,39 @@ def discount_projections(gw_projections: dict[int, pd.DataFrame],
     return out
 
 
+def discount_projection_frame(proj: pd.DataFrame, euro_by_gw: dict[int, dict[str, dict]] | None,
+                              gws, mult: float | None = None, team_col: str = "team_name"):
+    """Wide-frame twin of `discount_projections`: scale every `xpts_gw{g}`
+    column of players whose team is in a European week that GW.
+
+    Returns (frame, n_rows_touched). The input is never mutated; with an
+    empty map, a mult of 1.0 or no matching column the input comes back as-is
+    with 0 touched. `team_col` names the column holding the calendar's team
+    labels (the projection frame carries FPL full names in `team_name`).
+    """
+    mult = float(mult if mult is not None else getattr(config, "CHIP_PLAN_EURO_XPTS_MULT", 1.0))
+    if (not euro_by_gw or mult >= 1.0 or mult <= 0.0 or proj is None or proj.empty
+            or team_col not in proj.columns):
+        return proj, 0
+    out = None
+    touched = pd.Series(False, index=proj.index)
+    for gw in gws:
+        col = f"xpts_gw{int(gw)}"
+        teams = euro_by_gw.get(int(gw)) or {}
+        if not teams or col not in proj.columns:
+            continue
+        mask = proj[team_col].astype(str).isin([str(t) for t in teams])
+        if not mask.any():
+            continue
+        if out is None:
+            out = proj.copy()
+        out.loc[mask, col] = pd.to_numeric(out.loc[mask, col], errors="coerce").fillna(0.0) * mult
+        touched |= mask
+    if out is None:
+        return proj, 0
+    return out, int(touched.sum())
+
+
 def squad_exposure(squad: pd.DataFrame, euro_gw: dict[str, dict] | None) -> list[dict]:
     """Players of `squad` whose team is in a European week (one dict each)."""
     if not euro_gw or squad is None or squad.empty or "team" not in squad.columns:

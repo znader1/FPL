@@ -926,7 +926,8 @@ def test_outlook_guidance_hold_below_bar_without_distribution():
     assert tc["status"] == "hold" and tc["event_id"] == 5
     assert "distribution" not in tc
     assert tc["guidance"] == (
-        f"Hold for now. GW{tc['event_id']} is the best week so far (+{tc['ev_gain']:.1f} pts). "
+        f"Hold for now. GW{tc['event_id']} is the best week so far "
+        f"(+{tc['ev_gain']:.1f} pts, short of the {tc['bar']:.0f}-pt bar). "
         f"Best use: {config.CHIP_PLAN_SEASON_PRIORS['triple_captain']}."
     )
 

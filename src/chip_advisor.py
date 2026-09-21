@@ -577,16 +577,22 @@ def score_wildcard(
 
         # Build xpts_horizon: each candidate player's clamp-protected xPts
         # summed across the horizon window, keyed on player_id.
-        base_cols = [c for c in ["player_id", "name", "pos", "team", "price_m"]
+        base_cols = [c for c in ["player_id", "name", "pos", "team", "price_m",
+                                 "recent_gw_avg_starts", "recent_gw_samples"]
                      if c in gw_projections[future_gws[0]].columns]
         base_market = gw_projections[future_gws[0]][base_cols].copy().reset_index(drop=True)
         horizon_total = pd.Series(0.0, index=base_market.index)
+        gw_cols = []
         for fgw in future_gws:
             clipped = _clip_market_xpts(gw_projections[fgw], "xpts")
             merged = base_market[["player_id"]].merge(
                 clipped[["player_id", "xpts"]], on="player_id", how="left"
             )["xpts"].fillna(0.0).reset_index(drop=True)
             horizon_total = horizon_total + merged
+            # Per-GW columns feed the builder's rotation bench (same schema
+            # as the projection frame the /recommendations draft uses).
+            base_market[f"xpts_gw{int(fgw)}"] = merged
+            gw_cols.append(f"xpts_gw{int(fgw)}")
         base_market["xpts_horizon"] = horizon_total
 
         wc_total = None
@@ -597,8 +603,11 @@ def score_wildcard(
             market_for_optimizer = base_market.rename(columns={"player_id": "id"}).copy()
             if "team" in market_for_optimizer.columns:
                 market_for_optimizer["team"] = pd.factorize(market_for_optimizer["team"])[0]
-            built = _optimizer.build_chip_squad(
-                market_for_optimizer, score_col="xpts_horizon", budget_m=budget_m
+            if "web_name" not in market_for_optimizer.columns and "name" in market_for_optimizer.columns:
+                market_for_optimizer["web_name"] = market_for_optimizer["name"]
+            built = _optimizer.build_wildcard_squad(
+                market_for_optimizer, score_col="xpts_horizon", budget_m=budget_m,
+                gw_cols=gw_cols,
             )
             if built.get("ok") and built.get("squad_df") is not None:
                 wc_squad_ids = set(
@@ -788,6 +797,8 @@ def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon,
     text = f"Hold for now. GW{event_id} is the best week so far (+{ev_gain:.1f} pts"
     if distribution and "p_beats_bar" in distribution:
         text += f", {round(distribution['p_beats_bar'] * 100)}% chance to beat the {bar:.0f}-pt bar"
+    else:
+        text += f", short of the {bar:.0f}-pt bar"
     text += f"). Best use: {prior}."
     return text
 
@@ -901,6 +912,7 @@ def build_chip_plan(
                 "bar": round(base_bar, 2),
                 "status": "hold",
                 "reasons": [no_window_reason],
+                "ev_curve": [],
                 "guidance": _safe_chip_guidance(
                     chip, status="hold", event_id=None, ev_gain=None, bar=base_bar,
                     distribution=None, horizon=horizon,
@@ -935,6 +947,10 @@ def build_chip_plan(
             "bar": round(float(bar), 2),
             "status": "hold",
             "reasons": list(best.reasoning)[:3],
+            # The per-GW curve rides on hold rows too, so the UI can show what
+            # the chip is worth in the week the manager has pencilled it in
+            # for, next to the best week — not just the verdict.
+            "ev_curve": curve,
         }
         if distribution is not None:
             outlook_row["distribution"] = distribution

@@ -274,23 +274,18 @@ CHIP_PLAN_MIN_EV = {            # below this, "hold" beats playing the chip
     # reasonable secondary floor for a genuine blank week and is flagged for
     # a follow-up backtest rather than guessed at here.
     "free_hit": 8.0,
-    # wildcard: re-tuned after making score_wildcard budget-aware (was
-    # comparing against an unbudgeted top-15, no team cap — live spot-check
-    # showed a squad-value-blind "optimal" of +281.7 xPts/5GW that included
-    # e.g. 4 Hull players). The budget-constrained rebuild against the same
-    # entry roughly halved that to +109.56 xPts/5GW — real progress, but the
-    # corrected number is still visibly contaminated by a residual
-    # projections-engine outlier: CHIP_PLAN_XPTS_CLAMP (9.0/GW) caps the
-    # worst offenders, but several genuinely strong players are *also*
-    # clamped to that same ceiling, so a clearly-wrong cheap cluster (3 Hull
-    # City defenders, all pinned at the clamp) reads as equally valuable as
-    # Haaland/Saka and gets picked on price alone. That's a data-quality bug
-    # (tracked separately, needs an upstream projections fix), not a real
-    # 31%-of-squad edge. Raised well above the observed (still-noisy) ceiling
-    # so WC reads "hold" rather than nudging "play now" off a contaminated
-    # GW3 number, while staying reachable for a genuinely severe gap once
-    # the projections bug is fixed and/or a real one shows up later.
-    "wildcard": 120.0,
+    # wildcard: the bar is what a wildcard must add over its
+    # CHIP_WILDCARD_DEFAULT_HORIZON_GWS window, NET of what the normal
+    # transfer plan already captures, before "play" beats keeping the chip
+    # for an injury pile-up / fixture swing. 20 over 5 GWs = +4 xPts/GW of
+    # pure chip value. History: 120.0 (2026-09-02) was a stopgap against an
+    # unbudgeted, unclamped dream squad (+281/+109 xPts) that made every
+    # window read "hold" — including the week the manager had planned the
+    # chip for. Since then the WC side is budget-constrained, position-clamped
+    # (CHIP_PLAN_XPTS_CLAMP_BY_POS), European-discounted and built XI-first
+    # (build_wildcard_squad), so the number is comparable to TC/BB again.
+    # Live-tuned; backtest pending (see docs/priorities_2026-09-21.md).
+    "wildcard": 20.0,
 }
 CHIP_PLAN_EXPIRY_RAMP_GWS = 5   # threshold decays linearly to 0 over the last N GWs
 CHIP_PLAN_NUDGE_MIN_EV = 4.0    # floor for the next-GW nudge surface
@@ -408,6 +403,39 @@ CHIP_WILDCARD_OWNERSHIP_BONUS_SCALE = 40.0
 CHIP_WILDCARD_MIN_PREMIUM_CAPTAINS = 1
 CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR = 10.5
 CHIP_WILDCARD_PREMIUM_CAPTAIN_POSITIONS = ["MID", "FWD"]
+
+# XI-first wildcard builder (src/optimizer.py::build_wildcard_squad, 2026-09-21).
+# The draft objective is the STARTING XI over the horizon, not the 15: the
+# legacy 15-sum let the upgrade loop buy bench players and stack whichever
+# position the projections inflated that week (4-5 DEF starting, a bench that
+# never plays). Formation is searched; the bench is chosen for rotation.
+#
+# Positional preference while choosing/comparing XIs. DEF xPts are
+# clean-sheet driven (correlated within a team, low ceiling); MID/FWD carry
+# the captaincy and haul upside, so a defender-heavy XI has to be clearly
+# better on raw xPts to win. 1.0 everywhere = pure xPts. The reported
+# objective is always the raw score — this only steers the search.
+CHIP_WILDCARD_XI_POS_MULT = {"GKP": 1.0, "DEF": 0.93, "MID": 1.0, "FWD": 1.0}
+# Rotation-risk gate on XI candidates: recent share of games STARTED
+# (`recent_gw_avg_starts`, >= 2 samples). Below this a player can only be a
+# bench body. Unknown start rate is never gated. 0 disables.
+CHIP_WILDCARD_XI_MIN_START_RATE = 0.6
+# Rotation bench: the bench GK / one bench DEF are the cheap bodies that best
+# COMPLEMENT the XI keeper / weakest XI defender week by week (sum over the
+# horizon of the xPts they add in the weeks they out-project him — home/away
+# alternation falls out of the per-GW numbers). Price caps keep them cheap;
+# the other bench slots stay cheapest-playing fodder.
+# Formations: every legal shape gets a fast greedy estimate, the best N run
+# the full XI knapsack (7 = exhaustive, ~7x the build time).
+CHIP_WILDCARD_FORMATION_SHORTLIST = 3
+CHIP_WILDCARD_BENCH_GK_MAX_PRICE = 4.5
+CHIP_WILDCARD_BENCH_ROTATION_DEF_MAX_PRICE = 4.5
+# Rotation/fatigue haircut on the chip DRAFT objective for teams in a
+# European week (reuses the calendar in data/models/european_calendar.json).
+# Applied to the wildcard/free-hit market before the draft is built — the
+# displayed xPts are untouched; the draft just prefers rested players on
+# near-ties. 1.0 = off.
+CHIP_DRAFT_EURO_XPTS_MULT = 0.95
 
 # ---------------------------------------------------------------------------
 # xG expected-points model (fixture_difficulty / minutes_model / output_model)

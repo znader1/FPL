@@ -1220,6 +1220,38 @@ def build_recommendations(payload):
             if chip_strategy == "wildcard"
             else 0
         )
+        # Draft market: the projection frame with the European-week haircut
+        # (CHIP_DRAFT_EURO_XPTS_MULT) on the GWs the draft is built for, so the
+        # wildcard / free-hit squad prefers rested players on near-ties. The
+        # displayed xPts (proj_all) are untouched. Fail-soft: no calendar,
+        # no haircut.
+        draft_market = proj_all
+        draft_gws = (
+            [int(wildcard_play_event_id) + i for i in range(int(chip_build_horizon_gws))]
+            if chip_strategy == "wildcard" else [int(optimize_event_id)]
+        )
+        try:
+            from api import chips as chips_mod
+            from src import european as european_mod
+            euro_mult = float(getattr(config, "CHIP_DRAFT_EURO_XPTS_MULT", 1.0))
+            euro_by_gw = chips_mod.european_weeks_from_bootstrap(ctx["bootstrap"])["euro_by_gw"]
+            draft_market, n_euro = european_mod.discount_projection_frame(
+                proj_all, euro_by_gw, draft_gws, mult=euro_mult, team_col="team_name")
+            if n_euro > 0:
+                if chip_strategy == "wildcard":
+                    draft_market = projections.add_wildcard_scores(
+                        projections_df=draft_market,
+                        gw_start=wildcard_play_event_id,
+                        horizon_gws=chip_build_horizon_gws,
+                    )
+                notes.append(
+                    f"Chip draft applies a x{euro_mult:.2f} European-week haircut to {int(n_euro)} "
+                    f"players' projections (selection only; displayed xPts unchanged)."
+                )
+        except Exception as e:  # noqa: BLE001 — the draft must never fail on the calendar
+            logger.warning("chip draft European haircut unavailable: %s", e)
+            draft_market = proj_all
+
         if chip_strategy == "free_hit":
             # H2H hedge input: which team faces which this GW, so the draft
             # avoids own GK/DEF vs own attackers. Fail-soft — no map, no penalty.
@@ -1234,7 +1266,7 @@ def build_recommendations(payload):
             except Exception as e:  # noqa: BLE001
                 logger.warning("free-hit opponents map unavailable: %s", e)
             chip_build = optimizer.build_free_hit_squad(
-                elements_all=proj_all,
+                elements_all=draft_market,
                 score_col=chip_objective_col,
                 budget_m=budget_m,
                 max_per_team=int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3),
@@ -1242,11 +1274,16 @@ def build_recommendations(payload):
                 differential=chip_differential,
             )
         else:
-            chip_build = optimizer.build_chip_squad(
-                elements_all=proj_all,
+            # XI-first wildcard draft: the objective is the starting XI over
+            # the build horizon, formation searched, rotation-risk players kept
+            # off the XI, and a bench chosen to rotate with the XI keeper /
+            # weakest defender (see optimizer.build_wildcard_squad).
+            chip_build = optimizer.build_wildcard_squad(
+                elements_all=draft_market,
                 score_col=chip_objective_col,
                 budget_m=budget_m,
                 max_per_team=int(getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3),
+                gw_cols=[f"xpts_gw{g}" for g in draft_gws],
                 min_premium_attackers=min_premium_attackers,
                 premium_floor=premium_floor,
                 premium_positions=premium_positions,
@@ -1272,10 +1309,21 @@ def build_recommendations(payload):
                 "profile": None,
                 "reason": chip_build.get("reason"),
             }
+            for extra in ("formation", "xi_player_ids", "bench_rotation", "xi_gated_out",
+                          "xi_gated_out_count", "objective_xi_total", "h2h_conflicts"):
+                if extra in chip_build:
+                    chip_info[extra] = chip_build[extra]
             notes.append(
                 f"{chip_strategy} draft built on `{chip_objective_col}` "
                 f"(budget {chip_build.get('budget_m')}m, left {chip_build.get('remaining_budget_m')}m)."
             )
+            if chip_build.get("xi_gated_out_count"):
+                shown = ", ".join(chip_build.get("xi_gated_out", [])[:6])
+                notes.append(
+                    f"{int(chip_build['xi_gated_out_count'])} rotation-risk players kept off the draft XI "
+                    f"(recent start rate below {float(getattr(config, 'CHIP_WILDCARD_XI_MIN_START_RATE', 0.6)):.0%})"
+                    + (f": {shown}…" if shown else ".")
+                )
         else:
             notes.append(f"{chip_strategy} draft fallback to current squad: {chip_build.get('reason')}")
             chip_info = {

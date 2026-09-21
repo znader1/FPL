@@ -89,8 +89,13 @@ def _premium_count_after_swap(selected, idx, cand, premium_floor, premium_positi
     return int(count_now)
 
 
-def _prepare_chip_market(elements_all, score_col, shape):
-    """Build clean player market table with chip objective score."""
+def _prepare_chip_market(elements_all, score_col, shape, extra_cols=None):
+    """Build clean player market table with chip objective score.
+
+    `extra_cols` (e.g. per-GW `xpts_gw{n}` columns, recent start rates) ride
+    along untouched when present — the wildcard builder needs them for the
+    rotation bench and the start-rate gate; column-guarded so any market works.
+    """
     if elements_all is None or elements_all.empty:
         return pd.DataFrame()
     if score_col not in elements_all.columns:
@@ -98,6 +103,9 @@ def _prepare_chip_market(elements_all, score_col, shape):
 
     cols = ["id", "web_name", "pos", "team", "team_short", "team_name", "price_m", "now_cost",
             "status", "minutes", "selected_by_percent", score_col]
+    for c in (extra_cols or []):
+        if c not in cols:
+            cols.append(c)
     keep = [c for c in cols if c in elements_all.columns]
     market = elements_all[keep].copy()
 
@@ -284,8 +292,15 @@ def _pick_best_upgrade(
     min_premium_attackers=0,
     premium_floor=0.0,
     premium_positions=None,
+    extra_team_counts=None,
+    extra_ids=None,
 ):
-    """Find highest-value affordable upgrade for one selected slot."""
+    """Find highest-value affordable upgrade for one selected slot.
+
+    `extra_team_counts` / `extra_ids` describe squad members outside
+    `selected` (a fixed bench while only the XI is searched) so the team cap
+    and the no-duplicate rule still see the whole 15.
+    """
     if selected is None or selected.empty:
         return None
     out = selected
@@ -293,8 +308,10 @@ def _pick_best_upgrade(
     if budget_left <= 1e-9:
         return None
 
-    selected_ids = set(out["id"].astype(int).tolist())
+    selected_ids = set(out["id"].astype(int).tolist()) | set(int(x) for x in (extra_ids or []))
     counts = _team_counts(out)
+    for t, c in (extra_team_counts or {}).items():
+        counts[int(t)] = counts.get(int(t), 0) + int(c)
     best = None
 
     for idx, row in out.iterrows():
@@ -813,6 +830,467 @@ def build_chip_squad(
         "squad_cost_m": float(round(cost, 2)),
         "remaining_budget_m": float(round(max(0.0, budget_m - cost), 2)),
         "objective_score_total": float(round(score, 2)),
+        "squad_df": selected,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Wildcard builder (2026-09-21): XI-first.
+#
+# The legacy `build_chip_squad` maximised the summed objective of all FIFTEEN
+# players, so the greedy upgrade loop happily spent budget on bench slots and
+# on whichever position the projections inflated that week (a 4-5 DEF XI
+# with a bench that never plays). A wildcard is worth what its STARTING XI
+# scores across the horizon plus what a bench can add through rotation, so
+# this builder:
+#
+#   1. searches every legal formation, optimising the XI (not the 15) under
+#      the budget left after a bench reserve — the same knapsack helpers as
+#      before, applied to 11 slots;
+#   2. applies `CHIP_WILDCARD_XI_POS_MULT` while comparing/choosing the XI, a
+#      mild attacker preference (DEF xPts are clean-sheet driven, correlated
+#      within a team and low-ceiling; MID/FWD carry the captaincy + haul
+#      upside) so a 4-5 DEF shape has to be clearly better to win;
+#   3. gates XI candidates on a recent start rate (`CHIP_WILDCARD_XI_MIN_START_RATE`)
+#      so rotation risks never anchor the XI — they can still be bench bodies;
+#   4. picks a ROTATION bench: the bench GK is the cheap keeper that best
+#      complements the XI keeper week by week (sum over the horizon of how
+#      much better he projects that GW — home/away alternation falls out of
+#      the per-GW xPts), likewise one cheap DEF against the weakest XI DEF;
+#      the remaining bench slots are the cheapest bodies that actually play.
+#
+# `score_col` stays the horizon objective (`wildcard_score` / `xpts_horizon`)
+# and `gw_cols` the per-GW xPts columns the rotation bench reads; without
+# `gw_cols` the bench falls back to cheapest-fodder (legacy behaviour).
+# ---------------------------------------------------------------------------
+
+_XI_SHAPE_ORDER = ("GKP", "DEF", "MID", "FWD")
+
+
+def _xi_shape(formation):
+    d, m, f = formation
+    return {"GKP": 1, "DEF": int(d), "MID": int(m), "FWD": int(f)}
+
+
+def _bench_shape(formation):
+    d, m, f = formation
+    return {"GKP": 1, "DEF": 5 - int(d), "MID": 5 - int(m), "FWD": 3 - int(f)}
+
+
+def _start_rate_series(market):
+    """Recent start share per row (0..1) or NaN when unknown. Reads
+    `recent_gw_avg_starts` (history CSV, needs >= 2 samples); NaN rows are
+    never gated — no data is not evidence of rotation."""
+    if market is None or market.empty or "recent_gw_avg_starts" not in market.columns:
+        return pd.Series(float("nan"), index=market.index if market is not None else None)
+    rate = pd.to_numeric(market["recent_gw_avg_starts"], errors="coerce")
+    if "recent_gw_samples" in market.columns:
+        samples = pd.to_numeric(market["recent_gw_samples"], errors="coerce").fillna(0.0)
+        rate = rate.where(samples >= 2.0)
+    return rate.clip(lower=0.0, upper=1.0)
+
+
+def _cheapest_of_shape(pool, shape):
+    """Cheapest legal starting set for a shape (price asc, then best score)."""
+    rows = []
+    for pos in _XI_SHAPE_ORDER:
+        need = int(shape.get(pos, 0))
+        if need <= 0:
+            continue
+        sub = pool[pool["pos"] == pos].sort_values(["price_m", "chip_score"], ascending=[True, False])
+        if len(sub) < need:
+            return None
+        rows.append(sub.head(need))
+    if not rows:
+        return None
+    return pd.concat(rows, ignore_index=True)
+
+
+def _optimise_xi(xi_pool, shape, xi_budget, max_per_team, min_premium_attackers,
+                 premium_floor, premium_positions, max_iters):
+    """Knapsack one starting XI of `shape` inside `xi_budget`: cheapest legal
+    set → team-cap repair → budget fit → premium structure → greedy upgrades."""
+    selected = _cheapest_of_shape(xi_pool, shape)
+    if selected is None or selected.empty:
+        return None
+    selected = _repair_team_cap(selected, xi_pool, max_per_team=max_per_team)
+    if selected is None or selected.empty:
+        return None
+    selected = _reduce_cost_to_budget(selected, xi_pool, budget_m=xi_budget, max_per_team=max_per_team)
+    if selected is None or selected.empty:
+        return None
+    selected, _ok = _ensure_min_premium_attackers(
+        selected, xi_pool, budget_m=xi_budget, max_per_team=max_per_team,
+        min_premium_attackers=min_premium_attackers, premium_floor=premium_floor,
+        premium_positions=premium_positions,
+    )
+    for _ in range(int(max_iters)):
+        cost_now = float(pd.to_numeric(selected["price_m"], errors="coerce").fillna(0.0).sum())
+        best = _pick_best_upgrade(
+            selected, xi_pool, budget_left=max(0.0, xi_budget - cost_now),
+            max_per_team=max_per_team, min_premium_attackers=min_premium_attackers,
+            premium_floor=premium_floor, premium_positions=premium_positions,
+        )
+        if not best:
+            break
+        selected = _replace_row(selected, best["idx"], best["cand"])
+    selected, premium_ok = _ensure_min_premium_attackers(
+        selected, xi_pool, budget_m=xi_budget, max_per_team=max_per_team,
+        min_premium_attackers=min_premium_attackers, premium_floor=premium_floor,
+        premium_positions=premium_positions,
+    )
+    return selected.reset_index(drop=True), bool(premium_ok)
+
+
+def _greedy_xi_estimate(xi_pool, shape, xi_budget, max_per_team):
+    """Fast upper-ish estimate of a formation's XI score: best-score-first
+    fill with a per-slot minimum-price guard (the free-hit heuristic). Used
+    only to shortlist formations before the knapsack runs."""
+    rows = []
+    counts = {}
+    spent = 0.0
+    total_slots = int(sum(shape.values()))
+    for pos in ("MID", "FWD", "DEF", "GKP"):
+        need = int(shape.get(pos, 0))
+        picked = 0
+        for _, row in xi_pool[xi_pool["pos"] == pos].iterrows():
+            if picked == need:
+                break
+            t = int(row["team"])
+            remaining = total_slots - len(rows) - 1
+            if spent + float(row["price_m"]) + remaining * 4.0 > xi_budget:
+                continue
+            if counts.get(t, 0) >= max_per_team:
+                continue
+            rows.append(row)
+            counts[t] = counts.get(t, 0) + 1
+            spent += float(row["price_m"])
+            picked += 1
+        if picked < need:
+            return None
+    return float(sum(float(r["chip_score"]) for r in rows))
+
+
+def _complement_value(cand_row, baseline_by_gw, gw_cols):
+    """How many xPts a bench body adds over the horizon by starting in the
+    weeks he out-projects the XI player he would replace."""
+    total = 0.0
+    for col in gw_cols:
+        base = float(baseline_by_gw.get(col, 0.0))
+        val = float(to_number(cand_row.get(col), 0.0))
+        total += max(0.0, val - base)
+    return total
+
+
+def _pick_rotation_body(pool, baseline_by_gw, gw_cols, max_price, team_counts, max_per_team):
+    """Best rotation partner under `max_price`: highest complement value, then
+    cheapest, then most minutes. Falls back to the cheapest playing body when
+    nobody complements (or the market has no per-GW columns)."""
+    if pool is None or pool.empty:
+        return None, 0.0
+    cands = pool[pd.to_numeric(pool["price_m"], errors="coerce") <= float(max_price) + 1e-9]
+    if cands.empty:
+        # Nobody under the cap: the slot is plain fodder — cheapest playing
+        # body, no complement ranking (which would happily bench a premium).
+        cands = _bench_sort(pool)
+        gw_cols = []
+    else:
+        cands = _bench_sort(cands)
+    if gw_cols and baseline_by_gw:
+        scored = []
+        for _, row in cands.iterrows():
+            if team_counts.get(int(row["team"]), 0) >= max_per_team:
+                continue
+            comp = _complement_value(row, baseline_by_gw, gw_cols)
+            scored.append((comp, -float(row["price_m"]), bool(row.get("_bench_pref", True)), row))
+        if scored:
+            scored.sort(key=lambda t: (t[0], t[1], t[2]), reverse=True)
+            comp, _p, _pref, row = scored[0]
+            if comp > 1e-9:
+                return row, float(comp)
+    for _, row in cands.iterrows():
+        if team_counts.get(int(row["team"]), 0) < max_per_team:
+            return row, 0.0
+    return None, 0.0
+
+
+def _fill_fodder(pool, need, team_counts, max_per_team, bench_teams, diversity_extra):
+    """Cheapest playing bodies for `need` slots; prefers a team not already on
+    the bench when it costs nothing extra (one postponement should not wipe
+    several subs). Mirrors the free-hit bench fill."""
+    picked = []
+    if need <= 0:
+        return picked
+    pool = _bench_sort(pool)
+    if pool.empty:
+        return picked
+    min_price = float(pool["price_m"].min())
+    picked_ids = set()
+    for prefer_distinct in (True, False):
+        for _, row in pool.iterrows():
+            if len(picked) == need:
+                break
+            t = int(row["team"])
+            rid = int(row["id"])
+            if rid in picked_ids:
+                continue
+            if prefer_distinct and (t in bench_teams or float(row["price_m"]) > min_price + diversity_extra):
+                continue
+            if team_counts.get(t, 0) < max_per_team:
+                picked.append(row)
+                picked_ids.add(rid)
+                team_counts[t] = team_counts.get(t, 0) + 1
+                bench_teams.add(t)
+        if len(picked) == need:
+            break
+    return picked
+
+
+def build_wildcard_squad(
+    elements_all,
+    score_col,
+    budget_m,
+    max_per_team=None,
+    gw_cols=None,
+    min_premium_attackers=0,
+    premium_floor=0.0,
+    premium_positions=None,
+    differential=False,
+    formations=None,
+):
+    """
+    Build a legal wildcard 15 whose objective is the STARTING XI's horizon
+    score plus a rotation-aware bench (see the module note above).
+
+    Returns the same dict shape as `build_chip_squad` plus `formation`,
+    `xi_player_ids`, `bench_rotation` (the GK / DEF rotation partners and the
+    xPts they add over the horizon), `xi_gated_out` (rotation-risk players
+    kept off the XI) and `objective_xi_total`. `squad_df` lists the XI rows
+    first, then the bench (GK first).
+    """
+    max_per_team = int(max_per_team or getattr(config, "CHIP_MAX_PER_TEAM", 3) or 3)
+    budget_m = float(to_number(budget_m, 100.0))
+    gw_cols = [c for c in (gw_cols or []) if c in (elements_all.columns if elements_all is not None else [])]
+    extra_cols = list(gw_cols) + ["recent_gw_avg_starts", "recent_gw_samples"]
+    market = _prepare_chip_market(
+        elements_all, score_col=score_col,
+        shape={"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3}, extra_cols=extra_cols,
+    )
+    if market.empty:
+        return {"ok": False, "reason": f"Market missing columns or score `{score_col}`.", "squad_df": None}
+    if differential:
+        market = _apply_differential(market)
+    market["raw_score"] = market["chip_score"].astype(float)
+
+    # --- XI candidate pool: start-rate gate + positional preference ---
+    min_start = getattr(config, "CHIP_WILDCARD_XI_MIN_START_RATE", 0.0)
+    min_start = float(min_start or 0.0)
+    start_rate = _start_rate_series(market)
+    gated = pd.Series(False, index=market.index)
+    if min_start > 0:
+        gated = start_rate.notna() & (start_rate < min_start)
+    xi_pool = market[~gated].copy()
+    pos_mult = dict(getattr(config, "CHIP_WILDCARD_XI_POS_MULT", {}) or {})
+    if pos_mult:
+        xi_pool["chip_score"] = xi_pool["raw_score"] * xi_pool["pos"].map(pos_mult).fillna(1.0).astype(float)
+    xi_pool = xi_pool.sort_values(["chip_score", "price_m"], ascending=[False, True]).reset_index(drop=True)
+
+    gk_cap = float(getattr(config, "CHIP_WILDCARD_BENCH_GK_MAX_PRICE", 4.5))
+    def_cap = float(getattr(config, "CHIP_WILDCARD_BENCH_ROTATION_DEF_MAX_PRICE", 4.5))
+    minutes_floor = float(getattr(config, "CHIP_BENCH_MIN_MINUTES", 90.0))
+    diversity_extra = float(getattr(config, "CHIP_BENCH_DIVERSITY_MAX_EXTRA_M", 0.0))
+    max_iters = int(getattr(config, "CHIP_UPGRADE_MAX_ITERS", 320) or 320)
+    premium_positions = list(premium_positions or ["MID", "FWD"])
+
+    def _cheapest_price(pos, n):
+        sub = market[market["pos"] == pos].sort_values("price_m")
+        if len(sub) < n:
+            return None
+        return float(sub["price_m"].head(n).sum()) if n > 0 else 0.0
+
+    # Formation candidates: every legal shape gets a fast greedy estimate;
+    # only the top CHIP_WILDCARD_FORMATION_SHORTLIST run the full knapsack.
+    candidates = []
+    for formation in (formations or VALID_FORMATIONS):
+        shape = _xi_shape(formation)
+        bench = _bench_shape(formation)
+        # Bench reserve: the rotation GK and (when the formation benches a DEF)
+        # the rotation DEF at their caps, cheapest bodies for the rest.
+        # A rotation slot costs at most its cap, but never less than the
+        # cheapest body in that position (a market whose cheapest keeper is
+        # 5.0m must reserve 5.0m, or the XI overspends).
+        cheapest_gk = _cheapest_price("GKP", 2)
+        if cheapest_gk is None:
+            continue
+        reserve = max(gk_cap, _cheapest_price("GKP", 1) or 0.0)
+        rest = dict(bench)
+        rest["GKP"] = 0
+        if bench["DEF"] >= 1:
+            reserve += max(def_cap, _cheapest_price("DEF", 1) or 0.0)
+            rest["DEF"] -= 1
+        ok = True
+        for pos, n in rest.items():
+            price = _cheapest_price(pos, n)
+            if price is None:
+                ok = False
+                break
+            reserve += price
+        if not ok:
+            continue
+        xi_budget = budget_m - reserve
+        if xi_budget <= 0:
+            continue
+        est = _greedy_xi_estimate(xi_pool, shape, xi_budget, max_per_team)
+        candidates.append((est if est is not None else -1.0, formation, shape, bench, reserve, xi_budget))
+    shortlist = int(getattr(config, "CHIP_WILDCARD_FORMATION_SHORTLIST", 3) or 0)
+    candidates.sort(key=lambda t: t[0], reverse=True)
+    if shortlist > 0:
+        candidates = candidates[:shortlist]
+
+    best = None
+    for _est, formation, shape, bench, reserve, xi_budget in candidates:
+        out = _optimise_xi(
+            xi_pool, shape, xi_budget, max_per_team, min_premium_attackers,
+            premium_floor, premium_positions, max_iters,
+        )
+        if out is None:
+            continue
+        xi_df, premium_ok = out
+        adj = float(pd.to_numeric(xi_df["chip_score"], errors="coerce").fillna(0.0).sum())
+        cost = float(pd.to_numeric(xi_df["price_m"], errors="coerce").fillna(0.0).sum())
+        key = (adj, -cost)
+        if best is None or key > best["key"]:
+            best = {"key": key, "formation": formation, "xi": xi_df, "premium_ok": premium_ok,
+                    "bench_shape": bench, "reserve": reserve}
+
+    if best is None:
+        return {"ok": False, "reason": "Could not build a valid wildcard XI under budget.", "squad_df": None}
+
+    xi = best["xi"].copy()
+    formation = best["formation"]
+    bench_shape = best["bench_shape"]
+    xi_ids = set(xi["id"].astype(int).tolist())
+    team_counts = _team_counts(xi)
+    bench_rows = []
+    bench_rotation = {}
+
+    def _baseline(pos_rows):
+        """Per-GW xPts of the XI player a bench body would replace: the (only)
+        XI keeper, or the weakest XI defender that week."""
+        base = {}
+        for col in gw_cols:
+            vals = pd.to_numeric(pos_rows[col], errors="coerce").fillna(0.0)
+            base[col] = float(vals.min()) if len(vals) else 0.0
+        return base
+
+    # Rotation GK.
+    gk_pool = market[(market["pos"] == "GKP") & (~market["id"].astype(int).isin(xi_ids))]
+    gk_row, gk_comp = _pick_rotation_body(
+        gk_pool, _baseline(xi[xi["pos"] == "GKP"]), gw_cols, gk_cap, team_counts, max_per_team)
+    if gk_row is None:
+        return {"ok": False, "reason": "Not enough GKPs in market.", "squad_df": None}
+    bench_rows.append(gk_row)
+    team_counts[int(gk_row["team"])] = team_counts.get(int(gk_row["team"]), 0) + 1
+    bench_rotation["GKP"] = {
+        "player_id": int(gk_row["id"]), "web_name": str(gk_row.get("web_name", gk_row["id"])),
+        "team": int(gk_row["team"]), "price_m": float(gk_row["price_m"]),
+        "rotation_xpts": round(float(gk_comp), 2),
+    }
+
+    # Rotation DEF (when the formation benches at least one defender).
+    used = xi_ids | {int(gk_row["id"])}
+    remaining = dict(bench_shape)
+    remaining["GKP"] = 0
+    if remaining["DEF"] >= 1:
+        def_pool = market[(market["pos"] == "DEF") & (~market["id"].astype(int).isin(used))]
+        def_row, def_comp = _pick_rotation_body(
+            def_pool, _baseline(xi[xi["pos"] == "DEF"]), gw_cols, def_cap, team_counts, max_per_team)
+        if def_row is not None:
+            bench_rows.append(def_row)
+            used.add(int(def_row["id"]))
+            team_counts[int(def_row["team"])] = team_counts.get(int(def_row["team"]), 0) + 1
+            remaining["DEF"] -= 1
+            bench_rotation["DEF"] = {
+                "player_id": int(def_row["id"]), "web_name": str(def_row.get("web_name", def_row["id"])),
+                "team": int(def_row["team"]), "price_m": float(def_row["price_m"]),
+                "rotation_xpts": round(float(def_comp), 2),
+            }
+
+    # Fodder for the rest.
+    bench_teams = {int(r["team"]) for r in bench_rows}
+    for pos in ("DEF", "MID", "FWD"):
+        need = int(remaining.get(pos, 0))
+        if need <= 0:
+            continue
+        pool = market[(market["pos"] == pos) & (~market["id"].astype(int).isin(used))]
+        picked = _fill_fodder(pool, need, team_counts, max_per_team, bench_teams, diversity_extra)
+        if len(picked) < need:
+            return {"ok": False, "reason": f"Not enough {pos} players in market for the bench.", "squad_df": None}
+        for r in picked:
+            bench_rows.append(r)
+            used.add(int(r["id"]))
+
+    bench_df = pd.DataFrame([r for r in bench_rows]).reset_index(drop=True)
+    bench_cost = float(pd.to_numeric(bench_df["price_m"], errors="coerce").fillna(0.0).sum())
+
+    # The bench came in under its reserve → let the XI spend the difference.
+    bench_counts = _team_counts(bench_df)
+    xi_budget = budget_m - bench_cost
+    for _ in range(max_iters):
+        cost_now = float(pd.to_numeric(xi["price_m"], errors="coerce").fillna(0.0).sum())
+        up = _pick_best_upgrade(
+            xi, xi_pool, budget_left=max(0.0, xi_budget - cost_now), max_per_team=max_per_team,
+            min_premium_attackers=min_premium_attackers, premium_floor=premium_floor,
+            premium_positions=premium_positions, extra_team_counts=bench_counts,
+            extra_ids=bench_df["id"].astype(int).tolist(),
+        )
+        if not up:
+            break
+        xi = _replace_row(xi, up["idx"], up["cand"])
+
+    selected = pd.concat([xi, bench_df], ignore_index=True)
+    # Report the raw objective (the positional preference only steered the search).
+    selected["chip_score"] = pd.to_numeric(selected["raw_score"], errors="coerce").fillna(0.0)
+    selected = selected.drop(columns=[c for c in ("_bench_pref", "raw_score") if c in selected.columns])
+    selected = selected.copy().reset_index(drop=True)
+    selected["player_id"] = selected["id"].astype(int)
+    selected["multiplier"] = 0
+    selected["is_captain"] = False
+    selected["is_vice_captain"] = False
+
+    cost = float(pd.to_numeric(selected["price_m"], errors="coerce").fillna(0.0).sum())
+    xi_total = float(pd.to_numeric(selected["chip_score"].head(11), errors="coerce").fillna(0.0).sum())
+    score = float(pd.to_numeric(selected["chip_score"], errors="coerce").fillna(0.0).sum())
+    gated_names = market.loc[gated, "web_name"].astype(str).tolist() if "web_name" in market.columns else []
+
+    reason = (
+        f"Wildcard draft built: {formation[0]}-{formation[1]}-{formation[2]}, "
+        f"XI objective {round(xi_total, 1)}"
+    )
+    rot_bits = []
+    for pos, info in bench_rotation.items():
+        if info["rotation_xpts"] > 0:
+            rot_bits.append(f"{info['web_name']} ({pos}) +{info['rotation_xpts']:.1f} by rotation")
+    if rot_bits:
+        reason += "; bench: " + ", ".join(rot_bits)
+    if not best["premium_ok"] and int(min_premium_attackers or 0) > 0:
+        reason += "; premium captaincy structure could not be fully satisfied under the budget"
+    reason += "."
+
+    return {
+        "ok": True,
+        "reason": reason,
+        "objective_score_col": score_col,
+        "budget_m": float(round(budget_m, 2)),
+        "squad_cost_m": float(round(cost, 2)),
+        "remaining_budget_m": float(round(max(0.0, budget_m - cost), 2)),
+        "objective_score_total": float(round(score, 2)),
+        "objective_xi_total": float(round(xi_total, 2)),
+        "formation": [int(x) for x in formation],
+        "xi_player_ids": [int(x) for x in selected["player_id"].head(11).tolist()],
+        "bench_rotation": bench_rotation,
+        "xi_gated_out": gated_names[:20],
+        "xi_gated_out_count": int(gated.sum()),
         "squad_df": selected,
     }
 

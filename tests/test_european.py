@@ -156,3 +156,48 @@ def test_squad_exposure_lists_players_in_european_weeks():
     assert [r["name"] for r in rows] == ["a", "c"]
     assert rows[0] == {"name": "a", "team": "Arsenal", "competition": "ucl", "when": "after"}
     assert european.squad_exposure(_market(), {}) == []
+
+
+def _wide_frame():
+    return pd.DataFrame({
+        "id": [1, 2, 3],
+        "team_name": ["Arsenal", "Burnley", "Arsenal"],
+        "xpts_gw5": [6.0, 4.0, 8.0],
+        "xpts_gw6": [5.0, 3.0, 7.0],
+    })
+
+
+def test_discount_projection_frame_scales_only_matching_gw_columns_and_reports_rows():
+    proj = _wide_frame()
+    euro = {5: {"Arsenal": {"competition": "ucl", "when": "before"}}}
+    out, n = european.discount_projection_frame(proj, euro, [5, 6], mult=0.9, team_col="team_name")
+    assert n == 2
+    assert out["xpts_gw5"].tolist() == [5.4, 4.0, 7.2]
+    assert out["xpts_gw6"].tolist() == [5.0, 3.0, 7.0]       # GW6 has no European teams
+    assert proj["xpts_gw5"].tolist() == [6.0, 4.0, 8.0]      # input not mutated
+
+
+def test_discount_projection_frame_noop_paths_return_input():
+    proj = _wide_frame()
+    assert european.discount_projection_frame(proj, {}, [5], 0.9) == (proj, 0)
+    assert european.discount_projection_frame(proj, {5: {"Arsenal": {}}}, [5], 1.0) == (proj, 0)
+    assert european.discount_projection_frame(proj, {7: {"Arsenal": {}}}, [5, 6], 0.9) == (proj, 0)
+    assert european.discount_projection_frame(proj.drop(columns=["team_name"]), {5: {"Arsenal": {}}}, [5], 0.9)[1] == 0
+
+
+def test_european_weeks_from_bootstrap_normalizes_short_names(tmp_path):
+    from api.chips import european_weeks_from_bootstrap
+
+    events = _events(n=4)
+    cal = {
+        "teams": {"ARS": "ucl"},
+        "matchdays": [{"competition": "ucl", "label": "MD1", "dates": ["2026-09-15"]}],
+        "cup_rounds": [],
+    }
+    path = tmp_path / "cal.json"
+    path.write_text(json.dumps(cal), encoding="utf-8")
+    bootstrap = {"events": events, "teams": [{"id": 1, "name": "Arsenal", "short_name": "ARS"}]}
+    out = european_weeks_from_bootstrap(bootstrap, str(path))
+    assert set(out) == {"euro_by_gw", "cup_clashes"}
+    assert any("Arsenal" in teams for teams in out["euro_by_gw"].values())
+    assert out["cup_clashes"] == {}
