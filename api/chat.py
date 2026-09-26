@@ -21,7 +21,7 @@ import logging
 from typing import Optional
 
 import pandas as pd
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Request, Response
 
 from src.ratelimit import LLM_LIMIT, _user_key, limiter
 from pydantic import BaseModel, Field
@@ -240,9 +240,13 @@ def _load_rules_text() -> str | None:
         return None
 
 
+# Every limited route below takes `response: Response` even though it returns a
+# model: the limiter has headers_enabled=True, and slowapi writes the
+# X-RateLimit-* headers onto that argument — without it every call 500s after
+# the LLM has already been paid for (tests/test_chat_routes_rate_limit_headers.py).
 @router.post("/chat/captain", response_model=ChatResponse)
 @limiter.limit(LLM_LIMIT, key_func=_user_key)
-def chat_captain(request: Request, req: SpecialistRequest = Body(...)):
+def chat_captain(request: Request, response: Response, req: SpecialistRequest = Body(...)):
     """Direct captain-agent call — skips orchestrator for speed."""
     from agents.captain_agent import run_captain_agent
 
@@ -265,7 +269,7 @@ def chat_captain(request: Request, req: SpecialistRequest = Body(...)):
 
 @router.post("/chat/transfer", response_model=ChatResponse)
 @limiter.limit(LLM_LIMIT, key_func=_user_key)
-def chat_transfer(request: Request, req: SpecialistRequest = Body(...)):
+def chat_transfer(request: Request, response: Response, req: SpecialistRequest = Body(...)):
     """
     Direct transfer-agent call — skips orchestrator for speed.
     Computes the model-recommended captain (deterministic, fast) and protects
@@ -304,7 +308,7 @@ def chat_transfer(request: Request, req: SpecialistRequest = Body(...)):
 
 @router.post("/chat/chip", response_model=ChatResponse)
 @limiter.limit(LLM_LIMIT, key_func=_user_key)
-def chat_chip(request: Request, req: SpecialistRequest = Body(...)):
+def chat_chip(request: Request, response: Response, req: SpecialistRequest = Body(...)):
     """Direct chip-agent call — skips orchestrator for speed."""
     from agents.chip_agent import run_chip_agent
 
@@ -341,7 +345,7 @@ def chat_chip(request: Request, req: SpecialistRequest = Body(...)):
 
 @router.post("/chat", response_model=ChatResponse)
 @limiter.limit(LLM_LIMIT, key_func=_user_key)
-def chat(request: Request, req: ChatRequest = Body(...)):
+def chat(request: Request, response: Response, req: ChatRequest = Body(...)):
     """Route a user question to the FPL orchestrator agent (free-form questions)."""
     from agents.orchestrator import run_orchestrator
     from api.main import build_next_event_summary, get_bootstrap_cached, get_fixtures_cached
