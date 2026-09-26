@@ -483,8 +483,20 @@ def recent_window_start_deadline(events: list[dict], current_gw: int):
     return None
 
 
+def fade_availability(prob, gw_offset: int) -> pd.Series:
+    """FPL's `chance_of_playing_next_round` describes the NEXT GW only. Same
+    shape as `projections`: full at offset 0, the shortfall scaled by
+    PROJ_INJURY_FUTURE_GW_FADE at offsets 1-2, gone from offset 3."""
+    prob = pd.to_numeric(pd.Series(prob), errors="coerce").fillna(1.0).clip(0.0, 1.0)
+    if gw_offset <= 0:
+        return prob
+    if gw_offset <= 2:
+        return 1.0 - (1.0 - prob) * float(config.PROJ_INJURY_FUTURE_GW_FADE)
+    return pd.Series(1.0, index=prob.index)
+
+
 def fh_squad_stress(squad_with_xpts: pd.DataFrame, difficulty_by_team: dict[str, float] | None,
-                    tough_from: float | None = None) -> dict:
+                    tough_from: float | None = None, gw_offset: int = 0) -> dict:
     """Blended Free Hit "squad stress" for one GW, in player-equivalents.
 
     Scope is the manager's starting XI (`is_starter`, from pick positions
@@ -495,7 +507,10 @@ def fh_squad_stress(squad_with_xpts: pd.DataFrame, difficulty_by_team: dict[str,
     tough_weight = clip((difficulty - tough_from) / (5 - tough_from), 0, 1).
     `play_prob` is read from the squad frame when present (availability x
     P(start): `play_prob_from_availability` x `start_prob_from_recent_starts`),
-    else every player counts as fit and starting.
+    else every player counts as fit and starting. With the split columns
+    `avail_prob` x `start_prob`, only availability fades with ``gw_offset``
+    (GWs after the next one, `fade_availability`); benching is a role signal
+    and does not. A lone `play_prob` column fades as a whole.
     Returns the total, the scope size, and the parts that explain it.
     """
     if tough_from is None:
@@ -508,8 +523,12 @@ def fh_squad_stress(squad_with_xpts: pd.DataFrame, difficulty_by_team: dict[str,
 
     blank = (pd.to_numeric(squad_with_xpts.get("fixture_count"), errors="coerce")
              .fillna(1).astype(int) == 0).astype(float)
-    if "play_prob" in squad_with_xpts.columns:
-        play_prob = pd.to_numeric(squad_with_xpts["play_prob"], errors="coerce").fillna(1.0).clip(0.0, 1.0)
+    if "avail_prob" in squad_with_xpts.columns:
+        avail = fade_availability(squad_with_xpts["avail_prob"], gw_offset)
+        start = pd.to_numeric(squad_with_xpts.get("start_prob", 1.0), errors="coerce")
+        play_prob = (avail * pd.Series(start, index=squad_with_xpts.index).fillna(1.0)).clip(0.0, 1.0)
+    elif "play_prob" in squad_with_xpts.columns:
+        play_prob = fade_availability(squad_with_xpts["play_prob"], gw_offset)
     else:
         play_prob = pd.Series(1.0, index=squad_with_xpts.index)
     unavailable = (1.0 - play_prob).astype(float)
@@ -541,31 +560,38 @@ def fh_squad_stress(squad_with_xpts: pd.DataFrame, difficulty_by_team: dict[str,
 
 def fh_stress_by_gw(squad: pd.DataFrame, gw_projections: dict[int, pd.DataFrame],
                     candidate_gws: list[int],
-                    team_difficulty_by_gw: dict[int, dict[str, float]] | None = None) -> dict[int, dict]:
+                    team_difficulty_by_gw: dict[int, dict[str, float]] | None = None,
+                    next_gw: int | None = None) -> dict[int, dict]:
     """`fh_squad_stress` for each candidate GW, so a held Free Hit can still
     report how stressed the squad is and which week comes closest to the bar
-    (the gate itself lives in `score_free_hit`)."""
+    (the gate itself lives in `score_free_hit`). ``next_gw`` anchors the
+    availability fade; default the first candidate."""
     out = {}
+    if next_gw is None and candidate_gws:
+        next_gw = min(candidate_gws)
     for gw in candidate_gws:
         market = gw_projections.get(gw)
         if market is None or market.empty:
             continue
         swx = squad.merge(market[["player_id", "xpts", "fixture_count"]], on="player_id", how="left")
         swx["xpts"] = swx["xpts"].fillna(0)
-        out[int(gw)] = fh_squad_stress(swx, (team_difficulty_by_gw or {}).get(gw) or {})
+        out[int(gw)] = fh_squad_stress(swx, (team_difficulty_by_gw or {}).get(gw) or {},
+                                       gw_offset=int(gw) - int(next_gw))
     return out
 
 
 def fh_best_stress_row(squad: pd.DataFrame, gw_projections: dict[int, pd.DataFrame],
                        candidate_gws: list[int],
-                       team_difficulty_by_gw: dict[int, dict[str, float]] | None = None):
+                       team_difficulty_by_gw: dict[int, dict[str, float]] | None = None,
+                       next_gw: int | None = None):
     """The most-stressed candidate GW, as a stress dict plus `gw` and the `bar`
     it was measured against. None when there is nothing to report (no
     candidates, or the blended opener is switched off)."""
     bar = float(config.CHIP_PLAN_FH_MIN_STRESS)
     if bar <= 0:
         return None
-    by_gw = fh_stress_by_gw(squad, gw_projections, candidate_gws, team_difficulty_by_gw)
+    by_gw = fh_stress_by_gw(squad, gw_projections, candidate_gws, team_difficulty_by_gw,
+                            next_gw=next_gw)
     if not by_gw:
         return None
     gw, stress = max(by_gw.items(), key=lambda kv: kv[1]["total"])
@@ -594,6 +620,7 @@ def score_free_hit(
     candidate_gws: list[int],
     budget_m: float,
     team_difficulty_by_gw: dict[int, dict[str, float]] | None = None,
+    next_gw: int | None = None,
 ) -> list[ChipRecommendation]:
     """
     FH value = (best possible XI for that GW within budget) - (your normal XI for that GW)
@@ -681,7 +708,10 @@ def score_free_hit(
         # Blended OR-path: blanks + injuries/doubts + graded tough fixtures.
         # Off (bar 0) never computes it, so the gate is exactly the pre-2.1 one.
         min_stress = float(config.CHIP_PLAN_FH_MIN_STRESS)
-        stress = fh_squad_stress(squad_with_xpts, dmap) if min_stress > 0 else None
+        if next_gw is None:
+            next_gw = min(candidate_gws)
+        stress = (fh_squad_stress(squad_with_xpts, dmap, gw_offset=int(gw) - int(next_gw))
+                  if min_stress > 0 else None)
 
         min_blanking = int(config.CHIP_PLAN_FH_MIN_BLANKING)
         min_tough = int(config.CHIP_PLAN_FH_MIN_TOUGH)
@@ -906,7 +936,7 @@ def recommend_chips(
     if "free_hit" in chips_remaining:
         all_recs.extend(score_free_hit(
             squad, gw_projections, candidate_gws, bank_m,
-            team_difficulty_by_gw=team_difficulty_by_gw,
+            team_difficulty_by_gw=team_difficulty_by_gw, next_gw=current_gw,
         ))
     if "wildcard" in chips_remaining:
         all_recs.extend(score_wildcard(
@@ -1101,7 +1131,7 @@ def build_chip_plan(
                 stress_row = fh_best_stress_row(
                     squad, gw_projections,
                     [g for g in range(current_gw, model_end + 1) if g <= expires_gw],
-                    team_difficulty_by_gw)
+                    team_difficulty_by_gw, next_gw=current_gw)
             no_window_reason = (
                 (f"Most stressed week is GW{stress_row['gw']}: {stress_row['total']:.1f}"
                  f"/{stress_row['scope']} vs the {stress_row['bar']:.1f} bar — {describe_fh_stress(stress_row)}")
