@@ -601,6 +601,15 @@ ODDS_TEAM_ALIASES = {}       # [operational] extra {fpl_name: odds_api_name} fix
 # past 0.6 without new evidence.
 PROJ_MODEL_BLEND_WEIGHT = 0.5  # [tuned]
 
+# --- LLM specialist agents (api/chat.py) ---
+# Inject the reflection agent's learned strategy rules (src/agent_memory
+# strategy_rules table) into /chat/captain|transfer|chip prompts as "apply
+# these". Off: the rules on record came from 2-4 GWs of a 2025-26 backtest
+# (e.g. "don't captain Haaland in consecutive weeks") and "apply these" lets
+# the LLM override the engine's pick — the engine decides, the LLM narrates.
+# Turn on only once rules are backed by evidence (roadmap Stage 4).
+AGENT_INJECT_LEARNED_RULES = False  # [flag]
+
 # --- minutes/rotation-risk multiplier (surgical, applied in projections.py) ---
 # Master flag: when True, project_elements_next_gws replaces the crude
 # chance_of_playing discount with a rotation-risk multiplier. Default off so

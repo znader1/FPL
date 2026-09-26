@@ -147,7 +147,7 @@ def apply(proj, gws, request_pk=None, path=None, stale_days=None, today=None):
     pk = merge_request(load_player_knowledge(path), request_pk)
     by_id, notes = resolve_keys(pk, proj)
     if stale_days is None:
-        stale_days = getattr(config, "PLAYER_KNOWLEDGE_STALE_DAYS", 10)
+        stale_days = config.PLAYER_KNOWLEDGE_STALE_DAYS
     stale = staleness_note(pk.get("as_of"), stale_days, today=today)
     if stale:
         notes = notes + [stale]

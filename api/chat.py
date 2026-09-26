@@ -226,7 +226,10 @@ def _resolve_chips(req: SpecialistRequest, current_gw: int, chips_played: list[d
 
 
 def _load_rules_text() -> str | None:
-    """Load active strategy rules from memory store, if present."""
+    """Load active strategy rules from memory store, if present and enabled."""
+    from src import config
+    if not config.AGENT_INJECT_LEARNED_RULES:
+        return None
     try:
         from src.agent_memory import MemoryStore
         from agents.reflection_agent import load_active_rules_text
