@@ -139,7 +139,9 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
     # P(available) from FPL status + chance_of_playing; multiplied below by
     # P(start) from recent starts once the projection frame exists. Feeds the
     # Free Hit squad-stress opener (chip_advisor.fh_squad_stress).
-    squad["play_prob"] = play_prob_from_availability(squad_rows).values
+    squad["avail_prob"] = play_prob_from_availability(squad_rows).values
+    squad["start_prob"] = 1.0
+    squad["play_prob"] = squad["avail_prob"]
     # The manager's starting XI (pick positions 1-11). The FH stress opener
     # scores only these: the bench slots are fodder by design.
     starter_ids = {int(p["element"]) for p in picks if int(p.get("position") or 99) <= 11}
@@ -173,10 +175,11 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
             squad["player_id"].map(news_added),
             recent_window_start_deadline(bootstrap.get("events", []), current_gw),
         )
-        squad["play_prob"] = (
-            squad["play_prob"]
-            * start_prob_from_recent_starts(rate, samples, news_recent=news_recent).values
-        ).clip(0.0, 1.0)
+        # Kept apart from availability: availability fades past the next GW
+        # (chip_advisor.fade_availability), a benching pattern does not.
+        squad["start_prob"] = start_prob_from_recent_starts(
+            rate, samples, news_recent=news_recent).values
+        squad["play_prob"] = (squad["avail_prob"] * squad["start_prob"]).clip(0.0, 1.0)
 
     # Reshape into the simulator's market schema, one DataFrame per GW
     from src.chip_advisor import team_fixture_counts

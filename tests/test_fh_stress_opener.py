@@ -27,6 +27,8 @@ def _injury_hit_squad():
     squad["play_prob"] = 1.0
     squad.loc[squad.index[:5], "play_prob"] = 0.0
     squad["is_starter"] = [True] * 11 + [False] * 4
+    squad["avail_prob"] = squad["play_prob"]
+    squad["start_prob"] = 1.0
     return squad
 
 
@@ -48,7 +50,7 @@ def test_flag_off_never_reaches_the_stress_code(monkeypatch):
 
 def test_flag_off_plan_ignores_the_new_squad_columns(monkeypatch):
     with_col = _injury_hit_squad()
-    without_col = with_col.drop(columns=["play_prob", "is_starter"])
+    without_col = with_col.drop(columns=["play_prob", "is_starter", "avail_prob", "start_prob"])
     a = json.dumps(_plan(with_col), sort_keys=True, default=str)
     b = json.dumps(_plan(without_col), sort_keys=True, default=str)
     assert a == b
@@ -122,3 +124,32 @@ def test_recent_window_start_deadline_uses_the_projection_window():
     assert got == events[max(1, 7 - window) - 1]["deadline_time"]
     assert chip_advisor.recent_window_start_deadline(events, current_gw=2) == events[0]["deadline_time"]
     assert chip_advisor.recent_window_start_deadline([], current_gw=7) is None
+
+
+# --- Fix 3: FPL availability is next-GW only; fades like projections ----------
+
+def _starter_out_squad():
+    squad = _squad_with_fodder_bench()
+    squad["avail_prob"] = 1.0
+    squad["start_prob"] = 1.0
+    squad.loc[squad.index[0], "avail_prob"] = 0.0      # 0% chance next round
+    squad.loc[squad.index[1], "start_prob"] = 0.25     # fit, benched 3 of 3
+    return squad
+
+
+@pytest.mark.parametrize("offset, injured_stress", [(0, 1.0), (1, 0.5), (2, 0.5), (3, 0.0)])
+def test_injury_fades_past_next_gw(monkeypatch, offset, injured_stress):
+    monkeypatch.setattr(config, "PROJ_INJURY_FUTURE_GW_FADE", 0.5)
+    stress = chip_advisor.fh_squad_stress(_starter_out_squad(), {"Arsenal": 3.0}, gw_offset=offset)
+    benched_stress = 0.75                                  # role signal: never faded
+    assert stress["total"] == pytest.approx(injured_stress + benched_stress)
+
+
+def test_stress_by_gw_measures_offset_from_next_gw(monkeypatch):
+    monkeypatch.setattr(config, "PROJ_INJURY_FUTURE_GW_FADE", 0.5)
+    squad = _starter_out_squad().drop(columns=["fixture_count"])
+    gw_projections = {g: _market_for(squad, gw_xpts=2.0) for g in range(5, 10)}
+    by_gw = chip_advisor.fh_stress_by_gw(
+        squad, gw_projections, list(range(5, 10)),
+        {g: {"Arsenal": 3.0} for g in range(5, 10)}, next_gw=5)
+    assert [round(by_gw[g]["total"], 2) for g in range(5, 10)] == [1.75, 1.25, 1.25, 0.75, 0.75]
