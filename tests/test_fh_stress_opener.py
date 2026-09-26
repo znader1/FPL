@@ -95,3 +95,30 @@ def test_without_positions_all_fifteen_count():
     stress = chip_advisor.fh_squad_stress(squad, {"Arsenal": 3.0})
     assert stress["total"] == pytest.approx(3.0)           # 4 x 0.75, the old reading
     assert stress["scope"] == 15
+
+
+# --- Fix 2: a returning player's injured weeks don't read as "benched" --------
+
+def test_recent_news_skips_the_benching_signal():
+    p = chip_advisor.start_prob_from_recent_starts(
+        [0.0, 0.0], [3, 3], news_recent=[True, False])
+    assert p.tolist() == [1.0, 0.25]          # back from injury vs benched all along
+
+
+def test_news_recent_absent_keeps_the_old_signal():
+    assert chip_advisor.start_prob_from_recent_starts([0.0], [3]).tolist() == [0.25]
+
+
+def test_news_changed_since():
+    since = "2026-08-29T17:30:00Z"
+    news = ["2026-09-04T14:00:08Z", "2026-07-23T12:01:23Z", None, "", "garbage"]
+    assert chip_advisor.news_changed_since(news, since).tolist() == [True, False, False, False, False]
+
+
+def test_recent_window_start_deadline_uses_the_projection_window():
+    events = [{"id": g, "deadline_time": f"2026-08-{10 + g:02d}T17:30:00Z"} for g in range(1, 8)]
+    window = config.PROJ_PLAYER_RECENT_GW_WINDOW
+    got = chip_advisor.recent_window_start_deadline(events, current_gw=7)
+    assert got == events[max(1, 7 - window) - 1]["deadline_time"]
+    assert chip_advisor.recent_window_start_deadline(events, current_gw=2) == events[0]["deadline_time"]
+    assert chip_advisor.recent_window_start_deadline([], current_gw=7) is None

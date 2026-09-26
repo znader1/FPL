@@ -434,21 +434,53 @@ def play_prob_from_availability(df: pd.DataFrame) -> pd.Series:
     return prob.clip(lower=0.0, upper=1.0).astype(float)
 
 
-def start_prob_from_recent_starts(start_rate, samples, prior_gws: float | None = None) -> pd.Series:
+def start_prob_from_recent_starts(start_rate, samples, prior_gws: float | None = None,
+                                  news_recent=None) -> pd.Series:
     """P(start) from a recent start rate, shrunk toward 1.0 ("a squad player is
     a starter") by CHIP_PLAN_FH_BENCH_PRIOR_GWS pseudo-GWs, so only a real
     benching pattern moves it: benched 3 of 3 -> 0.25, benched 1 of 3 -> 0.75,
-    nailed -> 1.0. No samples (pre-season, missing history) -> 1.0."""
+    nailed -> 1.0. No samples (pre-season, missing history) -> 1.0.
+
+    ``news_recent`` (bool per row, from `news_changed_since`) marks players
+    whose FPL news changed inside the recent window. Their missed injured GWs
+    are 0-start rows that FPL history cannot tell apart from a benching, so
+    the signal is skipped (1.0); current availability still applies through
+    `play_prob_from_availability`."""
     if prior_gws is None:
         prior_gws = float(config.CHIP_PLAN_FH_BENCH_PRIOR_GWS)
     prior_gws = float(prior_gws)
     rate = pd.to_numeric(pd.Series(start_rate), errors="coerce").clip(0.0, 1.0)
     n = pd.to_numeric(pd.Series(samples), errors="coerce").fillna(0.0).clip(lower=0.0)
     n = n.where(rate.notna(), 0.0)
+    if news_recent is not None:
+        recent = pd.Series(list(news_recent), index=rate.index).fillna(False).astype(bool)
+        n = n.where(~recent, 0.0)
     rate = rate.fillna(1.0)
     if prior_gws <= 0:
         return pd.Series(1.0, index=rate.index)
     return ((n * rate + prior_gws) / (n + prior_gws)).clip(0.0, 1.0).astype(float)
+
+
+def news_changed_since(news_added, since) -> pd.Series:
+    """True where FPL's `news_added` timestamp is at or after ``since``.
+    Missing or unparseable timestamps -> False (no known status change)."""
+    stamps = pd.to_datetime(pd.Series(list(news_added), dtype=object), errors="coerce", utc=True)
+    cutoff = pd.to_datetime(since, errors="coerce", utc=True)
+    if pd.isna(cutoff):
+        return pd.Series(False, index=stamps.index)
+    return (stamps >= cutoff).fillna(False).astype(bool)
+
+
+def recent_window_start_deadline(events: list[dict], current_gw: int):
+    """Deadline of the first GW in the projections' recent-form window
+    (`max(1, current_gw - PROJ_PLAYER_RECENT_GW_WINDOW)`, as in
+    `projections`), i.e. the earliest week whose starts feed P(start).
+    None when the bootstrap has no such event."""
+    first_gw = max(1, int(current_gw) - int(config.PROJ_PLAYER_RECENT_GW_WINDOW))
+    for event in events or []:
+        if int(event.get("id") or 0) == first_gw:
+            return event.get("deadline_time")
+    return None
 
 
 def fh_squad_stress(squad_with_xpts: pd.DataFrame, difficulty_by_team: dict[str, float] | None,

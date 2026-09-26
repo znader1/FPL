@@ -81,7 +81,10 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
     # Local import to avoid circular and keep startup fast
     from src import fpl_client, transforms, projections, optimizer, config
     from src.breaks import international_break_gws
-    from src.chip_advisor import play_prob_from_availability, start_prob_from_recent_starts
+    from src.chip_advisor import (
+        news_changed_since, play_prob_from_availability, recent_window_start_deadline,
+        start_prob_from_recent_starts,
+    )
 
     bootstrap = fpl_client.get_bootstrap()
     # Reuses the bootstrap already fetched above — no extra network call.
@@ -159,12 +162,20 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
 
     # Benching signal: a fit player left out in recent GWs (manager's call,
     # invisible to FPL's flags) also lowers play_prob for the FH stress gate.
+    # Skipped for a player whose FPL news changed inside the recent window —
+    # his injured weeks are 0-start rows, not benchings.
     if "recent_gw_avg_starts" in proj.columns:
         recent = proj.set_index(pd.to_numeric(proj["id"], errors="coerce"))
         rate = squad["player_id"].map(recent["recent_gw_avg_starts"])
         samples = squad["player_id"].map(recent.get("recent_gw_samples", pd.Series(dtype=float)))
+        news_added = {int(e["id"]): e.get("news_added") for e in bootstrap.get("elements", [])}
+        news_recent = news_changed_since(
+            squad["player_id"].map(news_added),
+            recent_window_start_deadline(bootstrap.get("events", []), current_gw),
+        )
         squad["play_prob"] = (
-            squad["play_prob"] * start_prob_from_recent_starts(rate, samples).values
+            squad["play_prob"]
+            * start_prob_from_recent_starts(rate, samples, news_recent=news_recent).values
         ).clip(0.0, 1.0)
 
     # Reshape into the simulator's market schema, one DataFrame per GW
