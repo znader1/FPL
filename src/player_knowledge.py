@@ -17,8 +17,7 @@ EMPTY = {"as_of": None, "players": {}}
 
 def load_player_knowledge(path=None):
     """Read player_knowledge.json. Missing/unreadable/malformed -> EMPTY."""
-    path = path or getattr(config, "PLAYER_KNOWLEDGE_PATH",
-                           "data/models/player_knowledge.json")
+    path = path or config.PLAYER_KNOWLEDGE_PATH
     try:
         with open(path) as f:
             data = json.load(f)

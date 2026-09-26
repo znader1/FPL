@@ -14,7 +14,7 @@ from src.chip_advisor import build_chip_plan
 
 def main():
     entry_id = int(sys.argv[1])
-    horizon = int(sys.argv[2]) if len(sys.argv) > 2 else getattr(config, "CHIP_PLAN_HORIZON_GWS", 8)
+    horizon = int(sys.argv[2]) if len(sys.argv) > 2 else config.CHIP_PLAN_HORIZON_GWS
     current_gw = _resolve_current_gw()
     ctx = _build_context_for_entry(entry_id, current_gw, horizon=horizon)
 

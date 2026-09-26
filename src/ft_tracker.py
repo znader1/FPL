@@ -18,7 +18,7 @@ _CHIP_NO_CONSUME = {"wildcard", "freehit"}
 
 def clamp_ft(value, ft_max=None):
     if ft_max is None:
-        ft_max = int(getattr(config, "FT_MAX", 5))
+        ft_max = int(config.FT_MAX)
     if value is None:
         return None
     try:
@@ -29,7 +29,7 @@ def clamp_ft(value, ft_max=None):
 
 def derive_free_transfers(events, chips, next_event_id, ft_max=None):
     if ft_max is None:
-        ft_max = int(getattr(config, "FT_MAX", 5))
+        ft_max = int(config.FT_MAX)
     chip_gws = {
         int(c.get("event")) for c in (chips or [])
         if str(c.get("name") or "").lower() in _CHIP_NO_CONSUME and c.get("event") is not None

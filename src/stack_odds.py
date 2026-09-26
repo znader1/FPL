@@ -43,8 +43,8 @@ def stack_odds_for_xi(
     Teams without a lambda are skipped (no fixture data — no claim).
     Returns [{team, n, players, lam, p_all_return, p_all_blank}].
     """
-    min_stack = int(min_stack or getattr(config, "CHIP_STACK_ODDS_MIN", 2))
-    slots = float(slots_per_goal or getattr(config, "CHIP_STACK_SLOTS_PER_GOAL", 2.0))
+    min_stack = int(min_stack or config.CHIP_STACK_ODDS_MIN)
+    slots = float(slots_per_goal or config.CHIP_STACK_SLOTS_PER_GOAL)
 
     by_team: dict[int, list[dict]] = {}
     for r in xi_rows:

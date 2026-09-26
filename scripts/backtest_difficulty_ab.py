@@ -64,8 +64,8 @@ def _project(target_gw, source, blend_weight, name_to_id, horizon=1):
     orig_recent = projections.load_latest_player_gw_history
     orig_minutes = minutes_model.load_minutes_history
     orig_match = fixture_difficulty.load_match_history
-    orig_weight = getattr(config, "PROJ_MODEL_BLEND_WEIGHT", 0.0)
-    orig_source = getattr(config, "PROJ_DIFFICULTY_SOURCE", "fpl")
+    orig_weight = config.PROJ_MODEL_BLEND_WEIGHT
+    orig_source = config.PROJ_DIFFICULTY_SOURCE
 
     projections.load_latest_player_gw_history = lambda *a, **k: history_df
     minutes_model.load_minutes_history = lambda *a, **k: history_df
@@ -114,7 +114,7 @@ def main():
     args = ap.parse_args()
 
     blend = float(args.blend if args.blend is not None
-                  else getattr(config, "PROJ_MODEL_BLEND_WEIGHT", 0.5))
+                  else config.PROJ_MODEL_BLEND_WEIGHT)
     gws = [g for g in backtest_data.available_gws() if g >= args.min_gw]
     if args.max_gws:
         gws = gws[: args.max_gws]

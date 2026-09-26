@@ -220,9 +220,9 @@ def refresh(kb_dir=None, feeds=None, max_age_days=None, now=None,
     tests; defaults hit the live network + Claude. When `pl_terms` is given,
     items mentioning no Premier League club are dropped BEFORE the LLM (saves
     spend on non-PL match previews / foreign leagues)."""
-    kb_dir = kb_dir or getattr(config, "NEWS_KB_DIR", "kb/auto/news")
-    feeds = feeds if feeds is not None else getattr(config, "NEWS_FEEDS", [])
-    max_age_days = max_age_days if max_age_days is not None else getattr(config, "NEWS_MAX_AGE_DAYS", 14)
+    kb_dir = kb_dir or config.NEWS_KB_DIR
+    feeds = feeds if feeds is not None else config.NEWS_FEEDS
+    max_age_days = max_age_days if max_age_days is not None else config.NEWS_MAX_AGE_DAYS
     now = now or datetime.now(timezone.utc)
     if generate is None:
         from src.news_digest import _anthropic_generate as generate

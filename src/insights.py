@@ -63,9 +63,8 @@ def build_chip_profile(chip_strategy, squad_df, proj_all, gws):
         }
 
     premium_floor = float(
-        getattr(config, "CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR",
-                getattr(config, "CAPTAIN_PREMIUM_PRICE_FLOOR", 9.0)) or
-        getattr(config, "CAPTAIN_PREMIUM_PRICE_FLOOR", 9.0)
+        config.CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR or
+        config.CAPTAIN_PREMIUM_PRICE_FLOOR
     )
     pos_series = merged_series(merged, "pos", default="")
     price_series = pd.to_numeric(merged_series(merged, "price_m", default=0.0), errors="coerce").fillna(0.0)
@@ -124,9 +123,9 @@ def build_strategy_recommendation(
     avg_gain = float(total_gain / planned_moves) if planned_moves > 0 else 0.0
 
     if horizon_gws == 1:
-        min_gain_per_transfer = float(getattr(config, "STRATEGY_MIN_GAIN_PER_TRANSFER_GW1", 1.4))
+        min_gain_per_transfer = float(config.STRATEGY_MIN_GAIN_PER_TRANSFER_GW1)
     else:
-        min_gain_per_transfer = float(getattr(config, "STRATEGY_MIN_GAIN_PER_TRANSFER_MULTI", 1.1))
+        min_gain_per_transfer = float(config.STRATEGY_MIN_GAIN_PER_TRANSFER_MULTI)
 
     suggested_transfers_count = planned_moves if avg_gain >= min_gain_per_transfer and total_gain > 0 else 0
     action = "make_transfers" if suggested_transfers_count > 0 else "roll"
@@ -152,8 +151,8 @@ def build_strategy_recommendation(
     elif active_chip:
         chip_reason = f"Chip already active this GW ({active_chip})."
     elif horizon_gws == 1:
-        bb_min = float(getattr(config, "STRATEGY_CHIP_BENCH_BOOST_MIN_XPTS", 15.0))
-        tc_min = float(getattr(config, "STRATEGY_CHIP_TRIPLE_CAPTAIN_MIN_XPTS", 10.0))
+        bb_min = float(config.STRATEGY_CHIP_BENCH_BOOST_MIN_XPTS)
+        tc_min = float(config.STRATEGY_CHIP_TRIPLE_CAPTAIN_MIN_XPTS)
         bench_boost_margin = bench_xpts - bb_min
         triple_captain_margin = captain_xpts - tc_min
         if bench_boost_margin >= 0 or triple_captain_margin >= 0:
@@ -230,7 +229,7 @@ def build_strategy_recommendation(
 
 def build_scoring_guide(optimize_event_id, chip_strategy="none", objective_score_col=None):
     optimize_event_id = safe_int(optimize_event_id)
-    recent_window = int(getattr(config, "PROJ_PLAYER_RECENT_GW_WINDOW", 5) or 5)
+    recent_window = int(config.PROJ_PLAYER_RECENT_GW_WINDOW or 5)
     guide = {
         "headline": "Scores in this app are projected points, not actual FPL points already earned.",
         "bullets": [],

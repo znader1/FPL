@@ -184,8 +184,8 @@ def _decayed_team_means(team_match_xg, asof=None, halflife_days=None):
     {team_id: {"xgf": float, "xga": float, "weight": float, "samples": int}}.
     """
     halflife_days = float(halflife_days if halflife_days is not None
-                          else getattr(config, "FDR_XG_HALFLIFE_DAYS", 60.0))
-    league_fallback = float(getattr(config, "FDR_LEAGUE_AVG_XG_FALLBACK", 1.40))
+                          else config.FDR_XG_HALFLIFE_DAYS)
+    league_fallback = float(config.FDR_LEAGUE_AVG_XG_FALLBACK)
 
     if team_match_xg is None or team_match_xg.empty:
         return {}, league_fallback
@@ -231,9 +231,9 @@ def compute_team_ratings(team_match_xg, asof=None, halflife_days=None,
     the rating denominator. For season-start carryover use ``resolve_team_ratings``.
     """
     shrinkage = float(shrinkage_matches if shrinkage_matches is not None
-                      else getattr(config, "FDR_XG_SHRINKAGE_MATCHES", 6.0))
-    rmin = float(rating_min if rating_min is not None else getattr(config, "FDR_RATING_MIN", 0.5))
-    rmax = float(rating_max if rating_max is not None else getattr(config, "FDR_RATING_MAX", 1.8))
+                      else config.FDR_XG_SHRINKAGE_MATCHES)
+    rmin = float(rating_min if rating_min is not None else config.FDR_RATING_MIN)
+    rmax = float(rating_max if rating_max is not None else config.FDR_RATING_MAX)
 
     means, league_avg = _decayed_team_means(team_match_xg, asof=asof, halflife_days=halflife_days)
     if not means:
@@ -299,8 +299,7 @@ def load_ratings_seed(path=None):
         {short: {"attack": float, "defense": float, ...}}
     Empty dict if the file is absent or invalid.
     """
-    selected = str(path or getattr(config, "FDR_RATINGS_SEED_PATH",
-                                   "data/models/team_ratings_seed.json"))
+    selected = str(path or config.FDR_RATINGS_SEED_PATH)
     fp = Path(selected)
     if not fp.exists():
         return {}
@@ -332,12 +331,12 @@ def resolve_team_ratings(team_match_xg, teams_short_map=None, seed=None, seed_pa
     if not teams_short_map or not seed:
         return compute_team_ratings(team_match_xg, asof=asof, halflife_days=halflife_days)
 
-    rmin = float(getattr(config, "FDR_RATING_MIN", 0.5))
-    rmax = float(getattr(config, "FDR_RATING_MAX", 1.8))
-    prior_matches = float(getattr(config, "FDR_CARRYOVER_PRIOR_MATCHES", 8.0))
-    regression = float(getattr(config, "FDR_CARRYOVER_REGRESSION", 0.30))
-    promoted_atk = float(getattr(config, "FDR_PROMOTED_DEFAULT_ATTACK", 0.82))
-    promoted_def = float(getattr(config, "FDR_PROMOTED_DEFAULT_DEFENSE", 1.20))
+    rmin = float(config.FDR_RATING_MIN)
+    rmax = float(config.FDR_RATING_MAX)
+    prior_matches = float(config.FDR_CARRYOVER_PRIOR_MATCHES)
+    regression = float(config.FDR_CARRYOVER_REGRESSION)
+    promoted_atk = float(config.FDR_PROMOTED_DEFAULT_ATTACK)
+    promoted_def = float(config.FDR_PROMOTED_DEFAULT_DEFENSE)
 
     means, league_avg = _decayed_team_means(team_match_xg, asof=asof, halflife_days=halflife_days)
 
@@ -390,8 +389,7 @@ def resolve_team_ratings(team_match_xg, teams_short_map=None, seed=None, seed_pa
 
 def load_knowledge_discount(path=None):
     """Load the manual knowledge-discount JSON. Returns {} if absent/invalid."""
-    selected = str(path or getattr(config, "FDR_KNOWLEDGE_DISCOUNT_PATH",
-                                   "data/models/knowledge_discount.json"))
+    selected = str(path or config.FDR_KNOWLEDGE_DISCOUNT_PATH)
     fp = Path(selected)
     if not fp.exists():
         return {}
@@ -421,7 +419,7 @@ def apply_cs_prior(ratings, elements, weight=None):
     left untouched. Pre-season, the carried-over totals (~38 starts) pass the
     gate. Returns a copy of ``ratings``.
     """
-    w = float(weight if weight is not None else getattr(config, "FDR_CS_PRIOR_WEIGHT", 0.35))
+    w = float(weight if weight is not None else config.FDR_CS_PRIOR_WEIGHT)
     out = dict(ratings)
     if w <= 0.0 or elements is None or len(elements) == 0:
         return out
@@ -441,10 +439,10 @@ def apply_cs_prior(ratings, elements, weight=None):
         pd.to_numeric(gks.get("starts"), errors="coerce").fillna(0.0).groupby(team_key).sum()
     )
 
-    league = float(out.get("_league", getattr(config, "FDR_LEAGUE_AVG_XG_FALLBACK", 1.40)))
-    lo = float(getattr(config, "FDR_RATING_MIN", 0.50))
-    hi = float(getattr(config, "FDR_RATING_MAX", 1.80))
-    min_matches = float(getattr(config, "FDR_CS_PRIOR_MIN_MATCHES", 6.0))
+    league = float(out.get("_league", config.FDR_LEAGUE_AVG_XG_FALLBACK))
+    lo = float(config.FDR_RATING_MIN)
+    hi = float(config.FDR_RATING_MAX)
+    min_matches = float(config.FDR_CS_PRIOR_MIN_MATCHES)
 
     for team_id, cs in cs_by_team.items():
         if not np.isfinite(team_id) or cs <= 0:
@@ -481,8 +479,8 @@ def apply_knowledge_discount(ratings, discount=None, teams_short_map=None, path=
     if teams_short_map:
         short_to_id = {str(v).upper(): int(k) for k, v in teams_short_map.items()}
 
-    rmin = float(getattr(config, "FDR_RATING_MIN", 0.5))
-    rmax = float(getattr(config, "FDR_RATING_MAX", 1.8))
+    rmin = float(config.FDR_RATING_MIN)
+    rmax = float(config.FDR_RATING_MAX)
 
     out = {k: (dict(v) if isinstance(v, dict) else v) for k, v in ratings.items()}
     for key, adj in teams_block.items():
@@ -524,9 +522,9 @@ def expected_xg_for_fixture(ratings, team_id, opp_id, is_home):
 
     Returns (expected_for, expected_against).
     """
-    league = float(ratings.get("_league", getattr(config, "FDR_LEAGUE_AVG_XG_FALLBACK", 1.40)))
-    home_mult = float(getattr(config, "FDR_HOME_XG_MULT", 1.10))
-    away_mult = float(getattr(config, "FDR_AWAY_XG_MULT", 0.92))
+    league = float(ratings.get("_league", config.FDR_LEAGUE_AVG_XG_FALLBACK))
+    home_mult = float(config.FDR_HOME_XG_MULT)
+    away_mult = float(config.FDR_AWAY_XG_MULT)
 
     atk_t, def_t = _team_rating(ratings, team_id)
     atk_o, def_o = _team_rating(ratings, opp_id)
@@ -587,7 +585,7 @@ def fixture_difficulty_table(ratings, fixtures, gw):
 
 def _difficulty_band(score):
     """Map a 1-5 difficulty score to a (label, color) from config bands."""
-    bands = getattr(config, "FDR_TICKER_BANDS", [])
+    bands = config.FDR_TICKER_BANDS
     for entry in bands:
         try:
             ceil, label, color = entry[0], entry[1], entry[2]
@@ -604,8 +602,8 @@ def attack_difficulty(ratings, team_id, opp_id, is_home):
     to score), centered near 3.0 like FPL's own FDR. Driven by the opponent's
     defense rating and venue. Opponent that concedes a lot of xG => easier.
     """
-    home_mult = float(getattr(config, "FDR_HOME_XG_MULT", 1.10))
-    away_mult = float(getattr(config, "FDR_AWAY_XG_MULT", 0.92))
+    home_mult = float(config.FDR_HOME_XG_MULT)
+    away_mult = float(config.FDR_AWAY_XG_MULT)
     _, opp_def = _team_rating(ratings, opp_id)
     venue = home_mult if is_home else away_mult
     # opp_def > 1 (leaky) and home venue both lower the difficulty.
@@ -717,9 +715,9 @@ def compute_fixture_swings(ticker, window=None, min_delta=None):
     meaning the run gets easier ("easier") and < 0 harder ("harder");
     the emitted delta is the absolute magnitude, direction carries the sign.
     """
-    window = int(window if window is not None else getattr(config, "SWING_WINDOW_GWS", 3))
+    window = int(window if window is not None else config.SWING_WINDOW_GWS)
     min_delta = float(min_delta if min_delta is not None
-                      else getattr(config, "SWING_MIN_DELTA", 0.8))
+                      else config.SWING_MIN_DELTA)
     gws = list(ticker.get("gws") or [])
     events = []
     for row in ticker.get("teams") or []:

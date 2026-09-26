@@ -123,27 +123,6 @@ def login(email, password):
     return None, None, "Login produced no cookies/entry (holding/proxy/CA). Try cookie login."
 
 
-def get_me(session=None):
-    """
-    Returns JSON from /api/me (requires auth cookies).
-    Useful for cookie-based login flows.
-    """
-    s = session or new_session()
-    r = s.get(
-        "https://fantasy.premierleague.com/api/me/",
-        headers={"Accept": "application/json"},
-        verify=_verify(),
-        timeout=20,
-    )
-    if r.status_code == 403:
-        raise RuntimeError("403 /api/me (cookies missing/expired or blocked).")
-    r.raise_for_status()
-    data = _json_dict(r)
-    if not data:
-        snip = (r.text or "")[:160].replace("\n", " ")
-        raise RuntimeError(f"/api/me non-JSON. snippet='{snip}…'")
-    return data
-
 def get_bootstrap():
     r = requests.get("https://fantasy.premierleague.com/api/bootstrap-static/",
                      verify=_verify(), timeout=20)
@@ -272,26 +251,7 @@ def get_classic_league_standings(league_id, page=1, session=None):
     return r.json()
 
 
-def get_my_team(session, entry_id, event_id):
-    """
-    Backwards-compatible wrapper (older code called this 'my team').
-    Prefer `get_entry_picks(entry_id, event_id, session=...)`.
-    """
-    return get_entry_picks(entry_id=entry_id, event_id=event_id, session=session)
-
 # -------- Optional: allow logging in with an existing browser cookie ----------
-def session_from_browser_cookie(pl_profile_value):
-    """
-    Build a session using a pl_profile cookie copied from your browser.
-    Use when POST login is blocked by corp proxy/holding page.
-    """
-    s = new_session()
-    # Set cookie for both potential scopes
-    for domain in [".premierleague.com", "fantasy.premierleague.com"]:
-        s.cookies.set("pl_profile", pl_profile_value, domain=domain, path="/")
-    return s
-
-
 def session_from_cookie_header(cookie_header):
     """
     Build a session from a full `Cookie:` header string copied verbatim from a

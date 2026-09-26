@@ -32,9 +32,9 @@ def _red_flag(r):
     configured floor (e.g. 0 == ruled out). Missing status/chance columns
     resolve to "available" -- never force a sell on data we don't have."""
     statuses = {
-        str(s).lower() for s in getattr(config, "TRANSFER_PLANNER_RED_FLAG_STATUSES", ("i", "s", "u"))
+        str(s).lower() for s in config.TRANSFER_PLANNER_RED_FLAG_STATUSES
     }
-    max_chance = getattr(config, "TRANSFER_PLANNER_RED_FLAG_MAX_CHANCE", 0.0)
+    max_chance = config.TRANSFER_PLANNER_RED_FLAG_MAX_CHANCE
     status = str(r.get("status") or "a").lower()
     chance = r.get("chance_of_playing_next_round")
     try:
@@ -321,8 +321,8 @@ def scaled_min_gain(n_gws, base=None, ref_gws=None):
     TRANSFER_PLAN_MIN_GAIN_REF_GWS gameweeks and scales linearly with the
     number of GWs whose gains are summed (a 1-GW plan needs a third of the
     3-GW bar). Never below 0.1 so a degenerate horizon can't fire on noise."""
-    base = float(getattr(config, "TRANSFER_PLAN_MIN_GAIN", 2.0) if base is None else base)
-    ref = float(getattr(config, "TRANSFER_PLAN_MIN_GAIN_REF_GWS", 3) if ref_gws is None else ref_gws)
+    base = float(config.TRANSFER_PLAN_MIN_GAIN if base is None else base)
+    ref = float(config.TRANSFER_PLAN_MIN_GAIN_REF_GWS if ref_gws is None else ref_gws)
     return max(0.1, round(base * max(1, int(n_gws)) / max(1.0, ref), 3))
 
 
@@ -330,7 +330,7 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
                    hit_penalty=4.0, allow_hits=True, min_gain=2.0, max_moves_per_gw=3,
                    opponents_by_gw=None, _skip_first_gw=False, prioritize_injured=True):
     info = _build_info(proj, gws)
-    injured_bonus = (float(getattr(config, "TRANSFER_PLAN_INJURED_SELL_BONUS", 1.0))
+    injured_bonus = (float(config.TRANSFER_PLAN_INJURED_SELL_BONUS)
                       if prioritize_injured else 0.0)
     squad = set(int(x) for x in squad_ids if int(x) in info)
     bank = float(itb_m)
@@ -375,15 +375,15 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
         remaining = gws[gi:]
         hz = {pid: _horizon(info, pid, remaining) for pid in info}
         xi = (_xi_floors(squad, info, hz)
-              if bool(getattr(config, "TRANSFER_PLAN_XI_AWARE", True)) else None)
+              if bool(config.TRANSFER_PLAN_XI_AWARE) else None)
         team_counts = {}
         for pid in squad:
             t = info[pid]["team"]
             team_counts[t] = team_counts.get(t, 0) + 1
 
-        pos_mult = getattr(config, "TRANSFER_PLAN_POS_GAIN_MULT", {}) or {}
+        pos_mult = config.TRANSFER_PLAN_POS_GAIN_MULT or {}
         opps_gw = (opponents_by_gw or {}).get(g) or {}
-        h2h_pen = float(getattr(config, "TRANSFER_H2H_CONFLICT_PENALTY", 0.0) or 0.0)
+        h2h_pen = float(config.TRANSFER_H2H_CONFLICT_PENALTY or 0.0)
 
         if gi == 0:
             # Runner-ups: the best swap for each OTHER squad member, scored
@@ -392,7 +392,7 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
             unowned0 = [x for x in info if x not in squad]
             runner_up_cands = _ranked_swaps(
                 squad, info, unowned0, hz, bank, team_counts, xi, opps_gw, h2h_pen,
-                min_gain, pos_mult, int(getattr(config, "TRANSFER_PLAN_RUNNER_UPS", 5)),
+                min_gain, pos_mult, int(config.TRANSFER_PLAN_RUNNER_UPS),
                 injured_bonus=injured_bonus)
 
         moves, hits = [], 0
@@ -433,7 +433,7 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
         # The cap follows the free transfers actually available this GW: 2 FT
         # banked → up to 2 moves may be recommended (each still clears its own
         # bar, and the whole plan still has to beat the roll counterfactual).
-        follow_ft = (bool(getattr(config, "TRANSFER_PLAN_MOVES_FOLLOW_FT", True))
+        follow_ft = (bool(config.TRANSFER_PLAN_MOVES_FOLLOW_FT)
                      and not allow_hits)  # a hit IS a move beyond FT — don't clamp it away
         gw_cap = (max(1, min(int(max_moves_per_gw), int(ft)))
                   if follow_ft else int(max_moves_per_gw))

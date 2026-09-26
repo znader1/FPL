@@ -255,7 +255,7 @@ def required_gain_for_seller(seller):
         required = max(required, float(config.TRANSFER_MIN_SCORE_GAIN_BENCH))
     # Same positional discipline as the horizon planner: a GKP/DEF swap must
     # clear a higher bar than MID/FWD before it's worth surfacing at all.
-    pos_mult = getattr(config, "TRANSFER_PLAN_POS_GAIN_MULT", {}) or {}
+    pos_mult = config.TRANSFER_PLAN_POS_GAIN_MULT or {}
     required *= float(pos_mult.get(pos, 1.0))
     if to_number(seller.get("injury_sell_boost"), 0.0) >= float(config.TRANSFER_GUARDRAIL_INJURY_OVERRIDE):
         required = float(config.TRANSFER_MIN_SCORE_GAIN)
@@ -278,7 +278,7 @@ def pick_sellers_for_state(sellers_df, sold_ids):
         return sellers_df
     out = sellers_df[~sellers_df["player_id"].isin(sold_ids)].copy()
     out = out.sort_values(["sell_priority", "is_starter", "injury_sell_boost"], ascending=[True, False, False])
-    return out.head(max(1, int(getattr(config, "TRANSFER_BEAM_SELLERS", 8) or 8)))
+    return out.head(max(1, int(config.TRANSFER_BEAM_SELLERS or 8)))
 
 
 def pick_buy_candidates(el, current_ids, sell_pos, budget, blocked_ids=None, team_counts=None, sell_team=None, max_per_team=3):
@@ -305,7 +305,7 @@ def pick_buy_candidates(el, current_ids, sell_pos, budget, blocked_ids=None, tea
     if pool.empty:
         return pool
     pool = pool.sort_values(["buy_priority", "transfer_score", "hot_score", "base_score"], ascending=False)
-    return pool.head(max(1, int(getattr(config, "TRANSFER_BEAM_BUYERS", 6) or 6)))
+    return pool.head(max(1, int(config.TRANSFER_BEAM_BUYERS or 6)))
 
 
 def estimate_best_next_gain(state, sellers_df, el):
@@ -470,8 +470,8 @@ def suggest_transfers(squad_df, elements_all, itb_m, free_transfers, hit_cap=0, 
     sq = prepare_squad(squad_df, el)
 
     transfer_count = resolve_transfer_count(free_transfers, hit_cap)
-    beam_width = max(1, int(getattr(config, "TRANSFER_BEAM_WIDTH", 8) or 8))
-    max_per_team = int(getattr(config, "TRANSFER_MAX_PER_TEAM", 3) or 3)
+    beam_width = max(1, int(config.TRANSFER_BEAM_WIDTH or 8))
+    max_per_team = int(config.TRANSFER_MAX_PER_TEAM or 3)
 
     init_team_counts = {}
     for tid in sq["team"].dropna().astype(int).tolist():

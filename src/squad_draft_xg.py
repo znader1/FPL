@@ -52,9 +52,9 @@ def rates_from_bootstrap(elements):
     xa90_raw = pd.to_numeric(df.get("expected_assists_per_90"), errors="coerce").fillna(0.0)
     pos = df.apply(_pos, axis=1)
 
-    base_xg = getattr(config, "OUTPUT_POSITION_BASE_XG90", {})
-    base_xa = getattr(config, "OUTPUT_POSITION_BASE_XA90", {})
-    min_trust = float(getattr(config, "OUTPUT_MIN_MINUTES_TRUST", 270.0) or 270.0)
+    base_xg = config.OUTPUT_POSITION_BASE_XG90
+    base_xa = config.OUTPUT_POSITION_BASE_XA90
+    min_trust = float(config.OUTPUT_MIN_MINUTES_TRUST or 270.0)
     conf = (mins / min_trust).clip(upper=1.0) if min_trust > 0 else pd.Series(1.0, index=df.index)
 
     xg90 = conf * xg90_raw + (1.0 - conf) * pos.map(lambda pp: float(base_xg.get(pp, 0.1)))
@@ -96,7 +96,7 @@ def minutes_from_bootstrap(elements, season_matches=None):
     # starts shrinks tiny samples so one GW doesn't overcommit.
     if season_matches is not None and 0 < int(season_matches) < 38:
         n = float(int(season_matches))
-        shrink = float(getattr(config, "MINUTES_INSEASON_SHRINK_PSEUDO", 1.0))
+        shrink = float(config.MINUTES_INSEASON_SHRINK_PSEUDO)
         p_start = ((starts + 0.5 * shrink) / (n + shrink)).clip(0.0, 1.0)
     else:
         # Pre-season: last season had up to 38 apps.
@@ -104,8 +104,8 @@ def minutes_from_bootstrap(elements, season_matches=None):
     avg_min_when_start = (mins / starts.where(starts > 0, other=1)).clip(0.0, 90.0)
     exp_minutes = (p_start * avg_min_when_start).clip(0.0, 90.0)
 
-    sub_app_prob = float(getattr(config, "MINUTES_SUB_APP_PROB", 0.45))
-    p60_given_start = float(getattr(config, "MINUTES_P60_GIVEN_START", 0.86))
+    sub_app_prob = float(config.MINUTES_SUB_APP_PROB)
+    p60_given_start = float(config.MINUTES_P60_GIVEN_START)
     prob_appear = (p_start + (1.0 - p_start) * sub_app_prob).clip(0.0, 1.0)
     prob_60 = (p_start * p60_given_start).clip(0.0, 1.0)
 

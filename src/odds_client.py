@@ -80,7 +80,7 @@ def fetch_epl_odds(api_key=None, force=False, cache_only=False):
     latency or flakiness there; the API layer and /admin/refresh keep the
     cache warm.
     """
-    ttl = float(getattr(config, "ODDS_CACHE_TTL_S", 21600.0))
+    ttl = float(config.ODDS_CACHE_TTL_S)
     if not force:
         cached = _read_cache(ttl)
         if cached is not None:
@@ -161,7 +161,7 @@ def match_fpl_team(odds_name, fpl_names_by_id):
     """odds-API team name → FPL team id, via exact/alias/substring match."""
     aliases = dict(_DEFAULT_ALIASES)
     aliases.update({_normalize(k): _normalize(v)
-                    for k, v in (getattr(config, "ODDS_TEAM_ALIASES", {}) or {}).items()})
+                    for k, v in (config.ODDS_TEAM_ALIASES or {}).items()})
     target = _normalize(odds_name)
     for tid, name in fpl_names_by_id.items():
         n = _normalize(name)

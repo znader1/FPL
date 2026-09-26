@@ -72,7 +72,7 @@ def _project(target_gw, weight, name_to_id, horizon=1):
     orig_recent = projections.load_latest_player_gw_history
     orig_minutes = minutes_model.load_minutes_history
     orig_match = fixture_difficulty.load_match_history
-    orig_weight = getattr(config, "PROJ_MODEL_BLEND_WEIGHT", 0.0)
+    orig_weight = config.PROJ_MODEL_BLEND_WEIGHT
 
     projections.load_latest_player_gw_history = lambda *a, **k: history_df
     minutes_model.load_minutes_history = lambda *a, **k: history_df

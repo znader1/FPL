@@ -16,7 +16,7 @@ def international_break_gws(events: list[dict], gap_days: float | None = None) -
     Malformed rows are skipped; any failure mode degrades to an empty map,
     which downstream treats as "no breaks known".
     """
-    gap = float(gap_days if gap_days is not None else getattr(config, "BREAK_GAP_DAYS", 10.0))
+    gap = float(gap_days if gap_days is not None else config.BREAK_GAP_DAYS)
     parsed = []
     for e in events or []:
         try:
