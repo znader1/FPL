@@ -20,6 +20,7 @@ import pandas as pd
 from anthropic import Anthropic
 
 from src.chip_advisor import build_chip_plan
+from src import llm_usage
 
 
 MODEL = "claude-haiku-4-5-20251001"  # fast specialist; Sonnet is overkill here
@@ -155,6 +156,7 @@ def run_chip_agent(
             tools=TOOLS,
             messages=messages,
         )
+        llm_usage.record_usage(response, feature="chip_agent", model=MODEL, gw=current_gw)
 
         if verbose:
             print(f"[iter {iteration}] stop_reason={response.stop_reason}")

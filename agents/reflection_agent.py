@@ -14,6 +14,7 @@ from pathlib import Path
 from anthropic import Anthropic
 
 from src.agent_memory import MemoryStore, Decision
+from src import llm_usage
 
 
 MODEL = "claude-haiku-4-5-20251001"
@@ -105,6 +106,7 @@ def run_reflection(
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_msg}],
         )
+        llm_usage.record_usage(response, feature="reflection_agent", model=MODEL)
     except Exception as e:
         if verbose:
             print(f"Reflection: API call failed: {e}")

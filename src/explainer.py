@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import time
+from src import llm_usage
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 MAX_OUTPUT_TOKENS = 500
@@ -160,6 +161,8 @@ def explain(recommendations, model=None):
         system=SYSTEM_PROMPT,
         messages=_build_messages(context),
     )
+    llm_usage.record_usage(resp, feature="explain", model=chosen_model,
+                           gw=recommendations.get("event_id") if isinstance(recommendations, dict) else None)
 
     text = ""
     for block in resp.content or []:

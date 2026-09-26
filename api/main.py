@@ -25,6 +25,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, projections, recommender, seed_models, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key, require_user, authenticated_subject
+from src import auth, llm_usage
 from src.ratelimit import (
     LLM_LIMIT, MAX_REQUEST_BYTES, _client_ip, _user_key, limiter,
 )
@@ -2089,6 +2090,10 @@ def league_strategy_post(
     err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key or payload.get("api_key"))
     if err:
         return err
+
+    # No per-user rate-limit key on this route, so tag the LLM usage record here.
+    subject = auth.authenticated_subject(x_api_key=x_api_key, authorization=authorization) or {}
+    llm_usage.bind_user(subject.get("sub"))
 
     entry_id = payload.get("entry_id")
     league_id = payload.get("league_id")
