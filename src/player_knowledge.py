@@ -91,3 +91,65 @@ def merge_request(pk_file, request_pk):
         "as_of": (pk_file or {}).get("as_of"),
         "players": {**file_players, **req_players},
     }
+
+
+def apply_to_projections(proj, gws, by_id):
+    """Per player, per GW: ``xpts_gw{g} *= availability(gw) * minutes_mult``,
+    where availability(gw) is 0 before an injury return-GW. Adds
+    ``pk_availability`` (min over the horizon) + ``pk_note`` columns and
+    recomputes ``xpts_horizon``. Players absent from ``by_id`` are untouched.
+
+    Lifted out of squad_draft so every live recommendation path can share it —
+    the squad picker downgraded injured players, the transfer decision card did
+    not. Backtests and the replay builder must NOT call this: applying today's
+    knowledge to a historical gameweek leaks the future into the result.
+    """
+    if not by_id:
+        return proj
+    proj = proj.copy()
+    proj["pk_availability"] = pd.NA
+    proj["pk_note"] = pd.NA
+    for pid, entry in by_id.items():
+        mask = proj["id"] == int(pid)
+        if not mask.any():
+            continue
+        av = entry.get("availability")
+        availability = 1.0 if av is None else float(av)
+        mm = entry.get("minutes_mult")
+        minutes_mult = 1.0 if mm is None else float(mm)
+        from_gw = entry.get("available_from_gw")
+        from_gw = int(from_gw) if from_gw not in (None, "") else None
+        min_eff = 1.0
+        for g in gws:
+            avail_g = 0.0 if (from_gw is not None and int(g) < from_gw) else availability
+            eff = avail_g * minutes_mult
+            col = f"xpts_gw{g}"
+            if col in proj.columns:
+                proj.loc[mask, col] = pd.to_numeric(
+                    proj.loc[mask, col], errors="coerce").fillna(0.0) * eff
+            min_eff = min(min_eff, eff)
+        proj.loc[mask, "pk_availability"] = round(min_eff, 3)
+        proj.loc[mask, "pk_note"] = entry.get("note")
+    xcols = [f"xpts_gw{g}" for g in gws if f"xpts_gw{g}" in proj.columns]
+    if xcols:
+        proj["xpts_horizon"] = proj[xcols].apply(
+            pd.to_numeric, errors="coerce").fillna(0.0).sum(axis=1)
+    return proj
+
+
+def apply(proj, gws, request_pk=None, path=None, stale_days=None, today=None):
+    """Load the knowledge file, merge per-request overrides, resolve keys to
+    player ids and apply the result to ``proj``. Returns ``(proj, notes)``.
+
+    The one call every live recommendation path needs. Never raises on a
+    missing or malformed file — ``load_player_knowledge`` degrades to empty,
+    and empty knowledge leaves ``proj`` untouched.
+    """
+    pk = merge_request(load_player_knowledge(path), request_pk)
+    by_id, notes = resolve_keys(pk, proj)
+    if stale_days is None:
+        stale_days = getattr(config, "PLAYER_KNOWLEDGE_STALE_DAYS", 10)
+    stale = staleness_note(pk.get("as_of"), stale_days, today=today)
+    if stale:
+        notes = notes + [stale]
+    return apply_to_projections(proj, gws, by_id), notes
