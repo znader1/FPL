@@ -1136,7 +1136,9 @@ def build_chip_plan(
                 (f"Most stressed week is GW{stress_row['gw']}: {stress_row['total']:.1f}"
                  f"/{stress_row['scope']} vs the {stress_row['bar']:.1f} bar — {describe_fh_stress(stress_row)}")
                 if stress_row is not None and stress_row["total"] > 0 else
-                ("No blank-heavy, injury-hit or tough-fixture week in the model horizon"
+                (("No blank-heavy, injury-hit or tough-fixture week in the model horizon"
+                  if float(config.CHIP_PLAN_FH_MIN_STRESS) > 0
+                  else "No blank-heavy or tough-fixture week in the model horizon")
                  if chip == "free_hit"
                  else "No positive-EV window in the model horizon")
             )
