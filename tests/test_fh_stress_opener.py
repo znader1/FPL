@@ -56,6 +56,15 @@ def test_flag_off_plan_ignores_the_new_squad_columns(monkeypatch):
     assert a == b
 
 
+def test_flag_off_keeps_the_pre_2_1_hold_reason():
+    """Pinned to master's exact text — /verify caught the branch rewording it
+    even with the opener off."""
+    squad = _injury_hit_squad().drop(columns=["play_prob", "avail_prob", "start_prob"])
+    plan = _plan(squad, difficulty=3.0)
+    fh = next(o for o in plan["outlook"] if o["chip"] == "free_hit")
+    assert fh["reasons"] == ["No blank-heavy or tough-fixture week in the model horizon"]
+
+
 # --- Fix 1: stress counts the manager's starting XI, not the structural bench ---
 
 def _squad_with_fodder_bench(fixture_count=True):
