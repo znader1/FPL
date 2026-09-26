@@ -453,20 +453,26 @@ def start_prob_from_recent_starts(start_rate, samples, prior_gws: float | None =
 
 def fh_squad_stress(squad_with_xpts: pd.DataFrame, difficulty_by_team: dict[str, float] | None,
                     tough_from: float | None = None) -> dict:
-    """Blended Free Hit "squad stress" for one GW, in player-equivalents (0..15).
+    """Blended Free Hit "squad stress" for one GW, in player-equivalents.
 
-    Per squad player: max(blank, 1 - play_prob, tough_weight) with
+    Scope is the manager's starting XI (`is_starter`, from pick positions
+    1-11): the four bench slots are fodder by design, and fodder that never
+    starts would otherwise read as "unlikely to play" and fire the chip on an
+    ordinary week. No `is_starter` column -> all 15 (the pre-2.1 reading).
+    Per player in scope: max(blank, 1 - play_prob, tough_weight) with
     tough_weight = clip((difficulty - tough_from) / (5 - tough_from), 0, 1).
     `play_prob` is read from the squad frame when present (availability x
     P(start): `play_prob_from_availability` x `start_prob_from_recent_starts`),
     else every player counts as fit and starting.
-    Returns the total plus the parts that explain it.
+    Returns the total, the scope size, and the parts that explain it.
     """
     if tough_from is None:
         tough_from = float(config.CHIP_PLAN_FH_STRESS_TOUGH_FROM)
     tough_from = float(tough_from)
     span = max(1e-6, 5.0 - tough_from)
     dmap = difficulty_by_team or {}
+    if "is_starter" in squad_with_xpts.columns:
+        squad_with_xpts = squad_with_xpts[squad_with_xpts["is_starter"].fillna(False).astype(bool)]
 
     blank = (pd.to_numeric(squad_with_xpts.get("fixture_count"), errors="coerce")
              .fillna(1).astype(int) == 0).astype(float)
@@ -491,6 +497,7 @@ def fh_squad_stress(squad_with_xpts: pd.DataFrame, difficulty_by_team: dict[str,
         names = squad_with_xpts.loc[order, "name"].astype(str).tolist()
     return {
         "total": float(per_player.sum()),
+        "scope": int(len(squad_with_xpts)),
         "n_blanking": int(blank.sum()),
         "n_unavailable": int(len(doubtful)),
         "unavailable_names": names,
@@ -665,7 +672,7 @@ def score_free_hit(
                 f"{n_tough} of your 15 face difficulty ≥{tough_at:.1f} in GW{gw}")
         if stress_trigger:
             reasoning.append(
-                f"Squad stress {stress['total']:.1f}/15 in GW{gw} (bar {min_stress:.1f}): "
+                f"Squad stress {stress['total']:.1f}/{stress['scope']} in GW{gw} (bar {min_stress:.1f}): "
                 + describe_fh_stress(stress))
 
         risks = []
@@ -1065,7 +1072,7 @@ def build_chip_plan(
                     team_difficulty_by_gw)
             no_window_reason = (
                 (f"Most stressed week is GW{stress_row['gw']}: {stress_row['total']:.1f}"
-                 f"/15 vs the {stress_row['bar']:.1f} bar — {describe_fh_stress(stress_row)}")
+                 f"/{stress_row['scope']} vs the {stress_row['bar']:.1f} bar — {describe_fh_stress(stress_row)}")
                 if stress_row is not None and stress_row["total"] > 0 else
                 ("No blank-heavy, injury-hit or tough-fixture week in the model horizon"
                  if chip == "free_hit"

@@ -26,6 +26,7 @@ def _injury_hit_squad():
     squad["price_m"] = 5.0
     squad["play_prob"] = 1.0
     squad.loc[squad.index[:5], "play_prob"] = 0.0
+    squad["is_starter"] = [True] * 11 + [False] * 4
     return squad
 
 
@@ -45,9 +46,52 @@ def test_flag_off_never_reaches_the_stress_code(monkeypatch):
     assert all("stress" not in row for row in plan["outlook"])
 
 
-def test_flag_off_plan_ignores_play_prob(monkeypatch):
+def test_flag_off_plan_ignores_the_new_squad_columns(monkeypatch):
     with_col = _injury_hit_squad()
-    without_col = with_col.drop(columns=["play_prob"])
+    without_col = with_col.drop(columns=["play_prob", "is_starter"])
     a = json.dumps(_plan(with_col), sort_keys=True, default=str)
     b = json.dumps(_plan(without_col), sort_keys=True, default=str)
     assert a == b
+
+
+# --- Fix 1: stress counts the manager's starting XI, not the structural bench ---
+
+def _squad_with_fodder_bench(fixture_count=True):
+    """All fit; the 4 bench slots (positions 12-15) are fodder who never start.
+    ``fixture_count`` is for calling fh_squad_stress directly; in a chip plan
+    the market supplies it."""
+    squad = _squad_15_single_team(team="Arsenal")
+    squad["price_m"] = 5.0
+    squad["is_starter"] = [True] * 11 + [False] * 4
+    squad["play_prob"] = [1.0] * 11 + [0.25] * 4   # benched 3 of 3 -> 0.25
+    if fixture_count:
+        squad["fixture_count"] = 1
+    return squad
+
+
+def test_fodder_bench_adds_no_stress():
+    stress = chip_advisor.fh_squad_stress(_squad_with_fodder_bench(), {"Arsenal": 3.0})
+    assert stress["total"] == 0.0
+    assert stress["n_unavailable"] == 0
+    assert stress["scope"] == 11
+
+
+def test_fodder_bench_does_not_fire_free_hit(monkeypatch):
+    monkeypatch.setattr(config, "CHIP_PLAN_FH_MIN_STRESS", 3.0)
+    plan = _plan(_squad_with_fodder_bench(fixture_count=False), difficulty=3.0)
+    assert not any(r["chip"] == "free_hit" for r in plan["recommendations"])
+
+
+def test_injured_starter_still_counts():
+    squad = _squad_with_fodder_bench()
+    squad.loc[squad.index[0], "play_prob"] = 0.0          # a starter is out
+    stress = chip_advisor.fh_squad_stress(squad, {"Arsenal": 3.0})
+    assert stress["total"] == pytest.approx(1.0)
+    assert stress["unavailable_names"] == ["P1"]
+
+
+def test_without_positions_all_fifteen_count():
+    squad = _squad_with_fodder_bench().drop(columns=["is_starter"])
+    stress = chip_advisor.fh_squad_stress(squad, {"Arsenal": 3.0})
+    assert stress["total"] == pytest.approx(3.0)           # 4 x 0.75, the old reading
+    assert stress["scope"] == 15

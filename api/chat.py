@@ -137,6 +137,11 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
     # P(start) from recent starts once the projection frame exists. Feeds the
     # Free Hit squad-stress opener (chip_advisor.fh_squad_stress).
     squad["play_prob"] = play_prob_from_availability(squad_rows).values
+    # The manager's starting XI (pick positions 1-11). The FH stress opener
+    # scores only these: the bench slots are fodder by design.
+    starter_ids = {int(p["element"]) for p in picks if int(p.get("position") or 99) <= 11}
+    if starter_ids:
+        squad["is_starter"] = squad["player_id"].isin(starter_ids)
 
     # Project next N GWs
     horizon = int(horizon)
