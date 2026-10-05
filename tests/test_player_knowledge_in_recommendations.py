@@ -5,6 +5,8 @@ a player flagged "out until GW9" while the transfer decision card still scored
 him at full xPts. These tests pin the shared helper and the boundary: live
 recommendation paths apply knowledge, backtest/replay paths must not.
 """
+import datetime
+
 import pandas as pd
 import pytest
 
@@ -54,7 +56,10 @@ def test_empty_knowledge_returns_the_frame_unchanged():
 def test_apply_reads_the_file_and_resolves_names(tmp_path):
     """The one-call helper: load -> merge -> resolve names -> apply."""
     f = tmp_path / "pk.json"
-    f.write_text('{"as_of": "2026-09-19", "players": {"P1": {"availability": 0.0}}}')
+    # as_of must be "today": the staleness note fires after
+    # PLAYER_KNOWLEDGE_STALE_DAYS, so a hardcoded date rots the test.
+    today = datetime.date.today().isoformat()
+    f.write_text('{"as_of": "%s", "players": {"P1": {"availability": 0.0}}}' % today)
     proj, notes = player_knowledge.apply(_proj(), [5, 6, 7], path=str(f))
     assert proj[proj["id"] == 1].iloc[0]["xpts_horizon"] == 0.0
     assert proj[proj["id"] == 2].iloc[0]["xpts_horizon"] == 6.0
