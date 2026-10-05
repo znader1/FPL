@@ -79,3 +79,41 @@ def test_runtime_config_override(monkeypatch):
     assert derive_free_transfers(
         [_ev(1, 0), _ev(2, 0), _ev(3, 0), _ev(4, 0)], [], next_event_id=5
     ) == 3
+
+
+# --- resolve_free_transfers: the shared entry point (H2) -------------------
+
+from src.ft_tracker import resolve_free_transfers
+
+
+def test_resolve_uses_the_season_walk_when_history_exists():
+    history = {"current": [_ev(g, 0) for g in range(1, 6)], "chips": []}
+    assert resolve_free_transfers(history, next_event_id=6) == 5
+    # Heuristic inputs are ignored once history is present.
+    assert resolve_free_transfers(history, next_event_id=6, event_transfers=3, squad_event_id=5) == 5
+
+
+def test_resolve_respects_chip_weeks_from_history():
+    history = {"current": [_ev(g, 0) for g in range(1, 6)],
+               "chips": [{"name": "wildcard", "event": 4}]}
+    # GW2 -> 2, GW3 -> 3, GW4 wildcard maintains 3, GW5 -> 4
+    assert resolve_free_transfers(history, next_event_id=6) == 4
+
+
+def test_resolve_falls_back_to_heuristic_without_history():
+    assert resolve_free_transfers(None, next_event_id=6, event_transfers=0, squad_event_id=5) == 2
+    assert resolve_free_transfers({}, next_event_id=6, event_transfers=1, squad_event_id=5) == 1
+    assert resolve_free_transfers({"current": []}, next_event_id=6, event_transfers=0, squad_event_id=5) == 2
+
+
+def test_resolve_heuristic_never_banks_from_gw1_or_a_chip_week():
+    assert resolve_free_transfers(None, next_event_id=2, event_transfers=0, squad_event_id=1) == 1
+    assert resolve_free_transfers(None, next_event_id=6, event_transfers=0, squad_event_id=5, active_chip="wildcard") == 1
+    assert resolve_free_transfers(None, next_event_id=6, event_transfers=0, squad_event_id=5, active_chip="freehit") == 1
+    assert resolve_free_transfers(None, next_event_id=6, event_transfers=0, squad_event_id=5, active_chip="bboost") == 2
+
+
+def test_resolve_garbage_gives_one():
+    assert resolve_free_transfers(None, next_event_id=6) == 1
+    assert resolve_free_transfers(None, next_event_id=6, event_transfers="x", squad_event_id=5) == 1
+    assert resolve_free_transfers("not a dict", next_event_id=6) == 1
