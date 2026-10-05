@@ -293,6 +293,12 @@ STRATEGY_MAX_BENCH_MOVES = 6  # [untested]
 # -----------------------------
 CHIP_PLAN_CACHE_TTL_S = 900.0   # [operational] /chips/plan result cache; a build costs minutes of CPU
 CHIP_PLAN_HORIZON_GWS = 8       # [tuned] model zone: full EV math over this many GWs
+# H2 (2026-10): the Wildcard EV is netted against a no-chip transfer plan. Off
+# = the legacy baseline (hits allowed, 3 moves/GW, flat 2.0 bar over the full
+# horizon). On = the headline-plan settings the user is actually shown
+# (TRANSFER_PLAN_ALLOW_HITS / MAX_MOVES_PER_GW / scaled_min_gain). Behaviour
+# change → stays off until 4.0/4.1 can measure it.
+CHIP_PLAN_BASELINE_HEADLINE_SETTINGS = False  # [flag]
 CHIP_PLAN_MIN_EV = {            # below this, "hold" beats playing the chip
     # Live spot-check (2026-09-02, entry 107342, GW3-10, no DGWs announced):
     # captain xPts clustered 9.9-13.5 and bench xPts clustered 5.2-6.4 every
