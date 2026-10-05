@@ -465,6 +465,12 @@ PLAYER_KNOWLEDGE_PATH = "data/models/player_knowledge.json"  # [operational]
 # Last /admin/refresh receipt (phase 3.1); read by /admin/data-status. Lives on
 # the volume next to the other runtime-written models files, never tracked.
 REFRESH_STATUS_PATH = "data/models/refresh_status.json"  # [operational]
+# /admin/data-status thresholds (phase 3.2). Refresh runs every 6h, so 9h
+# means one missed run turns the status red; the others bound the optional
+# sources that only warn.
+DATA_STATUS_REFRESH_MAX_AGE_H = 9  # [operational]
+DATA_STATUS_KNOWLEDGE_DISCOUNT_STALE_DAYS = 14  # [operational]
+DATA_STATUS_NEWS_STALE_DAYS = 7  # [operational]
 PLAYER_KNOWLEDGE_STALE_DAYS = 10  # [untested]
 
 # News corpus (Approach B: RSS refresh routine -> news_digest reads this dir).

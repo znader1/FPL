@@ -23,7 +23,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, recommender, refresh_status, seed_models, transfer_planner, transforms
+from src import config, data_status, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, recommender, refresh_status, seed_models, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key, require_user, authenticated_subject
 from src import auth, llm_usage
 from src.ratelimit import (
@@ -1664,6 +1664,30 @@ def fixtures_difficulty_get(
         return err
     out = build_fixture_difficulty_payload(gw_start=gw_start, horizon_gws=horizon_gws)
     return JSONResponse(content=jsonable_encoder(out))
+
+
+@app.get("/admin/data-status")
+def admin_data_status(
+    api_key=None,
+    x_api_key=Header(None),
+    authorization=Header(None),
+):
+    """
+    Age of every data source vs its threshold (phase 3.2). ``ok`` is false when
+    the refresh receipt is old/failed or either history file lags a finished
+    gameweek; optional sources (odds, knowledge, calendar, news) only warn.
+    The daily Action (3.3) fails on ``ok: false``.
+    """
+    err = check_admin_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
+    if err:
+        return err
+    bootstrap = get_bootstrap_cached()
+    teams_short_map = {
+        int(t["id"]): t.get("short_name") for t in bootstrap.get("teams", []) if "id" in t
+    }
+    ratings = get_team_ratings_cached(teams_short_map)
+    inputs = data_status.collect_inputs(bootstrap=bootstrap, team_ratings=ratings)
+    return JSONResponse(content=jsonable_encoder(data_status.build_data_status(**inputs)))
 
 
 @app.post("/admin/refresh")
