@@ -23,7 +23,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, recommender, seed_models, transfer_planner, transforms
+from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, recommender, refresh_status, seed_models, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key, require_user, authenticated_subject
 from src import auth, llm_usage
 from src.ratelimit import (
@@ -1691,9 +1691,20 @@ def admin_refresh(
     # too, otherwise /squad keeps serving scores up to EVENT_LIVE_TTL old.
     _event_live_cache.clear()
 
-    bootstrap = get_bootstrap_cached()
-    fixtures = get_fixtures_cached()
-    next_ev = build_next_event_summary(bootstrap=bootstrap, fixtures=fixtures)
+    # The receipt below is also persisted (phase 3.1) so /admin/data-status can
+    # answer "when did data last refresh, and did it work?" without the Actions
+    # log. A failed upstream fetch still leaves a receipt saying so.
+    try:
+        bootstrap = get_bootstrap_cached()
+        fixtures = get_fixtures_cached()
+        next_ev = build_next_event_summary(bootstrap=bootstrap, fixtures=fixtures)
+    except Exception as exc:
+        refresh_status.write_refresh_status({
+            "ok": False,
+            "error": str(exc),
+            "failed_at_utc": datetime.utcnow().isoformat() + "Z",
+        })
+        raise
 
     # Warm the bookmaker-odds disk cache so the projection engine (which
     # reads cache-only, never the network) always has fresh market lambdas.
@@ -1740,7 +1751,7 @@ def admin_refresh(
             except Exception as exc:
                 logger.warning("Projection warm failed for GW%s h%s: %s", next_gw, horizon, exc)
 
-    return JSONResponse(content=jsonable_encoder({
+    receipt = jsonable_encoder({
         "ok": True,
         "next_event": next_ev,
         "cache_refreshed_at_utc": datetime.utcnow().isoformat() + "Z",
@@ -1749,7 +1760,9 @@ def admin_refresh(
         "match_history": match_history_info,
         "match_history_error": match_history_error,
         "projections_warmed": warmed,
-    }))
+    })
+    refresh_status.write_refresh_status(receipt)
+    return JSONResponse(content=receipt)
 
 
 def refresh_match_history(bootstrap, fixtures):
