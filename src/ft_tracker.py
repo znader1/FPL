@@ -69,8 +69,11 @@ def resolve_free_transfers(history, next_event_id, *, event_transfers=None,
     """
     rows = (history or {}).get("current") if isinstance(history, dict) else None
     if rows:
-        return derive_free_transfers(
-            rows, (history or {}).get("chips") or [], next_event_id=next_event_id, ft_max=ft_max)
+        try:
+            return derive_free_transfers(
+                rows, (history or {}).get("chips") or [], next_event_id=next_event_id, ft_max=ft_max)
+        except (TypeError, ValueError, KeyError):
+            pass  # malformed history row: fall through to the heuristic, never 500 the squad
     chip = str(active_chip or "").lower()
     try:
         squad_gw = int(squad_event_id) if squad_event_id is not None else 0

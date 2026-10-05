@@ -117,3 +117,8 @@ def test_resolve_garbage_gives_one():
     assert resolve_free_transfers(None, next_event_id=6) == 1
     assert resolve_free_transfers(None, next_event_id=6, event_transfers="x", squad_event_id=5) == 1
     assert resolve_free_transfers("not a dict", next_event_id=6) == 1
+
+
+def test_resolve_malformed_history_row_falls_back_instead_of_raising():
+    bad = {"current": [{"event": "GW2", "event_transfers": 0}], "chips": []}
+    assert resolve_free_transfers(bad, next_event_id=6, event_transfers=0, squad_event_id=5) == 2
