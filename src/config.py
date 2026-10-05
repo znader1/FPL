@@ -342,6 +342,25 @@ BREAK_GAP_DAYS = 10.0           # [untested] deadline-to-deadline gap marking a 
 CHIP_PLAN_BREAK_CONFIDENCE_MULT = 0.85  # [untested] confidence haircut on recs targeting a post-break GW
 CHIP_PLAN_FH_MIN_TOUGH = 6      # [untested] squad players on tough fixtures that open the FH gate
 CHIP_PLAN_FH_TOUGH_DIFFICULTY = 4.0  # [untested] ticker difficulty counting as "tough"
+# Blended "squad stress" Free Hit opener (roadmap 2.1). The two hard triggers
+# above are all-or-nothing: 3 blanks OR 6 players at difficulty >= 4.0. A
+# squad with three unavailable starters and a hard away week trips neither.
+# Per starting-XI player (pick positions 1-11; all 15 if positions are
+# unknown), stress = max(blank, 1 - play_prob, tough_weight), where
+# tough_weight ramps from 0 at STRESS_TOUGH_FROM (the ticker's "medium"
+# ceiling) to 1 at difficulty 5. The sum (0..11) opens the FH gate at
+# MIN_STRESS; the EV bar still applies afterwards. play_prob = FPL
+# availability (faded past next GW like projections) x P(start) from recent
+# starts (api.chat._build_context_for_entry). 0 = off: the chip plan is
+# exactly the pre-2.1 behaviour. Stays off until the 4.1 evidence harness
+# shows it beats holding.
+CHIP_PLAN_FH_MIN_STRESS = 0.0  # [flag] 0 disables; 4.0 was the branch's hand-picked bar
+CHIP_PLAN_FH_STRESS_TOUGH_FROM = 3.3  # [untested] difficulty where a fixture starts adding stress
+# Benching signal: P(start) = (n * recent_start_rate + PRIOR_GWS) / (n + PRIOR_GWS)
+# — presumed nailed until recent starts say otherwise (benched 3 of 3 -> 0.25).
+# Skipped for a player whose FPL news changed inside the recent window: his
+# missed injured GWs read as 0 starts. 0 disables the benching signal.
+CHIP_PLAN_FH_BENCH_PRIOR_GWS = 1.0  # [untested]
 # Difficulty→multiplier for the TC haul-prob lambda (mirrors the projection
 # engine's FDR multipliers; keyed on round(difficulty)).
 CHIP_PLAN_TC_DIFF_MULT = {1: 1.25, 2: 1.12, 3: 1.0, 4: 0.88, 5: 0.75}  # [untested]

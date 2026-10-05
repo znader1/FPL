@@ -81,6 +81,10 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
     # Local import to avoid circular and keep startup fast
     from src import fpl_client, transforms, projections, optimizer, config
     from src.breaks import international_break_gws
+    from src.chip_advisor import (
+        news_changed_since, play_prob_from_availability, recent_window_start_deadline,
+        start_prob_from_recent_starts,
+    )
 
     bootstrap = fpl_client.get_bootstrap()
     # Reuses the bootstrap already fetched above — no extra network call.
@@ -119,8 +123,9 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
     # Build squad DataFrame
     pick_ids = [int(p["element"]) for p in picks]
     captain_id = next((int(p["element"]) for p in picks if p.get("is_captain")), None)
+    availability_cols = [c for c in ("status", "chance_of_playing_next_round") if c in elements.columns]
     squad_rows = elements[elements["id"].isin(pick_ids)][
-        ["id", "web_name", "team", "element_type", "now_cost"]
+        ["id", "web_name", "team", "element_type", "now_cost", *availability_cols]
     ].copy()
     pos_map = {1: "GKP", 2: "DEF", 3: "MID", 4: "FWD"}
     team_name_map = dict(zip(teams["id"], teams["name"]))
@@ -131,6 +136,17 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
         "team": squad_rows["team"].map(team_name_map).values,
         "price_m": (squad_rows["now_cost"] / 10.0).values,
     })
+    # P(available) from FPL status + chance_of_playing; multiplied below by
+    # P(start) from recent starts once the projection frame exists. Feeds the
+    # Free Hit squad-stress opener (chip_advisor.fh_squad_stress).
+    squad["avail_prob"] = play_prob_from_availability(squad_rows).values
+    squad["start_prob"] = 1.0
+    squad["play_prob"] = squad["avail_prob"]
+    # The manager's starting XI (pick positions 1-11). The FH stress opener
+    # scores only these: the bench slots are fodder by design.
+    starter_ids = {int(p["element"]) for p in picks if int(p.get("position") or 99) <= 11}
+    if starter_ids:
+        squad["is_starter"] = squad["player_id"].isin(starter_ids)
 
     # Project next N GWs
     horizon = int(horizon)
@@ -145,6 +161,25 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
     from src import player_knowledge
     proj, _pk_notes = player_knowledge.apply(
         proj, list(range(current_gw, current_gw + horizon)))
+
+    # Benching signal: a fit player left out in recent GWs (manager's call,
+    # invisible to FPL's flags) also lowers play_prob for the FH stress gate.
+    # Skipped for a player whose FPL news changed inside the recent window —
+    # his injured weeks are 0-start rows, not benchings.
+    if "recent_gw_avg_starts" in proj.columns:
+        recent = proj.set_index(pd.to_numeric(proj["id"], errors="coerce"))
+        rate = squad["player_id"].map(recent["recent_gw_avg_starts"])
+        samples = squad["player_id"].map(recent.get("recent_gw_samples", pd.Series(dtype=float)))
+        news_added = {int(e["id"]): e.get("news_added") for e in bootstrap.get("elements", [])}
+        news_recent = news_changed_since(
+            squad["player_id"].map(news_added),
+            recent_window_start_deadline(bootstrap.get("events", []), current_gw),
+        )
+        # Kept apart from availability: availability fades past the next GW
+        # (chip_advisor.fade_availability), a benching pattern does not.
+        squad["start_prob"] = start_prob_from_recent_starts(
+            rate, samples, news_recent=news_recent).values
+        squad["play_prob"] = (squad["avail_prob"] * squad["start_prob"]).clip(0.0, 1.0)
 
     # Reshape into the simulator's market schema, one DataFrame per GW
     from src.chip_advisor import team_fixture_counts
