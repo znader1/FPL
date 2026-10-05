@@ -52,3 +52,31 @@ def derive_free_transfers(events, chips, next_event_id, ft_max=None):
         used = max(0, int(row.get("event_transfers") or 0))
         ft = min(int(ft_max), max(ft - used, 0) + 1)
     return ft
+
+
+def resolve_free_transfers(history, next_event_id, *, event_transfers=None,
+                           squad_event_id=None, active_chip=None, ft_max=None):
+    """
+    The ONE way to answer "how many free transfers does this entry take into
+    ``next_event_id``?" — used by /recommendations, the chat context and the
+    Chips tab so they never disagree (hotfix H2, 2026-10).
+
+    ``history`` is the raw ``/entry/{id}/history/`` payload (``current`` rows +
+    ``chips``), or None when that fetch failed. With history the season walk
+    above decides. Without it, fall back to the pre-2026 single-GW heuristic:
+    0 transfers in the squad GW banked one (→ 2), otherwise 1 — never from
+    GW1 (squad creation) and never after a Wildcard/Free Hit week.
+    """
+    rows = (history or {}).get("current") if isinstance(history, dict) else None
+    if rows:
+        return derive_free_transfers(
+            rows, (history or {}).get("chips") or [], next_event_id=next_event_id, ft_max=ft_max)
+    chip = str(active_chip or "").lower()
+    try:
+        squad_gw = int(squad_event_id) if squad_event_id is not None else 0
+        used = int(event_transfers) if event_transfers is not None else None
+    except (TypeError, ValueError):
+        return 1
+    if used is None or squad_gw < 2 or chip in _CHIP_NO_CONSUME:
+        return 1
+    return 2 if used == 0 else 1

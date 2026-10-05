@@ -71,6 +71,30 @@ def _derive_chips_remaining(chips_played: list[dict], current_gw: int) -> list[s
     return sorted(c for c, w in windows.items() if w["available"])
 
 
+def _free_transfers_for(entry_id: int, current_gw: int, picks_data: dict, picks_event_id: int) -> int:
+    """
+    Free transfers into ``current_gw`` (the planning GW): the same season walk
+    /recommendations uses, so chat and the Chips tab agree with the card (H2).
+    The entry-history fetch is fail-soft — without it ft_tracker falls back to
+    the single-GW heuristic this code used to hardcode (2 if no transfers, else 1).
+    """
+    from src import fpl_client, ft_tracker
+
+    try:
+        history = fpl_client.get_entry_history(entry_id)
+    except Exception as e:  # noqa: BLE001 - degrade to the heuristic
+        logger.warning(f"entry history fetch failed for {entry_id}: {e}")
+        history = None
+    entry_history = (picks_data or {}).get("entry_history") or {}
+    return ft_tracker.resolve_free_transfers(
+        history,
+        next_event_id=int(current_gw),
+        event_transfers=entry_history.get("event_transfers"),
+        squad_event_id=picks_event_id,
+        active_chip=(picks_data or {}).get("active_chip"),
+    )
+
+
 def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
     """
     Build the data context needed by the orchestrator:
@@ -112,9 +136,7 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
 
     entry_history = picks_data.get("entry_history", {})
     bank_m = float(entry_history.get("bank", 0)) / 10.0
-    free_transfers = int(entry_history.get("event_transfers", 0))
-    # Derive FT: if no transfers made in current GW → 2 next GW
-    derived_ft = 2 if free_transfers == 0 else 1
+    derived_ft = _free_transfers_for(entry_id, current_gw, picks_data, picks_event_id)
 
     # Build squad DataFrame
     pick_ids = [int(p["element"]) for p in picks]

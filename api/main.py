@@ -658,30 +658,20 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
     bank_tenths = eh.get("bank")
     derived_itb_m = float(bank_tenths) / 10.0 if isinstance(bank_tenths, (int, float)) else None
 
-    # Free transfers for the NEXT planning GW:
-    # FPL carries over 1 unused FT (max 2 total). Check the current squad GW's own
-    # event_transfers — if the manager used 0 transfers this GW, they banked one → 2 FT next GW.
-    # Chip GWs (wildcard/freehit) reset the count to 1.
-    derived_free_transfers = 1
-    last_active_chip = (myteam.get("active_chip") or "").lower()
+    # Free transfers for the NEXT planning GW: the season walk over entry
+    # history (banking up to FT_MAX, chips maintain the count). History
+    # unavailable (pre-season wipe, 403) → ft_tracker's single-GW fallback.
     try:
         history = fpl_client.get_entry_history(entry_id)
-        next_ev_for_ft = _event_id(bootstrap, "is_next") or (int(used_event_id) + 1)
-        derived_free_transfers = ft_tracker.derive_free_transfers(
-            history.get("current") or [],
-            history.get("chips") or [],
-            next_event_id=next_ev_for_ft,
-        )
     except Exception:
-        # History unavailable (pre-season wipe, 403): fall back to the old
-        # single-GW heuristic rather than fail the request. GW1 is squad
-        # creation — no FT banks from it, so entering GW2 is always 1 FT.
-        if last_active_chip not in ("wildcard", "freehit") and int(used_event_id) >= 2:
-            try:
-                cur_transfers = int(eh.get("event_transfers") or 0)
-                derived_free_transfers = 2 if cur_transfers == 0 else 1
-            except Exception:
-                pass
+        history = None
+    derived_free_transfers = ft_tracker.resolve_free_transfers(
+        history,
+        next_event_id=_event_id(bootstrap, "is_next") or (int(used_event_id) + 1),
+        event_transfers=eh.get("event_transfers"),
+        squad_event_id=used_event_id,
+        active_chip=myteam.get("active_chip"),
+    )
 
     # Authenticated my-team reports the real count directly; it wins, clamped to [1, FT_MAX].
     clamped = ft_tracker.clamp_ft(my_team_ft)
