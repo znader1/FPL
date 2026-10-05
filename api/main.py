@@ -23,7 +23,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, recommender, seed_models, transfer_planner, transforms
+from src import config, data_status, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, recommender, refresh_status, seed_models, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key, require_user, authenticated_subject
 from src import auth, llm_usage
 from src.ratelimit import (
@@ -1666,6 +1666,30 @@ def fixtures_difficulty_get(
     return JSONResponse(content=jsonable_encoder(out))
 
 
+@app.get("/admin/data-status")
+def admin_data_status(
+    api_key=None,
+    x_api_key=Header(None),
+    authorization=Header(None),
+):
+    """
+    Age of every data source vs its threshold (phase 3.2). ``ok`` is false when
+    the refresh receipt is old/failed or either history file lags a finished
+    gameweek; optional sources (odds, knowledge, calendar, news) only warn.
+    The daily Action (3.3) fails on ``ok: false``.
+    """
+    err = check_admin_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
+    if err:
+        return err
+    bootstrap = get_bootstrap_cached()
+    teams_short_map = {
+        int(t["id"]): t.get("short_name") for t in bootstrap.get("teams", []) if "id" in t
+    }
+    ratings = get_team_ratings_cached(teams_short_map)
+    inputs = data_status.collect_inputs(bootstrap=bootstrap, team_ratings=ratings)
+    return JSONResponse(content=jsonable_encoder(data_status.build_data_status(**inputs)))
+
+
 @app.post("/admin/refresh")
 def admin_refresh(
     payload=Body(None),
@@ -1691,9 +1715,20 @@ def admin_refresh(
     # too, otherwise /squad keeps serving scores up to EVENT_LIVE_TTL old.
     _event_live_cache.clear()
 
-    bootstrap = get_bootstrap_cached()
-    fixtures = get_fixtures_cached()
-    next_ev = build_next_event_summary(bootstrap=bootstrap, fixtures=fixtures)
+    # The receipt below is also persisted (phase 3.1) so /admin/data-status can
+    # answer "when did data last refresh, and did it work?" without the Actions
+    # log. A failed upstream fetch still leaves a receipt saying so.
+    try:
+        bootstrap = get_bootstrap_cached()
+        fixtures = get_fixtures_cached()
+        next_ev = build_next_event_summary(bootstrap=bootstrap, fixtures=fixtures)
+    except Exception as exc:
+        refresh_status.write_refresh_status({
+            "ok": False,
+            "error": str(exc),
+            "failed_at_utc": datetime.utcnow().isoformat() + "Z",
+        })
+        raise
 
     # Warm the bookmaker-odds disk cache so the projection engine (which
     # reads cache-only, never the network) always has fresh market lambdas.
@@ -1740,7 +1775,7 @@ def admin_refresh(
             except Exception as exc:
                 logger.warning("Projection warm failed for GW%s h%s: %s", next_gw, horizon, exc)
 
-    return JSONResponse(content=jsonable_encoder({
+    receipt = jsonable_encoder({
         "ok": True,
         "next_event": next_ev,
         "cache_refreshed_at_utc": datetime.utcnow().isoformat() + "Z",
@@ -1749,7 +1784,9 @@ def admin_refresh(
         "match_history": match_history_info,
         "match_history_error": match_history_error,
         "projections_warmed": warmed,
-    }))
+    })
+    refresh_status.write_refresh_status(receipt)
+    return JSONResponse(content=receipt)
 
 
 def refresh_match_history(bootstrap, fixtures):
