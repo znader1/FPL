@@ -51,7 +51,7 @@ The xPts model blends a season PPG baseline with a recency-weighted recent avera
 1. **Base score** = `PPG_WEIGHT × ppg + FORM_WEIGHT × form` (season-long signal)
 2. **Recent average** = recency-weighted mean over last N GWs (last-2 GWs get 2× weight). Blank GWs (team had no fixture) are **excluded entirely** — not treated as 0-point games.
 3. **Blended base** = `RECENT_BLEND_WEIGHT × recent_avg + (1 - RECENT_BLEND_WEIGHT) × base_score`
-4. **Per-GW multipliers**: FDR difficulty (`{1:1.25, 2:1.12, 3:1.0, 4:0.88, 5:0.75}`), home/away, opponent team form, own team form, play probability (injury/doubt)
+4. **Per-GW multipliers**: FDR difficulty (`DIFFICULTY_MULTIPLIER` in `src/projections.py` — the table there is the truth; `CHIP_PLAN_TC_DIFF_MULT` and `scripts/backtest_season.py` carry drifted copies, see the 2026-10-05 review), home/away, opponent team form, own team form, play probability (injury/doubt)
 5. **DGW**: second fixture counts at `DGW_EXTRA_FIXTURE_DISCOUNT` (0.65) of a normal fixture
 6. **Late season** (GW > `LATE_SEASON_GW_THRESHOLD`): window shrinks to 3 GWs so recent form dominates
 7. **ep_next is still in the GW1 number**: `PROJ_EP_NEXT_BLEND_WEIGHT = 0.50` (`[untested]`) — next-GW xPts is half FPL's own ep_next, half the blended model; later GWs use the model only. The backtest adapter sets ep_next to 0.0 (`src/backtest_adapter.py`), so backtests have never exercised this blend (found 2026-10-05, fix planned as a backtest-parity phase).
@@ -127,7 +127,7 @@ Per-player, per-GW history: pre-deadline model/FPL state plus post-GW actuals, u
 
 ### Free transfers derivation
 
-Free transfers for the target GW are derived from `entry_history.event_transfers` of the **current squad GW** (already fetched in `/squad`). `event_transfers == 0` → 2 FT next GW; otherwise 1. No extra API call.
+`src/ft_tracker.resolve_free_transfers` is the one entry point (H2, 2026-10): a season walk over `/entry/{id}/history/` — +1 per GW, banked up to `FT_MAX` (5, `src/rules.py`), Wildcard/Free Hit weeks maintain the count, GW1 never banks. Only when that fetch fails does it fall back to the old single-GW heuristic (`event_transfers == 0` → 2, else 1). `/recommendations`, the chat context and the Chips tab all call it; never re-derive FT inline.
 
 ### Deployment
 
