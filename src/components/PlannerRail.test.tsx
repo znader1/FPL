@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { PlannerRail } from "./PlannerRail";
 
 afterEach(cleanup);
@@ -39,12 +39,20 @@ describe("PlannerRail", () => {
   });
 
   it("explains empty states", () => {
-    render(<PlannerRail chips={[]} links={[]} horizon={3} hasRecommendation={false} />);
+    render(<PlannerRail chips={[]} links={[]} horizon={3} recommendationState="loading" />);
     expect(screen.getByText(/No chip window in these gameweeks/)).toBeTruthy();
     expect(screen.getByText(/Loading your moves/)).toBeTruthy();
     cleanup();
-    render(<PlannerRail chips={[]} links={[]} horizon={3} hasRecommendation />);
+    render(<PlannerRail chips={[]} links={[]} horizon={3} recommendationState="ready" />);
     expect(screen.getByText(/Nothing beats your current 15/)).toBeTruthy();
+  });
+
+  it("says when the recommendation failed and offers a retry", () => {
+    const onRetry = vi.fn();
+    render(<PlannerRail chips={[]} links={[]} horizon={3} recommendationState="error" onRetryRecommendation={onRetry} />);
+    expect(screen.getByText(/Couldn't load your moves/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
   it("draws the five-bar FDR legend", () => {

@@ -6,8 +6,9 @@ interface PlannerRailProps {
   chips: ChipWindow[];
   links: WeakestLink[];
   horizon: number;
-  /** False while the recommendation that feeds the links is still loading. */
-  hasRecommendation?: boolean;
+  /** The recommendation feeds the links; say where it is instead of an empty list. */
+  recommendationState?: "loading" | "ready" | "error";
+  onRetryRecommendation?: () => void;
 }
 
 const Eyebrow = ({ children }: { children: React.ReactNode }) => (
@@ -15,7 +16,7 @@ const Eyebrow = ({ children }: { children: React.ReactNode }) => (
 );
 
 /** Planner right rail: chip windows inside the grid, weakest links, FDR legend. */
-export function PlannerRail({ chips, links, horizon, hasRecommendation = true }: PlannerRailProps) {
+export function PlannerRail({ chips, links, horizon, recommendationState = "ready", onRetryRecommendation }: PlannerRailProps) {
   return (
     <aside className="flex flex-col gap-4">
       <section>
@@ -44,9 +45,20 @@ export function PlannerRail({ chips, links, horizon, hasRecommendation = true }:
       <section>
         <Eyebrow>Weakest links · next {horizon} GW{horizon === 1 ? "" : "s"}</Eyebrow>
         <div className="flex flex-col gap-2">
-          {links.length === 0 && (
+          {links.length === 0 && recommendationState === "ready" && (
+            <p className="text-xs text-muted-foreground">Nothing beats your current 15 over this window.</p>
+          )}
+          {recommendationState === "loading" && (
+            <p className="text-xs text-muted-foreground">Loading your moves… the engine takes a few seconds.</p>
+          )}
+          {recommendationState === "error" && (
             <p className="text-xs text-muted-foreground">
-              {hasRecommendation ? "Nothing beats your current 15 over this window." : "Loading your moves…"}
+              Couldn't load your moves.{" "}
+              {onRetryRecommendation && (
+                <button type="button" className="underline hover:text-foreground" onClick={onRetryRecommendation}>
+                  Retry
+                </button>
+              )}
             </p>
           )}
           {links.map((l) => (

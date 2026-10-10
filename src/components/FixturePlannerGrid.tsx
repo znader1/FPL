@@ -91,10 +91,12 @@ export function FixturePlannerGrid({ rows, gws, horizon, tags }: FixturePlannerG
                     <div
                       data-testid="planner-cell"
                       className={`flex min-h-[46px] flex-col items-center justify-center gap-[3px] rounded-lg px-0.5 py-1.5 transition-opacity duration-200 ${
-                        c.blank ? "bg-fdr-4/[0.06]" : CELL_BG[fdr ?? 3]
+                        c.unknown ? "bg-muted/30" : c.blank ? "bg-fdr-4/[0.06]" : CELL_BG[fdr ?? 3]
                       } ${c.inHorizon ? "" : "opacity-30"}`}
                     >
-                      {c.blank ? (
+                      {c.unknown ? (
+                        <span className="text-[11px] text-muted-foreground" title="No fixture data for this team yet">—</span>
+                      ) : c.blank ? (
                         <span className="text-[10px] font-bold tracking-[.06em] text-fdr-4">BLANK</span>
                       ) : (
                         <>

@@ -55,6 +55,14 @@ describe("FixturePlannerGrid", () => {
     expect(within(body[2]).getByText("Bench · GKP")).toBeTruthy();
   });
 
+  it("renders an unknown cell as a muted dash, not BLANK", () => {
+    const unknown = [row({ cells: row({}).cells.map((c) => ({ ...c, blank: false, fixtures: [], count: 0, xpts: undefined, unknown: true })) })];
+    render(<FixturePlannerGrid rows={unknown} gws={[29, 30, 31]} horizon={3} tags={tags} />);
+    const cells = screen.getAllByTestId("planner-cell");
+    expect(cells.some((c) => c.textContent?.includes("BLANK"))).toBe(false);
+    expect(cells[0].textContent).toBe("—");
+  });
+
   it("dims cells past the horizon", () => {
     render(<FixturePlannerGrid rows={rows} gws={[29, 30, 31]} horizon={2} tags={tags} />);
     const cells = screen.getAllByTestId("planner-cell");

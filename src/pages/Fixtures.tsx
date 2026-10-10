@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarRange, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -149,6 +149,7 @@ const Fixtures = () => {
   const [entryId, setEntryId] = useState(getInitialEntryId);
   const { profile } = useProfile();
   const [searchParams, setSearchParams] = useSearchParams();
+  const queryClient = useQueryClient();
   const horizon = parseHorizon(searchParams.get("h"));
   const setHorizon = (h: Horizon) => {
     const next = new URLSearchParams(searchParams);
@@ -202,6 +203,12 @@ const Fixtures = () => {
     enabled: hasEntry && gw !== null && squadQuery.isSuccess,
     staleTime: 10 * 60_000,
     retry: 1,
+    // Flipping 3 ↔ 6 refires the slow call; the other horizon's answer already
+    // holds per-GW xPts for every column, so keep the cells filled meanwhile.
+    placeholderData: () => {
+      const other = HORIZONS.find((h) => h !== horizon);
+      return queryClient.getQueryData<FplTeamRecommendation>(["planner-rec", entryId, gw, other]);
+    },
   });
 
   const gws = useMemo(() => {
@@ -245,7 +252,9 @@ const Fixtures = () => {
     </ToggleGroup>
   );
 
-  const loadingSquad = hasEntry && (nextEventQuery.isPending || squadQuery.isPending);
+  // Both feeds gate the grid: squad-only would paint fifteen rows of "—".
+  const loadingGrid = hasEntry && (nextEventQuery.isPending || squadQuery.isPending || tickerQuery.isPending);
+  const recState = recQuery.isError ? "error" : recQuery.isSuccess && !recQuery.isPlaceholderData ? "ready" : "loading";
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -294,9 +303,18 @@ const Fixtures = () => {
               retrying={squadQuery.isFetching}
             />
           </div>
-        ) : loadingSquad ? (
+        ) : tickerQuery.isError ? (
+          <div className="mx-auto max-w-md">
+            <QueryErrorCard
+              title="Couldn't load fixtures"
+              message={tickerQuery.error instanceof Error ? tickerQuery.error.message : String(tickerQuery.error)}
+              onRetry={() => tickerQuery.refetch()}
+              retrying={tickerQuery.isFetching}
+            />
+          </div>
+        ) : loadingGrid ? (
           <Card className="flex items-center justify-center gap-2 p-10 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Loading your squad…
+            <Loader2 className="h-4 w-4 animate-spin" /> Loading your squad and fixtures…
           </Card>
         ) : (
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -304,12 +322,18 @@ const Fixtures = () => {
               <FixturePlannerGrid rows={rows} gws={gws} horizon={horizon} tags={tags} />
               {recQuery.isError && (
                 <p className="mt-3 text-[11px] text-muted-foreground">
-                  Per-GW xPts and weakest links need the recommendation engine, which didn't answer.{" "}
+                  Per-GW xPts and totals need the recommendation engine, which didn't answer.{" "}
                   <button type="button" className="underline" onClick={() => recQuery.refetch()}>Retry</button>
                 </p>
               )}
             </Card>
-            <PlannerRail chips={chips} links={links} horizon={horizon} hasRecommendation={recQuery.isSuccess} />
+            <PlannerRail
+              chips={chips}
+              links={links}
+              horizon={horizon}
+              recommendationState={recState}
+              onRetryRecommendation={() => recQuery.refetch()}
+            />
           </div>
         )}
 

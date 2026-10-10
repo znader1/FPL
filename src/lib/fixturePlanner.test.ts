@@ -131,6 +131,17 @@ describe("buildPlannerRows", () => {
     expect(short[1].total).toBe(15);
   });
 
+  it("marks cells unknown — not blank — when the team is missing from the ticker", () => {
+    const noLiv = { ...ticker, teams: ticker.teams.filter((t) => t.team_short !== "LIV") };
+    const rows = buildPlannerRows({ squad, ticker: noLiv, gws: [29, 30, 31], horizon: 3 });
+    const vvd = rows[2];
+    expect(vvd.cells.every((c) => c.unknown && !c.blank)).toBe(true);
+    // Without any ticker at all, everything is unknown and nothing reads as a blank GW.
+    const none = buildPlannerRows({ squad, ticker: null, gws: [29, 30, 31], horizon: 3 });
+    expect(none.flatMap((r) => r.cells).some((c) => c.blank)).toBe(false);
+    expect(columnTags({ gws: [29, 30, 31], rows: none }).map((t) => t.tag)).toEqual([null, null, null]);
+  });
+
   it("renders fixtures from the ticker alone before a recommendation lands", () => {
     const bare = buildPlannerRows({ squad, ticker, gws: [29, 30, 31], horizon: 3 });
     expect(bare[0].cells[0].fixtures[0].opponent).toBe("BHA");

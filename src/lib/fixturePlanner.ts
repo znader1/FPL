@@ -37,6 +37,9 @@ export interface PlannerCell {
   /** Per-GW xPts from the recommendation's `fixtures_horizon`; undefined until it lands. */
   xpts?: number;
   inHorizon: boolean;
+  /** No ticker row for this team (ticker missing, errored, or short-name mismatch).
+   *  Distinct from `blank`, which is a confirmed fixture-less GW. */
+  unknown?: boolean;
 }
 
 export interface PlannerRow {
@@ -57,7 +60,8 @@ const POS_ORDER: FplPosition[] = ["GKP", "DEF", "MID", "FWD"];
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
 const cellFromTicker = (gw: number, t: FixtureTickerCell | undefined, inHorizon: boolean): PlannerCell => {
-  if (!t || t.blank || t.opponents.length === 0) return { gw, blank: true, fixtures: [], count: 0, inHorizon };
+  if (!t) return { gw, blank: false, fixtures: [], count: 0, inHorizon, unknown: true };
+  if (t.blank || t.opponents.length === 0) return { gw, blank: true, fixtures: [], count: 0, inHorizon };
   return {
     gw,
     blank: false,
@@ -112,10 +116,12 @@ export function buildPlannerRows({ squad, ticker, gws, horizon, recommendation }
       const cell = cellFromTicker(gw, team?.gws[String(gw)], i < horizon);
       const h = horizonByGw.get(gw);
       if (h && typeof h.xpts === "number" && Number.isFinite(h.xpts)) cell.xpts = h.xpts;
-      // No ticker row for the team: the player's own horizon still knows the count.
-      if (!team && h && typeof h.fixture_count === "number") {
+      // No ticker row for the team: the player's own horizon still knows the count,
+      // which is enough to call the GW blank or double even without opponents.
+      if (cell.unknown && h && typeof h.fixture_count === "number") {
         cell.count = h.fixture_count;
         cell.blank = h.fixture_count === 0;
+        cell.unknown = false;
       }
       return cell;
     });
