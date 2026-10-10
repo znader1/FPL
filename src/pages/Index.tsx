@@ -640,8 +640,9 @@ const Index = () => {
         appliedTransferCount,
         chipStrategy,
         chipPlan: chipPlanQuery.data ?? null,
+        chipPlanError: chipPlanQuery.isError,
       }),
-    [activeRecommendation, appliedTransferCount, chipStrategy, chipPlanQuery.data],
+    [activeRecommendation, appliedTransferCount, chipStrategy, chipPlanQuery.data, chipPlanQuery.isError],
   );
   const verdictDetail = activeRecommendation?.transfer_plan_horizon?.verdict_detail;
   const freeTransfers =
@@ -716,7 +717,7 @@ const Index = () => {
         <div className="hidden lg:flex shrink-0">
           <CommandRail
             decisions={weekDecisions}
-            gw={planGw}
+            gw={activeRecommendation?.event_id ?? planGw}
             projected={projected}
             delta={projectedDelta}
             percentile={activeRecommendation?.projected_percentile ?? undefined}

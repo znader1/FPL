@@ -22,6 +22,8 @@ export interface WeekDecisionInput {
   appliedTransferCount: number;
   chipStrategy: FplChipStrategy;
   chipPlan?: ChipPlanResponse | null;
+  /** `/chips/plan` failed — say so rather than "waiting" forever. */
+  chipPlanError?: boolean;
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
@@ -69,10 +71,10 @@ function benchRow(rec: FplTeamRecommendation | undefined): WeekDecision {
   return row(gk ? `${firstSub.web_name} first sub · ${gk.web_name} covers GK` : `${firstSub.web_name} first sub`, true);
 }
 
-function chipRow(chipStrategy: FplChipStrategy, plan: ChipPlanResponse | null | undefined): WeekDecision {
+function chipRow(chipStrategy: FplChipStrategy, plan: ChipPlanResponse | null | undefined, planError: boolean): WeekDecision {
   const row = (value: string, done: boolean): WeekDecision => ({ key: "chip", label: "Chip", value, done });
   if (chipStrategy !== "none") return row(`${CHIP_LABELS[chipStrategy]} this week`, true);
-  if (!plan) return row("Waiting for the chip plan", false);
+  if (!plan) return row(planError ? "Chip plan unavailable · pick one in Parameters" : "Waiting for the chip plan", false);
   if (plan.nudge) {
     return row(`${CHIP_LABELS[plan.nudge.chip]} nudge for GW${plan.nudge.event_id} · ${fmtGain(plan.nudge.ev_gain)} xPts`, false);
   }
@@ -86,6 +88,6 @@ export function deriveWeekDecisions(input: WeekDecisionInput): WeekDecision[] {
     transfersRow(input.recommendation, input.appliedTransferCount),
     captainRow(input.recommendation),
     benchRow(input.recommendation),
-    chipRow(input.chipStrategy, input.chipPlan),
+    chipRow(input.chipStrategy, input.chipPlan, Boolean(input.chipPlanError)),
   ];
 }

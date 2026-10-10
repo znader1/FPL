@@ -119,6 +119,12 @@ describe("deriveWeekDecisions", () => {
     expect(none.chip.value).toBe("Save · no chip window ahead");
   });
 
+  it("chip: a failed plan says so instead of waiting forever", () => {
+    const d = byKey({ ...base, chipPlanError: true });
+    expect(d.chip.done).toBe(false);
+    expect(d.chip.value).toBe("Chip plan unavailable · pick one in Parameters");
+  });
+
   it("chip: no plan yet stays pending", () => {
     expect(byKey(base).chip.done).toBe(false);
     expect(byKey(base).chip.value).toBe("Waiting for the chip plan");

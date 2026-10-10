@@ -101,8 +101,11 @@ export function Navbar({ extras }: NavbarProps = {}) {
                 </nav>
               )}
               {isApp && (
-                <div className="hidden sm:flex items-center gap-4 text-xs text-muted-foreground">
-                  {extras}
+                // Stats need the room only lg+ has; at md the tab strip plus the
+                // pill plus Sign out already fill the 56px row. Phones get neither
+                // — the drawer and the GW bar carry the same facts.
+                <div className="hidden md:flex items-center gap-4 text-xs text-muted-foreground">
+                  <div className="hidden lg:flex items-center gap-4">{extras}</div>
                   <DeadlineCountdown />
                 </div>
               )}
