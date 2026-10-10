@@ -19,9 +19,10 @@ const landingLinks = [
 
 const appLinks = [
   { label: "Squad", to: "/app" },
-  { label: "Draft squad", to: "/app/squad-picker" },
-  { label: "Mini-league", to: "/app/league" },
+  { label: "Captain", to: "/app/captain" },
   { label: "Planner", to: "/app/fixtures" },
+  { label: "Mini-league", to: "/app/league" },
+  { label: "Draft squad", to: "/app/squad-picker" },
 ];
 
 interface NavbarProps {

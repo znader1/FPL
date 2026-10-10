@@ -13,6 +13,7 @@ import Auth from "./pages/Auth";
 import Index from "./pages/Index";
 import League from "./pages/League";
 import Fixtures from "./pages/Fixtures";
+import CaptainLab from "./pages/CaptainLab";
 import NotFound from "./pages/NotFound";
 import AuthConfirm from "./pages/AuthConfirm";
 import Privacy from "./pages/Privacy";
@@ -59,6 +60,7 @@ const App = () => (
               <Route path="/login" element={<Auth />} />
               <Route path="/signup" element={<Auth />} />
               <Route path="/app" element={<ProtectedRoute><Index /></ProtectedRoute>} />
+              <Route path="/app/captain" element={<ProtectedRoute><CaptainLab /></ProtectedRoute>} />
               <Route path="/app/league" element={<ProtectedRoute><League /></ProtectedRoute>} />
               <Route path="/app/fixtures" element={<ProtectedRoute><Fixtures /></ProtectedRoute>} />
               {import.meta.env.DEV && import.meta.env.VITE_REPLAY_MODE === "1" && (

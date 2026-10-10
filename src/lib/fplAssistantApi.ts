@@ -27,6 +27,15 @@ export interface FplTeamRecommendationPlayer {
   photo_url?: string;
   alerts?: FplPlayerAlert[];
   score_breakdown?: FplPlayerScoreBreakdown;
+  /** Captain Lab (2026-10 handoff). None are emitted by today's backend; the
+   *  page falls back to `score_breakdown.distribution` for the range and to the
+   *  suggested captain for both goals when ownership data is absent. */
+  xpts_p10?: number | null;
+  xpts_p90?: number | null;
+  /** Effective ownership in the top 10k, percent (can exceed 100 with captaincy). */
+  eo_top10k?: number | null;
+  /** Estimated ranks gained if the player hauls. */
+  rank_gain_if_haul?: number | null;
 }
 
 export interface FplFixturesHorizonItem {
