@@ -300,6 +300,8 @@ export interface FplEntryHistory {
   event_transfers?: number;
   event_transfers_cost?: number;
   points_on_bench?: number;
+  /** In the bank, £m. Not emitted by today's backend; the navbar shows it only when present. */
+  bank?: number | null;
 }
 
 /**
@@ -438,6 +440,11 @@ export interface FplTeamRecommendation extends FplSquad {
   captain_player_id: number;
   vice_player_id: number;
   projected_points_with_captain: number;
+  /** Command Center benchmarks (2026-10 handoff). None are emitted by today's
+   *  backend; the projected card renders its ring and bars only when present. */
+  projected_percentile?: number | null;
+  projected_top10k_avg?: number | null;
+  projected_overall_avg?: number | null;
   chip_strategy?: FplChipStrategySummary;
   transfers?: FplTransfersRecommendation;
   transfer_plan_horizon?: FplTransferPlanHorizon;

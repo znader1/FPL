@@ -48,6 +48,13 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        fdr: {
+          1: "hsl(var(--fdr-1))",
+          2: "hsl(var(--fdr-2))",
+          3: "hsl(var(--fdr-3))",
+          4: "hsl(var(--fdr-4))",
+          5: "hsl(var(--fdr-5))",
+        },
         pitch: {
           DEFAULT: "hsl(var(--pitch))",
           dark: "hsl(var(--pitch-dark))",

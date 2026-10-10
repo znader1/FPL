@@ -593,7 +593,7 @@ export const RecommendationsPanel = ({
   return (
     <aside
       className={`w-full shrink-0 bg-card border-t lg:border-t-0 lg:border-l border-border flex flex-col transition-[width] duration-200 ${
-        hasContent ? "lg:w-[380px] xl:w-[440px]" : "lg:w-[248px] xl:w-[280px]"
+        hasContent ? "lg:w-[340px]" : "lg:w-[248px] xl:w-[280px]"
       }`}
     >
       {/* Tab bar */}

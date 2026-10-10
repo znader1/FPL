@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ParameterSidebar } from "@/components/ParameterSidebar";
+import { CommandRail } from "@/components/CommandRail";
+import { WeekChecklist } from "@/components/WeekChecklist";
+import { deriveWeekDecisions } from "@/lib/weekDecisions";
 import { MobileParameterDrawer } from "@/components/MobileParameterDrawer";
 import { PitchVisualization } from "@/components/PitchVisualization";
 import { RecommendationsPanel } from "@/components/RecommendationsPanel";
@@ -629,6 +631,39 @@ const Index = () => {
     recommendErrorMessage,
   };
 
+  // The Command Center's four weekly decisions, derived — never stored — from
+  // the active recommendation step, the chip choice and the chip plan.
+  const weekDecisions = useMemo(
+    () =>
+      deriveWeekDecisions({
+        recommendation: activeRecommendation,
+        appliedTransferCount,
+        chipStrategy,
+        chipPlan: chipPlanQuery.data ?? null,
+      }),
+    [activeRecommendation, appliedTransferCount, chipStrategy, chipPlanQuery.data],
+  );
+  const verdictDetail = activeRecommendation?.transfer_plan_horizon?.verdict_detail;
+  const freeTransfers =
+    verdictDetail?.ft_before ??
+    activeRecommendation?.transfer_plan_horizon?.start_free_transfers ??
+    activeRecommendation?.transfers?.transfer_plan?.free_transfers;
+  const bank = squadQuery.data?.entry_history?.bank;
+  const projected = activeRecommendation?.projected_points_with_captain;
+  const projectedDelta =
+    appliedTransferCount > 0 ? activeRecommendation?.transfer_impact?.delta_projected_points_with_captain : undefined;
+  const navbarStats =
+    typeof bank === "number" || typeof freeTransfers === "number" ? (
+      <>
+        {typeof bank === "number" && (
+          <span className="whitespace-nowrap">Bank <b className="font-semibold text-foreground">£{bank.toFixed(1)}m</b></span>
+        )}
+        {typeof freeTransfers === "number" && (
+          <span className="whitespace-nowrap">FT <b className="font-semibold text-foreground">{freeTransfers}</b></span>
+        )}
+      </>
+    ) : undefined;
+
   const handleEntryIdSubmit = async (raw: string): Promise<string | null> => {
     const id = parseEntryIdInput(raw);
     if (id === null) {
@@ -655,7 +690,7 @@ const Index = () => {
 
   return (
     <div className="flex flex-col h-screen bg-background">
-      <Navbar />
+      <Navbar extras={navbarStats} />
       <div className="flex flex-1 min-h-0 pt-14 flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
       {gwGateState === "error" ? (
         // A failed /events/next used to fall through to the "Loading…" branch
@@ -679,7 +714,16 @@ const Index = () => {
         <>
       {isDesktop ? (
         <div className="hidden lg:flex shrink-0">
-          <ParameterSidebar {...parameterProps} />
+          <CommandRail
+            decisions={weekDecisions}
+            gw={planGw}
+            projected={projected}
+            delta={projectedDelta}
+            percentile={activeRecommendation?.projected_percentile ?? undefined}
+            top10kAvg={activeRecommendation?.projected_top10k_avg ?? undefined}
+            overallAvg={activeRecommendation?.projected_overall_avg ?? undefined}
+            parameters={parameterProps}
+          />
         </div>
       ) : (
         <>
@@ -731,6 +775,12 @@ const Index = () => {
         // stacks vertically and a collapsed-height column makes the pitch
         // overlap its siblings.
         <div className="flex flex-col lg:flex-1 lg:min-w-0 lg:min-h-0">
+        {/* Phones get the checklist as a strip above the pitch; the rail is lg+. */}
+        {!isDesktop && entryId > 0 && (
+          <div className="mx-auto w-full max-w-5xl px-4 pt-4 lg:hidden">
+            <WeekChecklist decisions={weekDecisions} compact />
+          </div>
+        )}
         {identityCheck.status === "rolled-over" && (
           <div className="mx-auto w-full max-w-5xl px-4 pt-4">
             <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">

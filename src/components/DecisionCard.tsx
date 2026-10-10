@@ -22,15 +22,8 @@ const TONE: Record<Verdict, string> = {
   spend_forced_injury: "border-destructive/30 bg-destructive/[0.08] text-destructive",
 };
 
-/** `+0.9` / `−1.3`; one decimal, typographic minus. */
-export const fmtGain = (n: number) => `${n < 0 ? "−" : "+"}${Math.abs(n).toFixed(1)}`;
-
-/** `GW5–7`, `GW5`, or `the horizon` when unknown. */
-export const gwRange = (h: { start_gw: number | null; end_gw: number | null }) => {
-  if (h.start_gw == null) return "the horizon";
-  if (h.end_gw == null || h.end_gw === h.start_gw) return `GW${h.start_gw}`;
-  return `GW${h.start_gw}–${h.end_gw}`;
-};
+import { fmtGain, gwRange } from "@/lib/format";
+export { fmtGain, gwRange };
 
 /** `gwRange`, wrapped so it never wraps mid-string at phone width. */
 function GwRange({ h }: { h: { start_gw: number | null; end_gw: number | null } }) {
