@@ -1,4 +1,6 @@
+import type { ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import { DeadlineCountdown } from "./DeadlineCountdown";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -22,7 +24,12 @@ const appLinks = [
   { label: "Fixtures", to: "/app/fixtures" },
 ];
 
-export function Navbar() {
+interface NavbarProps {
+  /** Page-specific stats shown left of the deadline pill on app routes (e.g. Bank · FT). */
+  extras?: ReactNode;
+}
+
+export function Navbar({ extras }: NavbarProps = {}) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
@@ -72,16 +79,31 @@ export function Navbar() {
                 </Link>
               )}
               {isApp && (
-                <div className="hidden md:flex items-center gap-2">
-                  {appLinks
-                    .filter((l) => l.to !== pathname)
-                    .map((l) => (
-                      <Link key={l.to} to={l.to}>
-                        <Button variant="ghost" size="sm" className="text-white/70 hover:text-white">
-                          {l.label}
-                        </Button>
+                // The active page stays visible and lit instead of being filtered
+                // out — the handoff's tab strip, and the only cue for which hub you're in.
+                <nav data-testid="app-tabs" className="hidden md:flex items-center gap-1">
+                  {appLinks.map((l) => {
+                    const active = l.to === pathname;
+                    return (
+                      <Link
+                        key={l.to}
+                        to={l.to}
+                        aria-current={active ? "page" : undefined}
+                        className={cn(
+                          "rounded-lg px-2.5 py-1.5 text-[13px] font-semibold transition-colors",
+                          active ? "bg-white/[0.06] text-white" : "text-white/55 hover:text-white",
+                        )}
+                      >
+                        {l.label}
                       </Link>
-                    ))}
+                    );
+                  })}
+                </nav>
+              )}
+              {isApp && (
+                <div className="hidden sm:flex items-center gap-4 text-xs text-muted-foreground">
+                  {extras}
+                  <DeadlineCountdown />
                 </div>
               )}
               {isApp && (

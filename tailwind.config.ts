@@ -86,10 +86,16 @@ export default {
             height: "0",
           },
         },
+        // Deadline pill dot (design handoff 2026-10: 1.6s, standard ease, no bounce).
+        "fpl-pulse": {
+          "0%, 100%": { opacity: "1", transform: "scale(1)" },
+          "50%": { opacity: "0.4", transform: "scale(0.8)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        "fpl-pulse": "fpl-pulse 1.6s cubic-bezier(0.4, 0, 0.2, 1) infinite",
       },
     },
   },
