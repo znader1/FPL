@@ -67,6 +67,10 @@ describe("Captain Lab page", () => {
     renderPage();
     expect(await screen.findByText("Captain Saka to climb the ranks.")).toBeTruthy();
     expect(screen.getByText("Step 2 of 4 · Captain")).toBeTruthy();
+    // The stepper lives in the page, not the navbar (no room beside five tabs + pill).
+    const stepper = screen.getByRole("list", { name: "Gameweek steps" });
+    expect(stepper.closest("header")).toBeNull();
+    expect(stepper.querySelector('[aria-current="step"]')?.textContent).toContain("Captain");
     expect(screen.getAllByTestId("captain-card")).toHaveLength(3);
     expect(screen.getByTestId("footer-captain").textContent).toBe("Saka (C)");
     expect(screen.getByTestId("footer-vice").textContent).toBe("Haaland (VC)");

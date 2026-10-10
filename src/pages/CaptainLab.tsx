@@ -143,14 +143,19 @@ const CaptainLab = () => {
 
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
-      <Navbar extras={<Stepper transfersDone={Boolean(verdict)} />} />
-      <main className="relative flex-1 overflow-hidden px-6 pt-[92px] sm:px-12">
+      <Navbar />
+      <main className="relative flex-1 overflow-hidden px-6 pb-10 pt-[76px] sm:px-12">
         {/* Hero glow: 700×500 primary/22 blurred 120, top centre. */}
         <div
           aria-hidden
           className="pointer-events-none absolute left-1/2 top-[-260px] h-[500px] w-[700px] -translate-x-1/2 rounded-full bg-primary/[0.22] blur-[120px]"
         />
         <div className="relative mx-auto max-w-[1184px]">
+          {/* The mock put the stepper in the navbar, which had no tab strip; ours does,
+              so the steps lead the page instead. */}
+          <div className="mb-6 overflow-x-auto">
+            <Stepper transfersDone={Boolean(verdict)} />
+          </div>
           <div className="mb-7 flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
             <div>
               <p className="mb-2 text-[11px] font-semibold uppercase tracking-[.08em] text-primary">Step 2 of 4 · Captain</p>

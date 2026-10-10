@@ -102,6 +102,9 @@ export function buildCaptainLab(rec: FplTeamRecommendation, goal: CaptainGoal, m
   const hasOverall = candidates.some((c) => typeof c.ownershipPct === "number");
   const ownershipBasis: CaptainLab["ownershipBasis"] = hasTop10k ? "top10k" : hasOverall ? "overall" : null;
   const rankAware = ownershipBasis !== null;
+  // The backend's total doubles its own suggested captain, who may sit outside
+  // the top three (DGW logic server-side) — look across the whole XI for him.
+  const suggestedPlayer = rec.starting_xi.find((p) => p.is_captain_suggested);
   const suggested = candidates.find((c) => c.suggested) ?? candidates[0];
   const fallback = suggested ?? null;
   const own = (c: CaptainCandidate) => (ownershipBasis === "top10k" ? c.eoTop10k : c.ownershipPct);
@@ -155,7 +158,9 @@ export function buildCaptainLab(rec: FplTeamRecommendation, goal: CaptainGoal, m
   // The backend's total assumes its own suggested captain doubled; swap in ours.
   const base = rec.projected_points_with_captain;
   const projected =
-    captain && suggested && captain.id !== suggested.id ? round1(base - suggested.xpts + captain.xpts) : base;
+    captain && suggestedPlayer && captain.id !== suggestedPlayer.player_id
+      ? round1(base - suggestedPlayer.xpts + captain.xpts)
+      : base;
 
   return { candidates, znPickId, captainId, viceId, headline, subcopy, rankAware, ownershipBasis, projected };
 }

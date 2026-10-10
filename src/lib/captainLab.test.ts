@@ -87,6 +87,17 @@ describe("buildCaptainLab", () => {
     expect(run("chase").ownershipBasis).toBe("top10k");
   });
 
+  it("re-bases against the suggested captain even when he isn't a candidate", () => {
+    // Suggested captain is the 4th-highest xPts starter (odd but possible: DGW logic server-side).
+    const r = rec([
+      p(1, "Haaland", "MCI", 8.6), p(2, "Saka", "ARS", 7.4), p(3, "Palmer", "CHE", 6.9),
+      p(4, "Watkins", "AVL", 6.1, { is_captain_suggested: true }),
+    ]);
+    const lab = run("chase", 1, r);
+    expect(lab.projected).toBeCloseTo(66 - 6.1 + 8.6, 5);
+    expect(lab.znPickId).toBe(1); // no ownership data: highest xPts candidate
+  });
+
   it("flags a large rank gain", () => {
     const lab = run("chase");
     expect(lab.candidates.map((c) => c.bigGain)).toEqual([false, true, true]);

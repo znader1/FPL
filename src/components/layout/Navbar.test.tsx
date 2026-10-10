@@ -41,6 +41,14 @@ describe("Navbar on app routes", () => {
   });
 });
 
+describe("Navbar tab strip", () => {
+  it("keeps the secondary Draft squad tab off the strip below lg", () => {
+    renderAt("/app");
+    const draft = screen.getByTestId("app-tabs").querySelector('a[href="/app/squad-picker"]');
+    expect(draft?.className).toContain("hidden lg:inline-flex");
+  });
+});
+
 describe("Navbar on the landing page", () => {
   it("renders no deadline pill", () => {
     renderAt("/");
