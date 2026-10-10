@@ -160,6 +160,15 @@ def decorate_projection_record(record, gws, chip_strategy="none", objective_scor
 
     record["fixtures_horizon"] = fixtures_h
     record["next_fixtures"] = fixtures_h[0]["fixtures"] if fixtures_h else ""
+    # Captain Lab (frontend handoff 1b). The distribution's 80% band is the
+    # 10th-90th percentile pair, so these alias it under the names the UI reads.
+    # Ownership is FPL's overall selected_by_percent, not top-10k EO -- the
+    # frontend labels it accordingly. eo_top10k / rank_gain_if_haul stay absent
+    # until there is a real source for them.
+    record["xpts_p10"] = safe_int(record.get("p80_low"))
+    record["xpts_p90"] = safe_int(record.get("p80_high"))
+    _own = safe_float(record.get("selected_by_percent"), default=None)
+    record["ownership_pct"] = round(float(_own), 1) if _own is not None else None
     record["alerts"] = _build_player_alerts(record, optimize_event_id=optimize_event_id)
     record["score_breakdown"] = _build_score_breakdown(record, chip_strategy=chip_strategy, objective_score_col=objective_score_col)
     return record
@@ -170,6 +179,7 @@ def _lineup_projection_cols(proj_all, gws):
     for c in [
         "xpts_horizon", "status", "chance_of_playing_next_round",
         "event_points", "total_points", "form",
+        "selected_by_percent", "p80_low", "p80_high",
         "wildcard_score", "wildcard_weighted_xpts", "wildcard_future_dgw_bonus",
         "wildcard_captaincy_bonus", "wildcard_form_bonus", "wildcard_ownership_bonus",
         "baseline_long_term_xpts", "baseline_recent_gw_xpts", "baseline_blended_xpts", "baseline_gw1_xpts",
