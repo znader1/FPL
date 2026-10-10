@@ -212,8 +212,22 @@ def pack_lineup_records(
     el_img = el_img[cols].rename(columns={"id": "player_id"})
 
     proj_small = proj_all[_lineup_projection_cols(proj_all, gws)].copy().rename(columns={"id": "player_id"})
-    starting = starting_df.merge(el_img, on="player_id", how="left").merge(proj_small, on="player_id", how="left")
-    bench = bench_df.merge(el_img, on="player_id", how="left").merge(proj_small, on="player_id", how="left")
+
+    def _with_projections(df):
+        # The lineup frame may already carry some of the incoming columns (team,
+        # status, selected_by_percent, the distribution band). A plain merge would
+        # suffix both copies _x/_y and record.get("p80_low") would then see
+        # nothing -- prefer the incoming copy and drop the lineup frame's.
+        incoming = set(el_img.columns) | set(proj_small.columns)
+        overlap = [c for c in df.columns if c != "player_id" and c in incoming]
+        return (
+            df.drop(columns=overlap)
+            .merge(el_img, on="player_id", how="left")
+            .merge(proj_small, on="player_id", how="left")
+        )
+
+    starting = _with_projections(starting_df)
+    bench = _with_projections(bench_df)
     starting_records = attach_media(df_records(starting), teams_code)
     bench_records = attach_media(df_records(bench), teams_code)
 
