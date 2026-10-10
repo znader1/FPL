@@ -18,7 +18,7 @@ import { JerseyIcon } from "./JerseyIcon";
 import { ExplanationPanel } from "./ExplanationPanel";
 import { AiAdvisorPanel } from "./AiAdvisorPanel";
 import { ChipRoadmapPanel } from "./ChipRoadmapPanel";
-import { CHIP_LABELS, type ChipName, type ChipPlanResponse, type FplSquad, type FplTeamRecommendation, type FplTransferPlanHorizon } from "@/lib/fplAssistantApi";
+import { CHIP_LABELS, type ChipName, type ChipPlanResponse, type FplSquad, type FplTeamRecommendation, type FplTransferMove, type FplTransferPlanHorizon } from "@/lib/fplAssistantApi";
 
 interface RecommendationsPanelProps {
   squad?: FplSquad;
@@ -280,11 +280,20 @@ function TransfersTab({
     );
   }
 
+  // Seller-side horizon xPts for the move cards' comparison bars. Only squad
+  // players carry a breakdown, which is all the cards need: buyer = seller + gain.
+  const horizonXptsById: Record<number, number> = {};
+  for (const p of [...recommendation.starting_xi, ...recommendation.bench]) {
+    const h = p.score_breakdown?.horizon_xpts;
+    if (typeof h === "number" && Number.isFinite(h)) horizonXptsById[p.player_id] = h;
+  }
+
   return (
     <div className="space-y-4">
       <TransferPlanner
         transfers={recommendation.transfers}
         isLoading={isRecommending}
+        horizonGws={recommendation.horizon_gws}
         planSlot={
           <HorizonTransferPlan
             plan={recommendation.transfer_plan_horizon}
@@ -292,6 +301,8 @@ function TransfersTab({
             isApplying={isApplyingTransfer}
             onApplyTransferAtIndex={onApplyTransferAtIndex}
             onResetAppliedTransfers={onResetAppliedTransfers}
+            horizonXptsById={horizonXptsById}
+            beamMoves={recommendation.transfers?.moves}
           />
         }
       />
@@ -306,12 +317,16 @@ export function HorizonTransferPlan({
   isApplying,
   onApplyTransferAtIndex,
   onResetAppliedTransfers,
+  horizonXptsById,
+  beamMoves,
 }: {
   plan?: FplTransferPlanHorizon;
   appliedTransferCount?: number;
   isApplying?: boolean;
   onApplyTransferAtIndex?: (index: number) => void;
   onResetAppliedTransfers?: () => void;
+  horizonXptsById?: Record<number, number>;
+  beamMoves?: FplTransferMove[];
 }) {
   const verdictBanner = plan?.verdict ? (
     <DecisionCard
@@ -320,6 +335,8 @@ export function HorizonTransferPlan({
       isApplying={isApplying}
       onApplyTransferAtIndex={onApplyTransferAtIndex}
       onResetAppliedTransfers={onResetAppliedTransfers}
+      horizonXptsById={horizonXptsById}
+      beamMoves={beamMoves}
     />
   ) : null;
   if (!plan?.plan?.length) return verdictBanner;

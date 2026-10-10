@@ -27,8 +27,16 @@ const transfers = {
 describe("TransferPlanner shell", () => {
   it("renders the title and the given plan slot", () => {
     render(<TransferPlanner transfers={transfers} planSlot={<div data-testid="plan-slot">PLAN</div>} />);
-    expect(screen.getByText("Transfer Planner")).toBeTruthy();
+    expect(screen.getByText("Transfer moves")).toBeTruthy();
     expect(screen.getByTestId("plan-slot")).toBeTruthy();
+  });
+
+  it("explains the ranking against the plan horizon", () => {
+    render(<TransferPlanner transfers={transfers} horizonGws={3} planSlot={<div>PLAN</div>} />);
+    expect(screen.getByText("Ranked by xPts gained over the next 3 GWs, after the cost of any hit.")).toBeTruthy();
+    cleanup();
+    render(<TransferPlanner transfers={transfers} horizonGws={1} planSlot={<div>PLAN</div>} />);
+    expect(screen.getByText("Ranked by xPts gained this GW, after the cost of any hit.")).toBeTruthy();
   });
 
   it("renders no details, no Hot Targets, and no jersey icon when a plan slot is given", () => {

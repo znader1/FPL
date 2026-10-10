@@ -280,7 +280,7 @@ describe("RecommendationsPanel transfers tab wiring", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /transfers/i }));
-    fireEvent.click(screen.getByRole("button", { name: /^apply$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /apply this move/i }));
     expect(onApply).toHaveBeenCalledWith(0);
   });
 });
