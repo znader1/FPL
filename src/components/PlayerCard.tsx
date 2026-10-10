@@ -38,7 +38,7 @@ interface PlayerCardProps {
 
 /** Aura diameter in px: 30 + xPts × 11 (handoff spec), so a 2-pointer barely glows
  *  and an 8-pointer floods the row. */
-export const auraSizePx = (xpts: number) => Math.round(30 + Math.max(0, xpts) * 11);
+const auraSizePx = (xpts: number) => Math.round(30 + Math.max(0, xpts) * 11);
 
 const formatPoints = (points: number) => {
   if (!Number.isFinite(points)) return "—";

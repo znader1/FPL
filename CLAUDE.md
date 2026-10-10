@@ -8,10 +8,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm install        # install dependencies
 npm run dev        # dev server on :8080
 npm run build      # production build (also type-checks)
+npm run typecheck  # tsc only, no bundle
 npm run lint       # ESLint
+npm test           # vitest run (whole suite)
+npx vitest run src/components/DecisionCard.test.tsx   # single file
+npx vitest run -t "runner-ups"                        # tests matching a name
 ```
 
-No test suite currently exists.
+Tests are Vitest + Testing Library, colocated as `*.test.ts(x)` (plus `src/lib/__tests__/`). Default environment is node — component tests opt into the DOM with a `// @vitest-environment jsdom` pragma on line 1. `vitest.config.ts` restricts `include` to `src/**` because stale `.claude/worktrees/*` checkouts were once collected; keep that.
+
+Other in-repo context: `BACKLOG.md` (prioritised bugs/features), `docs/superpowers/{specs,plans}/` (design docs per feature), `.claude/skills/frontend-design`.
 
 ## Environment
 
@@ -23,7 +29,11 @@ VITE_SUPABASE_PUBLISHABLE_KEY=...
 VITE_FPL_API_BASE_URL=http://localhost:8000   # points to FastAPI backend
 ```
 
-The Vite dev server proxies `/squad`, `/recommendations`, `/fixtures` to `VITE_FPL_API_BASE_URL` (see `vite.config.ts`), so relative URL templates work in dev without CORS issues. In production, `VITE_FPL_API_BASE_URL` must be set to the Fly.io backend URL.
+The Vite dev server proxies `/squad`, `/recommendations`, `/fixtures`, `/chips` to `VITE_FPL_API_BASE_URL` (falling back to `https://fpl-assistant-api.fly.dev/`; see `vite.config.ts`), so relative URL templates work in dev without CORS issues. The `/squad` proxy bypasses `Accept: text/html` navigations so the dev SPA page at `/squad` still loads. In production, `VITE_FPL_API_BASE_URL` must be set to the Fly.io backend URL.
+
+Endpoint URLs are resolved in `fplAssistantApi.ts` via `getEnvString()` (dynamic `import.meta.env[key]` lookup — grepping `import.meta.env.VITE_FPL_` finds nothing). Each `VITE_FPL_*_URL` template is optional and defaults to the backend route; `VITE_FPL_RECOMMENDATION_URL` and the older `VITE_FPL_TEAM_RECOMMENDATION_URL` are both accepted.
+
+Dev-only flags (never set in production): `VITE_REPLAY_MODE=1` (+ `VITE_REPLAY_ENTRY_ID`) enables `/replay`; `VITE_SQUAD_PICKER=1` enables the old `/squad` bookmark. Both routes are also gated on `import.meta.env.DEV`, so they drop out of production bundles regardless of `.env`.
 
 ## Architecture
 
@@ -43,18 +53,25 @@ Index.tsx (state + TanStack Query)
 
 ### Auth
 
-Supabase handles auth. `AuthContext` (`src/contexts/AuthContext.tsx`) exposes `session`, `user`, `loading`, `signOut` via `useAuth()`. `ProtectedRoute` (`src/components/ProtectedRoute.tsx`) redirects unauthenticated users to `/login`. Both `/app` and `/app/league` are wrapped with `ProtectedRoute` in `App.tsx`.
+Supabase handles auth. `AuthContext` (`src/contexts/AuthContext.tsx`) exposes `session`, `user`, `loading`, `signOut` via `useAuth()`. `ProtectedRoute` (`src/components/ProtectedRoute.tsx`) redirects unauthenticated users to `/auth`, carrying `state.from` so deep links survive sign-in. All `/app/*` routes are wrapped with it in `App.tsx`.
+
+The backend verifies the Supabase JWT, so API calls go through `authFetch` (`src/lib/authFetch.ts`), never bare `fetch`: it attaches `Authorization: Bearer <access_token>` and throws `UnauthorizedError` on 401. The `QueryClient` in `App.tsx` retries twice with backoff (Fly cold starts) but never retries `isUnauthorized(error)`.
+
+`useProfile` (`src/hooks/useProfile.ts`) loads the user's `profiles` row (linked FPL entry id + identity snapshot + `plan` tier). `plan` is read-only on the client (locked by migration `supabase/migrations/*_lock_plan_column.sql`). Feature gating goes through `useEntitlement` / `computeEntitlements` (`src/lib/entitlements.ts`) — components read boolean flags, never plan strings. `BETA_ALL_ACCESS = true` currently grants everything.
 
 ### Pages
 
-- `/` — Landing
-- `/auth` — Login/signup (Supabase)
-- `/app` — Main squad + recommendations (desktop-first layout, not yet mobile-optimised)
+- `/` — Landing; `/privacy`, `/terms`
+- `/auth` — Login/signup (Supabase); `/auth/confirm` email confirmation; `/login`, `/signup` are legacy aliases
+- `/app` — Main squad + recommendations (`Index.tsx`)
 - `/app/league` — Mini-league strategy (mobile-friendly)
+- `/app/fixtures` — Fixture difficulty
+- `/app/squad-picker` — Squad picker (lazy-loaded)
+- `/replay` — dev-only GW replay (see Environment)
 
 ### Key components
 
-- `src/pages/Index.tsx` — owns all state (entryId, GW, chip strategy, applied transfers). Orchestrates TanStack Query for squad, fixtures, next event, and recommendations.
+- `src/pages/Index.tsx` — owns all state (entryId, GW, chip strategy, applied transfers). Orchestrates TanStack Query for squad, fixtures, next event, and recommendations. User settings persist to `localStorage` under `fpl_*` keys (`fpl_entry_id`, `fpl_selected_gw`, `fpl_chip_strategy`, `fpl_horizon_gws`, …) read/written here; `League.tsx` shares `fpl_entry_id`.
 - `src/lib/fplAssistantApi.ts` — all API types and fetch functions. Add new endpoints here.
 - `src/components/RecommendationsPanel.tsx` — tabbed panel (summary / transfers / watchlist) + `ExplanationPanel` (Phase 1 LLM rationale, lazy-loads on expand).
 - `src/components/ExplanationPanel.tsx` — calls `POST /explain` on first open, caches in component state.
@@ -63,7 +80,9 @@ Supabase handles auth. `AuthContext` (`src/contexts/AuthContext.tsx`) exposes `s
 
 ### GW selection and flash prevention
 
-`selectedGW` and `squadGW` are typed `number | null`. `getInitialGw()` returns `null` on first load — **do not default to `SAMPLE_SQUAD.event_id`**, that causes a flash of old squad data. All squad/fixtures queries are disabled while `selectedGW === null`. A `useEffect` sets the live GW (`nextEventId - 1`) once `nextEventQuery` resolves — this is the "open on live scores" behaviour. The entire pitch is gated behind `gwResolved = selectedGW !== null`.
+`selectedGW` and `squadGW` are typed `number | null`. `getInitialGw()` returns `null` on first load — **do not default to `SAMPLE_SQUAD.event_id`**, that causes a flash of old squad data. All squad/fixtures queries are disabled while `selectedGW === null`. A `useEffect` sets the live GW (`nextEventId - 1`) once `nextEventQuery` resolves — this is the "open on live scores" behaviour. The entire pitch is gated behind `gwResolved = selectedGW !== null`; `resolveGwGateState()` (`src/lib/gwGate.ts`) decides ready/loading/error before that, so a failed `/events/next` shows a retry card instead of wedging on "Loading…".
+
+GW state is **never** mutated from a response. `/squad` can return a different `event_id` than requested (backend substitutes the nearest available picks); render that squad with the informational banner, don't adopt its `event_id` into `squadGW`/`selectedGW`.
 
 ### Tab names
 
@@ -109,4 +128,7 @@ For feature branch testing, create a Vercel preview environment variable pointin
 | `GET /league/list` | League.tsx |
 | `POST /league/strategy` | League.tsx |
 | `GET /chips/plan` | Index.tsx chip plan query (Chips tab + nudge card) |
+| `GET /entry/identity` | entry-id linking (manager/team name snapshot) |
+| `POST /squad/optimize` | OptimizeSquadDialog |
+| `GET /fixtures/difficulty` | Fixtures.tsx |
 | `POST /chat`, `POST /chat/{captain,transfer,chip}` | AiAdvisorPanel |
