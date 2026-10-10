@@ -88,3 +88,34 @@ describe("hover card information order", () => {
     expect(details === null || (details as HTMLDetailsElement).open === false).toBe(true);
   });
 });
+
+describe("xPts aura (Command Center)", () => {
+  it("renders no aura by default", () => {
+    renderCard();
+    expect(screen.queryByTestId("xpts-aura")).toBeNull();
+  });
+
+  it("sizes the aura to 30 + xPts × 11 px, centred on the jersey", () => {
+    renderCard({ aura: true, points: 6.4 });
+    const aura = screen.getByTestId("xpts-aura") as HTMLElement;
+    expect(aura.style.width).toBe("100px");
+    expect(aura.style.height).toBe("100px");
+    expect(aura.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("uses the projection, not the live score, for the aura", () => {
+    renderCard({ aura: true, points: 2, livePoints: 13 });
+    expect((screen.getByTestId("xpts-aura") as HTMLElement).style.width).toBe("52px");
+  });
+});
+
+describe("incoming-transfer pill", () => {
+  it("shows IN +gain above a newly applied player", () => {
+    renderCard({ inGain: 2.4 });
+    expect(screen.getByText("IN +2.4")).toBeTruthy();
+  });
+  it("shows nothing when the player was already in the squad", () => {
+    renderCard();
+    expect(screen.queryByText(/^IN /)).toBeNull();
+  });
+});

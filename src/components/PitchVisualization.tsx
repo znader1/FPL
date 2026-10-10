@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Search } from "lucide-react";
+import { findIncomingPlayers } from "@/lib/incomingPlayers";
 import {
   CHIP_LABELS,
   type ChipName,
@@ -107,8 +108,12 @@ const toPitchPlayer = (
   fixture?: Player["fixture"],
   isLiveGw = false,
   showActualPoints = false,
+  inGain?: number,
 ): Player => ({
   id: player.player_id,
+  // The glow reads xPts this GW; it's only legible on the pitch, so the bench
+  // never gets one. Starters pass `aura` where they're rendered below.
+  inGain,
   name: player.web_name,
   team: player.team_short,
   teamName: player.team_name,
@@ -231,6 +236,13 @@ export const PitchVisualization = ({
   const bench = useMemo(() => {
     return [...(displayedTeam?.bench ?? [])].sort((a, b) => a.bench_order - b.bench_order);
   }, [displayedTeam]);
+  const incoming = useMemo(() => (team ? findIncomingPlayers(team) : {}), [team]);
+  const teamName = team?.entry?.team_name ?? undefined;
+
+  const starter = (player: FplTeamRecommendationPlayer): Player => ({
+    ...toPitchPlayer(player, captainId, viceId, getFixtureForPlayer(player), isLiveGw, showActualPoints, incoming[player.player_id]),
+    aura: true,
+  });
 
   const getFixtureForTeam = (teamShort: string): Player["fixture"] | undefined => {
     const fixtures = fixturesByTeam?.[teamShort];
@@ -327,6 +339,24 @@ export const PitchVisualization = ({
           isLiveGw={isLiveGw}
           updatedAt={updatedAt}
         />
+
+        {hasTeam && (
+          <div className="mb-3 flex items-end justify-between gap-3 px-1">
+            {teamName ? (
+              <h2 className="truncate text-xl font-extrabold tracking-tight text-foreground">{teamName}</h2>
+            ) : (
+              <span />
+            )}
+            <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+              <span
+                aria-hidden
+                className="h-2.5 w-2.5 rounded-full"
+                style={{ background: "radial-gradient(circle, hsl(var(--primary)) 0, transparent 70%)" }}
+              />
+              Glow = xPts this GW
+            </div>
+          </div>
+        )}
 
         {/* Pitch height follows the viewport instead of a fixed 600px. On a 14"
             laptop the fixed height pushed the bench below the fold; on a large
@@ -444,40 +474,28 @@ export const PitchVisualization = ({
               {/* Goalkeeper */}
               <div className="flex justify-center relative z-10">
                 {goalkeeper.map((player) => (
-                  <PlayerCard
-                    key={player.player_id}
-                    player={toPitchPlayer(player, captainId, viceId, getFixtureForPlayer(player), isLiveGw, showActualPoints)}
-                  />
+                  <PlayerCard key={player.player_id} player={starter(player)} />
                 ))}
               </div>
 
               {/* Defenders */}
               <div className={`flex justify-center ${getRowGapClass(defenders.length)} relative z-10`}>
                 {defenders.map((player) => (
-                  <PlayerCard
-                    key={player.player_id}
-                    player={toPitchPlayer(player, captainId, viceId, getFixtureForPlayer(player), isLiveGw, showActualPoints)}
-                  />
+                  <PlayerCard key={player.player_id} player={starter(player)} />
                 ))}
               </div>
 
               {/* Midfielders */}
               <div className={`flex justify-center ${getRowGapClass(midfielders.length)} relative z-10`}>
                 {midfielders.map((player) => (
-                  <PlayerCard
-                    key={player.player_id}
-                    player={toPitchPlayer(player, captainId, viceId, getFixtureForPlayer(player), isLiveGw, showActualPoints)}
-                  />
+                  <PlayerCard key={player.player_id} player={starter(player)} />
                 ))}
               </div>
 
               {/* Forwards */}
               <div className={`flex justify-center ${getRowGapClass(forwards.length)} relative z-10`}>
                 {forwards.map((player) => (
-                  <PlayerCard
-                    key={player.player_id}
-                    player={toPitchPlayer(player, captainId, viceId, getFixtureForPlayer(player), isLiveGw, showActualPoints)}
-                  />
+                  <PlayerCard key={player.player_id} player={starter(player)} />
                 ))}
               </div>
             </>
@@ -488,14 +506,17 @@ export const PitchVisualization = ({
         {hasTeam && (
           <div className="mx-auto mt-3 w-full max-w-[700px] px-3 py-2 rounded-xl bg-card border border-border">
             <div className="flex items-center justify-between mb-1.5">
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Substitutes</p>
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-[.08em]">Bench</p>
               {isLoading && <p className="text-[10px] text-muted-foreground">Updating…</p>}
             </div>
             <div className="flex flex-wrap justify-center gap-2 sm:gap-4">
               {bench.map((player) => (
                 <PlayerCard
                   key={player.player_id}
-                  player={toBenchPlayer(player, captainId, viceId, getFixtureForPlayer(player), isLiveGw, showActualPoints)}
+                  player={{
+                    ...toBenchPlayer(player, captainId, viceId, getFixtureForPlayer(player), isLiveGw, showActualPoints),
+                    inGain: incoming[player.player_id],
+                  }}
                 />
               ))}
             </div>

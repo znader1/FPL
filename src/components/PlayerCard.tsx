@@ -26,11 +26,19 @@ export interface Player {
   fixture?: PlayerFixture;
   alerts?: FplPlayerAlert[];
   scoreBreakdown?: FplPlayerScoreBreakdown;
+  /** Command Center: radial xPts glow behind the jersey, sized from `points`. */
+  aura?: boolean;
+  /** Command Center: this-GW gain of the move that brought the player in ("IN +2.4"). */
+  inGain?: number;
 }
 
 interface PlayerCardProps {
   player: Player;
 }
+
+/** Aura diameter in px: 30 + xPts × 11 (handoff spec), so a 2-pointer barely glows
+ *  and an 8-pointer floods the row. */
+export const auraSizePx = (xpts: number) => Math.round(30 + Math.max(0, xpts) * 11);
 
 const formatPoints = (points: number) => {
   if (!Number.isFinite(points)) return "—";
@@ -142,6 +150,23 @@ export const PlayerCard = ({ player }: PlayerCardProps) => {
           }}
         >
           <div className="relative transition-transform group-hover:scale-110">
+            {player.aura && hasProjectedPoints && (
+              <div
+                data-testid="xpts-aura"
+                aria-hidden="true"
+                className="pointer-events-none absolute left-1/2 top-[22px] -z-10 -translate-x-1/2 -translate-y-1/2 rounded-full"
+                style={{
+                  width: `${auraSizePx(player.points)}px`,
+                  height: `${auraSizePx(player.points)}px`,
+                  background: "radial-gradient(circle, hsl(var(--primary) / 0.55) 0%, hsl(var(--primary) / 0) 68%)",
+                }}
+              />
+            )}
+            {typeof player.inGain === "number" && (
+              <div className="absolute -top-3.5 left-1/2 z-10 -translate-x-1/2 whitespace-nowrap rounded-full bg-accent px-1.5 py-px text-[10px] font-bold text-white shadow-sm">
+                IN {player.inGain < 0 ? "−" : "+"}{Math.abs(player.inGain).toFixed(1)}
+              </div>
+            )}
             <JerseyIcon
               team={player.team}
               number={player.number}
