@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { JerseyIcon } from "./JerseyIcon";
+import { FixtureChip } from "./FixtureChip";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import type { FplPlayerAlert, FplPlayerScoreBreakdown } from "@/lib/fplAssistantApi";
 
@@ -48,23 +49,6 @@ const formatPoints = (points: number) => {
 
 const formatPercent = (value?: number | null) =>
   typeof value === "number" && Number.isFinite(value) ? `${Math.round(value * 100)}%` : "—";
-
-const getDifficultyClass = (difficulty?: number) => {
-  switch (difficulty) {
-    case 1:
-      return "bg-emerald-500/15 text-emerald-800 dark:text-emerald-200";
-    case 2:
-      return "bg-emerald-500/10 text-emerald-800 dark:text-emerald-200";
-    case 3:
-      return "bg-amber-500/15 text-amber-900 dark:text-amber-200";
-    case 4:
-      return "bg-rose-500/15 text-rose-900 dark:text-rose-200";
-    case 5:
-      return "bg-rose-500/25 text-rose-900 dark:text-rose-200";
-    default:
-      return "bg-muted/60 text-muted-foreground";
-  }
-};
 
 const formatMetric = (value?: number | null, digits = 1) => {
   if (typeof value !== "number" || !Number.isFinite(value)) return "—";
@@ -117,17 +101,7 @@ export const PlayerCard = ({ player }: PlayerCardProps) => {
     fixture && typeof fixture.difficulty === "number" && Number.isFinite(fixture.difficulty)
       ? fixture.difficulty
       : undefined;
-  const fixtureMeta =
-    fixture && typeof fixture.extraCount === "number" && fixture.extraCount > 0
-      ? `+${fixture.extraCount}`
-      : "";
-
-  const fixtureShort = fixture
-    ? fixture.label ??
-      `${fixture.isHome === false ? "A-" : fixture.isHome === true ? "H-" : ""}${fixture.opponent ?? ""}${
-        fixtureDifficulty ? `(D${fixtureDifficulty})` : ""
-      }`
-    : undefined;
+  const fixtureShort = fixture ? fixture.label ?? `${fixture.opponent ?? ""}` : undefined;
 
   return (
     // Controlled so a tap can open it: HoverCard only responds to pointer
@@ -189,14 +163,14 @@ export const PlayerCard = ({ player }: PlayerCardProps) => {
               375px viewport, so 80px cards cut the outermost players in half. */}
           <div className="bg-card/95 backdrop-blur-sm rounded-md px-1 sm:px-2 py-0.5 text-center shadow-sm border border-border w-[58px] sm:w-auto sm:min-w-[80px] max-w-full">
             <p className="text-[10px] sm:text-xs font-bold text-foreground truncate">{player.name}</p>
-            {fixtureShort && (
-              <span
-                className={`inline-block px-1 sm:px-1.5 py-0.5 rounded-full text-[9px] font-medium max-w-full truncate ${getDifficultyClass(fixtureDifficulty)}`}
-                title={fixtureDifficulty ? `FDR ${fixtureDifficulty}` : undefined}
-              >
-                {fixtureShort}
-                {fixtureMeta ? ` ${fixtureMeta}` : ""}
-              </span>
+            {fixture && fixtureShort && (
+              <FixtureChip
+                label={fixture.label}
+                opponent={fixture.opponent}
+                isHome={fixture.isHome}
+                difficulty={fixtureDifficulty}
+                extraCount={fixture.extraCount}
+              />
             )}
             <div className="flex justify-center gap-1 text-[10px] mt-0.5">
               {!fixtureShort && (
