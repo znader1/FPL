@@ -162,7 +162,7 @@ const CaptainLab = () => {
               </p>
               {lab && !lab.rankAware && (
                 <p className="mt-2 text-xs text-muted-foreground/80">
-                  Rank-aware picks need top-10k ownership from the backend; until then both goals use the projection.
+                  Rank-aware picks need ownership data from the backend; until then both goals use the projection.
                 </p>
               )}
             </div>
@@ -198,7 +198,14 @@ const CaptainLab = () => {
           ) : (
             <div className="grid gap-[18px] md:grid-cols-3">
               {lab.candidates.map((c) => (
-                <CaptainCard key={c.id} c={c} selected={c.id === lab.captainId} znPick={c.id === lab.znPickId} onSelect={setManualCaptainId} />
+                <CaptainCard
+                  key={c.id}
+                  c={c}
+                  selected={c.id === lab.captainId}
+                  znPick={c.id === lab.znPickId}
+                  onSelect={setManualCaptainId}
+                  ownershipBasis={lab.ownershipBasis}
+                />
               ))}
             </div>
           )}

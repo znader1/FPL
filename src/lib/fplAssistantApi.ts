@@ -32,8 +32,10 @@ export interface FplTeamRecommendationPlayer {
    *  suggested captain for both goals when ownership data is absent. */
   xpts_p10?: number | null;
   xpts_p90?: number | null;
-  /** Effective ownership in the top 10k, percent (can exceed 100 with captaincy). */
+  /** Effective ownership in the top 10k, percent (can exceed 100 with captaincy). No source yet. */
   eo_top10k?: number | null;
+  /** FPL's overall selected_by_percent — the honest ownership figure the backend does send. */
+  ownership_pct?: number | null;
   /** Estimated ranks gained if the player hauls. */
   rank_gain_if_haul?: number | null;
 }

@@ -70,6 +70,23 @@ describe("buildCaptainLab", () => {
     expect(run("chase", undefined, bare).candidates[0]).toMatchObject({ p10: 2, p90: 16, eoTop10k: undefined });
   });
 
+  it("uses overall ownership when top-10k EO is absent: protect = most owned, chase = low-owned ceiling", () => {
+    const owned = rec([
+      p(1, "Haaland", "MCI", 8.6, { is_captain_suggested: true, ownership_pct: 82, score_breakdown: { distribution: { p80_low: 2, p80_high: 18 } } }),
+      p(2, "Saka", "ARS", 7.4, { ownership_pct: 38, score_breakdown: { distribution: { p80_low: 2, p80_high: 16 } } }),
+      p(3, "Palmer", "CHE", 6.9, { ownership_pct: 22, score_breakdown: { distribution: { p80_low: 1, p80_high: 15 } } }),
+    ]);
+    const safe = run("safe", undefined, owned);
+    const chase = run("chase", undefined, owned);
+    expect(safe.znPickId).toBe(1);
+    expect(chase.znPickId).toBe(3); // 15 × 0.78 = 11.7 beats 16 × 0.62 = 9.9 and 18 × 0.18
+    expect(chase.rankAware).toBe(true);
+    expect(chase.ownershipBasis).toBe("overall");
+    expect(chase.candidates[0].ownershipPct).toBe(82);
+    expect(chase.subcopy).toContain("82% owned");
+    expect(run("chase").ownershipBasis).toBe("top10k");
+  });
+
   it("flags a large rank gain", () => {
     const lab = run("chase");
     expect(lab.candidates.map((c) => c.bigGain)).toEqual([false, true, true]);

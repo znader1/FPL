@@ -37,6 +37,13 @@ describe("CaptainCard", () => {
     expect(screen.getByText("C")).toBeTruthy();
   });
 
+  it("labels the ownership tile by its basis", () => {
+    render(<CaptainCard c={{ ...saka, eoTop10k: undefined, ownershipPct: 38 }} selected={false} znPick={false} onSelect={() => {}} ownershipBasis="overall" />);
+    expect(screen.getByText("Ownership")).toBeTruthy();
+    expect(screen.getByText("38%")).toBeTruthy();
+    expect(screen.queryByText("Top 10k EO")).toBeNull();
+  });
+
   it("shows dashes for missing ownership and rank data", () => {
     render(<CaptainCard c={{ ...saka, eoTop10k: undefined, rankGainIfHaul: undefined, bigGain: false, p10: undefined, p90: undefined }} selected={false} znPick={false} onSelect={() => {}} />);
     expect(screen.getAllByText("—")).toHaveLength(3); // EO, rank, range label

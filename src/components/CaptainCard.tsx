@@ -8,6 +8,8 @@ interface CaptainCardProps {
   selected: boolean;
   znPick: boolean;
   onSelect: (id: number) => void;
+  /** Which ownership figure the tile shows; null renders a dash. */
+  ownershipBasis?: "top10k" | "overall" | null;
 }
 
 /** The range bar's axis: 0–20 points, so a 2–16 band reads the same on every card. */
@@ -17,8 +19,9 @@ const pct = (v: number) => Math.max(0, Math.min(100, (v / RANGE_MAX) * 100));
 const fmtRank = (n: number) => `${n >= 0 ? "+" : "−"}${Math.round(Math.abs(n) / 1000)}k`;
 
 /** One captain candidate: xPts hero, likely range, EO and rank-if-haul tiles, note. */
-export function CaptainCard({ c, selected, znPick, onSelect }: CaptainCardProps) {
+export function CaptainCard({ c, selected, znPick, onSelect, ownershipBasis = "top10k" }: CaptainCardProps) {
   const hasRange = typeof c.p10 === "number" && typeof c.p90 === "number";
+  const ownership = ownershipBasis === "overall" ? c.ownershipPct : c.eoTop10k;
   return (
     <button
       type="button"
@@ -84,9 +87,11 @@ export function CaptainCard({ c, selected, znPick, onSelect }: CaptainCardProps)
 
       <div className="grid grid-cols-2 gap-2.5">
         <div className="rounded-[10px] bg-background/60 px-3 py-2.5">
-          <div className="text-[10px] font-semibold uppercase tracking-[.06em] text-muted-foreground">Top 10k EO</div>
+          <div className="text-[10px] font-semibold uppercase tracking-[.06em] text-muted-foreground">
+            {ownershipBasis === "overall" ? "Ownership" : "Top 10k EO"}
+          </div>
           <div className="mt-0.5 text-lg font-extrabold tabular-nums text-foreground">
-            {typeof c.eoTop10k === "number" ? `${Math.round(c.eoTop10k)}%` : "—"}
+            {typeof ownership === "number" ? `${Math.round(ownership)}%` : "—"}
           </div>
         </div>
         <div className="rounded-[10px] bg-background/60 px-3 py-2.5">
@@ -99,7 +104,7 @@ export function CaptainCard({ c, selected, znPick, onSelect }: CaptainCardProps)
 
       <p className="text-xs leading-relaxed text-foreground/80">
         {typeof c.pHaul === "number"
-          ? `${Math.round(c.pHaul * 100)}% chance of a 10+ haul${typeof c.eoTop10k === "number" ? (c.eoTop10k > 100 ? "; the top 10k already captain him, so a haul only keeps pace." : c.eoTop10k < 40 ? "; low captaincy among rivals makes this a real rank swing." : ".") : "."}`
+          ? `${Math.round(c.pHaul * 100)}% chance of a 10+ haul${typeof ownership === "number" ? (ownership > (ownershipBasis === "overall" ? 60 : 100) ? "; most rivals already have him, so a haul only keeps pace." : ownership < 40 ? "; few rivals hold him, so a haul is a real rank swing." : ".") : "."}`
           : "Range from the xG model's points distribution."}
       </p>
     </button>

@@ -19,6 +19,8 @@ export interface CaptainCandidate {
   p90?: number;
   pHaul?: number;
   eoTop10k?: number;
+  /** Overall ownership (selected_by_percent); the fallback basis when EO is absent. */
+  ownershipPct?: number;
   rankGainIfHaul?: number;
   /** True when the haul would move the rank by a lot (handoff: teal value). */
   bigGain: boolean;
@@ -35,6 +37,8 @@ export interface CaptainLab {
   subcopy: string;
   /** False when no candidate carries ownership data — both goals then agree. */
   rankAware: boolean;
+  /** Which ownership figure drove the picks and labels the tile. */
+  ownershipBasis: "top10k" | "overall" | null;
   /** Backend total re-based on the chosen captain. */
   projected: number;
 }
@@ -66,6 +70,7 @@ function toCandidate(p: FplTeamRecommendationPlayer): CaptainCandidate {
     p90: num(p.xpts_p90) ?? num(dist?.p80_high),
     pHaul: num(dist?.p_haul_10),
     eoTop10k: num(p.eo_top10k),
+    ownershipPct: num(p.ownership_pct),
     rankGainIfHaul: rankGain,
     bigGain: typeof rankGain === "number" && rankGain >= BIG_GAIN_RANKS,
     fixture: parseFixtureLabel(p.next_fixtures ?? p.fixtures_horizon?.[0]?.fixtures),
@@ -93,13 +98,23 @@ export function buildCaptainLab(rec: FplTeamRecommendation, goal: CaptainGoal, m
     .slice(0, CANDIDATES)
     .map(toCandidate);
 
-  const rankAware = candidates.some((c) => typeof c.eoTop10k === "number" || typeof c.rankGainIfHaul === "number");
+  const hasTop10k = candidates.some((c) => typeof c.eoTop10k === "number" || typeof c.rankGainIfHaul === "number");
+  const hasOverall = candidates.some((c) => typeof c.ownershipPct === "number");
+  const ownershipBasis: CaptainLab["ownershipBasis"] = hasTop10k ? "top10k" : hasOverall ? "overall" : null;
+  const rankAware = ownershipBasis !== null;
   const suggested = candidates.find((c) => c.suggested) ?? candidates[0];
   const fallback = suggested ?? null;
+  const own = (c: CaptainCandidate) => (ownershipBasis === "top10k" ? c.eoTop10k : c.ownershipPct);
 
   let zn: CaptainCandidate | undefined;
-  if (rankAware) {
-    zn = goal === "safe" ? best(candidates, (c) => c.eoTop10k) : best(candidates, (c) => c.rankGainIfHaul);
+  if (ownershipBasis === "top10k") {
+    zn = goal === "safe" ? best(candidates, (c) => c.eoTop10k) : best(candidates, (c) => c.rankGainIfHaul ?? c.p90);
+  } else if (ownershipBasis === "overall") {
+    // No rank model: protect = ride the crowd; chase = the ceiling the fewest rivals share.
+    zn =
+      goal === "safe"
+        ? best(candidates, (c) => c.ownershipPct)
+        : best(candidates, (c) => (typeof c.p90 === "number" && typeof c.ownershipPct === "number" ? c.p90 * (1 - c.ownershipPct / 100) : undefined));
   }
   zn = zn ?? fallback ?? undefined;
   const znPickId = zn?.id ?? null;
@@ -113,16 +128,22 @@ export function buildCaptainLab(rec: FplTeamRecommendation, goal: CaptainGoal, m
   let headline = "Pick your captain.";
   let subcopy = "Run ZN Pick to see the candidates.";
   if (zn) {
+    const ownText = (c: CaptainCandidate) => {
+      const v = own(c);
+      if (typeof v !== "number") return null;
+      return ownershipBasis === "top10k" ? `${Math.round(v)}% EO in the top 10k` : `${Math.round(v)}% owned overall`;
+    };
     if (goal === "safe") {
       headline = `Protect your rank with ${zn.name}.`;
-      subcopy =
-        typeof zn.eoTop10k === "number"
-          ? `${zn.name} is captained by most of the top 10k (${Math.round(zn.eoTop10k)}% EO). Matching them limits your downside if he hauls.`
-          : `${zn.name} is the highest projected captain. Without ownership data, the safe and chasing picks are the same.`;
+      const o = ownText(zn);
+      subcopy = o
+        ? `${zn.name} is the crowd's captain (${o}). Matching them limits your downside if he hauls.`
+        : `${zn.name} is the highest projected captain. Without ownership data, the safe and chasing picks are the same.`;
     } else {
       headline = `Captain ${zn.name} to climb the ranks.`;
-      if (topXpts && topXpts.id !== zn.id && typeof topXpts.eoTop10k === "number") {
-        subcopy = `${topXpts.name} projects higher, but ${Math.round(topXpts.eoTop10k)}% EO in the top 10k means a haul gains you almost nothing. ${zn.name} offers the best upside for the risk.`;
+      const topOwn = topXpts ? ownText(topXpts) : null;
+      if (topXpts && topXpts.id !== zn.id && topOwn) {
+        subcopy = `${topXpts.name} projects higher, but ${topOwn} means a haul gains you little on the field. ${zn.name} offers the best upside for the risk.`;
       } else if (rankAware) {
         subcopy = `${zn.name} is the biggest rank swing if he hauls, and the field's favourite besides.`;
       } else {
@@ -136,5 +157,5 @@ export function buildCaptainLab(rec: FplTeamRecommendation, goal: CaptainGoal, m
   const projected =
     captain && suggested && captain.id !== suggested.id ? round1(base - suggested.xpts + captain.xpts) : base;
 
-  return { candidates, znPickId, captainId, viceId, headline, subcopy, rankAware, projected };
+  return { candidates, znPickId, captainId, viceId, headline, subcopy, rankAware, ownershipBasis, projected };
 }
