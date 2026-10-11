@@ -43,6 +43,9 @@ input:-webkit-autofill:active {
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
 
+    /* Unsaved-changes amber (v2 flow handoff): the status pill and swap-rule hints. */
+    --warning: 38 92% 50%;
+
     --border: 248 12% 89%;
     --input: 248 12% 87%;
     --ring: 328 80% 48%;
@@ -104,6 +107,7 @@ input:-webkit-autofill:active {
        renders error text at ~1.8:1 contrast, which is effectively invisible. */
     --destructive: 0 72% 62%;
     --destructive-foreground: 0 0% 100%;
+    --warning: 38 92% 55%;
 
     --border: 248 15% 18%;
     --input: 248 15% 18%;

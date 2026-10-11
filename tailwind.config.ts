@@ -48,6 +48,7 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        warning: "hsl(var(--warning))",
         fdr: {
           1: "hsl(var(--fdr-1))",
           2: "hsl(var(--fdr-2))",
