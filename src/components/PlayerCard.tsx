@@ -162,9 +162,13 @@ export const PlayerCard = ({ player }: PlayerCardProps) => {
           {/* Width is responsive because the pitch clips: a five-defender row
               needs 5 cards plus 4 gaps to fit ~343px of usable width on a
               375px viewport, so 80px cards cut the outermost players in half. */}
-          <div className="bg-card/95 backdrop-blur-sm rounded-md px-1 sm:px-2 py-0.5 text-center shadow-sm border border-border w-[58px] sm:w-auto sm:min-w-[80px] max-w-full">
+          <div className="bg-card/95 backdrop-blur-sm rounded-md px-1 sm:px-2 py-0.5 text-center shadow-sm border border-border w-[58px] sm:w-auto sm:min-w-[80px] max-w-full overflow-hidden">
             <p className="text-[10px] sm:text-xs font-bold text-foreground truncate">{player.name}</p>
-            {fixture && fixtureShort && (
+            {/* The fixture chip — or, with no fixture (a finished GW), the team
+                abbreviation — takes its own line. Putting the team on the points
+                row made "BRE 1 · 3.01" wider than the 58px phone card, so a
+                five-midfielder row's labels ran into each other. */}
+            {fixture && fixtureShort ? (
               <FixtureChip
                 label={fixture.label}
                 opponent={fixture.opponent}
@@ -172,11 +176,10 @@ export const PlayerCard = ({ player }: PlayerCardProps) => {
                 difficulty={fixtureDifficulty}
                 extraCount={fixture.extraCount}
               />
+            ) : (
+              <p className="text-[9px] leading-tight text-muted-foreground">{player.team}</p>
             )}
-            <div className="flex justify-center gap-1 text-[10px] mt-0.5">
-              {!fixtureShort && (
-                <span className="text-muted-foreground">{player.team}</span>
-              )}
+            <div className="flex justify-center gap-1 whitespace-nowrap text-[10px] mt-0.5">
               {hasActualPoints ? (
                 <>
                   <span

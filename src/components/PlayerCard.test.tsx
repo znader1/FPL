@@ -40,6 +40,15 @@ describe("points under the player", () => {
     expect(screen.getByTitle("Projected points").textContent).toBe("6.4");
   });
 
+  it("keeps the team abbreviation off the points row so a finished GW fits a 58px card", () => {
+    // GW6 on a phone: "BRE 1 · 3.01" in one flex row overflowed the card and
+    // the five midfielders' labels ran into each other.
+    renderCard({ team: "BRE", livePoints: 1, points: 3.01 });
+    const row = screen.getByTitle("Projected points").parentElement!;
+    expect(row.textContent).not.toContain("BRE");
+    expect(screen.getByText("BRE")).toBeTruthy();
+  });
+
   it("hides a real score that belongs to a different gameweek", () => {
     // Planning a future GW renders the substituted latest squad. Painting its
     // points under a "GW3" heading claims a score that does not exist yet —
