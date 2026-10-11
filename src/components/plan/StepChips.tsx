@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { PLAN_STEPS, STEP_LABELS, type PlanStep } from "@/lib/gwPlan";
 import type { WeekDecision } from "@/lib/weekDecisions";
 
@@ -9,6 +10,12 @@ interface StepChipsProps {
 
 /** Phone header's horizontal step row: the active chip in pink, ✓ / ! marks on decisions. */
 export function StepChips({ decisions, step, onSelect }: StepChipsProps) {
+  // Six chips overflow a phone width; the active one (Review, say) could sit
+  // off the right edge with nothing hinting the row scrolls.
+  const activeRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    activeRef.current?.scrollIntoView?.({ block: "nearest", inline: "center" });
+  }, [step]);
   return (
     <div className="flex gap-1.5 overflow-x-auto px-4 py-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="group" aria-label="Plan steps">
       {PLAN_STEPS.map((k) => {
@@ -18,6 +25,7 @@ export function StepChips({ decisions, step, onSelect }: StepChipsProps) {
         return (
           <button
             key={k}
+            ref={active ? activeRef : undefined}
             type="button"
             onClick={() => onSelect(k)}
             aria-current={active ? "step" : undefined}

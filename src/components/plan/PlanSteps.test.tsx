@@ -36,6 +36,16 @@ describe("StepChips", () => {
   });
 });
 
+describe("StepChips scroll", () => {
+  it("scrolls the active chip into view so Review is never hidden off the right edge", () => {
+    const spy = vi.fn();
+    Element.prototype.scrollIntoView = spy;
+    render(<StepChips decisions={decisions} step="confirm" onSelect={() => {}} />);
+    expect(spy).toHaveBeenCalled();
+    expect((spy.mock.instances[0] as HTMLElement).textContent).toContain("Review");
+  });
+});
+
 describe("StepHeader", () => {
   it("renders the eyebrow, title and sub, plus the saved banner when locked", () => {
     const { rerender } = render(<StepHeader copy={{ eyebrow: "Overview", title: "Your GW29 squad", sub: "Work through…" }} savedBanner={false} />);

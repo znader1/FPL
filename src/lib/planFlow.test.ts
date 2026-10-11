@@ -88,9 +88,15 @@ describe("footerFor", () => {
     expect(footerFor({ step: "captain", plan: seed, decisions: dec(), warnings: [], gw: 29 })).toMatchObject({ label: "Next: Bench", disabled: false });
   });
   it("review: Save (accent), blocked by a warning, Saved ✓ once locked", () => {
-    expect(footerFor({ step: "confirm", plan: seed, decisions: dec(), warnings: [], gw: 29 })).toMatchObject({ label: "Save GW29 plan", variant: "accent", disabled: false });
-    expect(footerFor({ step: "confirm", plan: seed, decisions: dec(), warnings: [{ text: "x", fixStep: "captain" }], gw: 29 })).toMatchObject({ disabled: true, hint: "Fix the warning to save" });
-    expect(footerFor({ step: "confirm", plan: { ...seed, locked: true }, decisions: dec(), warnings: [], gw: 29 })).toMatchObject({ label: "Saved ✓", disabled: true });
+    const decided = { ...seed, transfer: "roll" as const, chip: "none" as const };
+    expect(footerFor({ step: "confirm", plan: decided, decisions: dec(), warnings: [], gw: 29 })).toMatchObject({ label: "Save GW29 plan", variant: "accent", disabled: false });
+    expect(footerFor({ step: "confirm", plan: decided, decisions: dec(), warnings: [{ text: "x", fixStep: "captain" }], gw: 29 })).toMatchObject({ disabled: true, hint: "Fix the warning to save" });
+    expect(footerFor({ step: "confirm", plan: { ...decided, locked: true }, decisions: dec(), warnings: [], gw: 29 })).toMatchObject({ label: "Saved ✓", disabled: true });
+  });
+  it("review: Save waits for the transfers and chip choices (step chips can skip those steps)", () => {
+    expect(footerFor({ step: "confirm", plan: seed, decisions: dec(), warnings: [], gw: 29 })).toMatchObject({ disabled: true, hint: "Decide transfers and chip first" });
+    expect(footerFor({ step: "confirm", plan: { ...seed, chip: "none" }, decisions: dec(), warnings: [], gw: 29 })).toMatchObject({ disabled: true, hint: "Decide transfers first" });
+    expect(footerFor({ step: "confirm", plan: { ...seed, transfer: "make" }, decisions: dec(), warnings: [], gw: 29 })).toMatchObject({ disabled: true, hint: "Decide your chip first" });
   });
   it("squad with no plan yet is disabled", () => {
     expect(footerFor({ step: "squad", plan: null, decisions: dec(), warnings: [], gw: 29 }).disabled).toBe(true);

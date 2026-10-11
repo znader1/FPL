@@ -56,6 +56,13 @@ export function footerFor(args: { step: PlanStep; plan: GwPlan | null; decisions
   if (step === "confirm") {
     if (plan.locked) return { label: "Saved ✓", disabled: true, hint: "", variant: "accent", hasBack };
     if (warnings.length > 0) return { label: `Save GW${gw} plan`, disabled: true, hint: "Fix the warning to save", variant: "accent", hasBack };
+    // The step chips / rail can land here without visiting Transfers or Chip,
+    // whose own Next buttons gate on a choice — so Save gates on them too.
+    const undecided = [plan.transfer === null && "transfers", plan.chip === null && "chip"].filter(Boolean);
+    if (undecided.length > 0) {
+      const hint = undecided.length === 2 ? "Decide transfers and chip first" : undecided[0] === "transfers" ? "Decide transfers first" : "Decide your chip first";
+      return { label: `Save GW${gw} plan`, disabled: true, hint, variant: "accent", hasBack };
+    }
     return { label: `Save GW${gw} plan`, disabled: false, hint: "", variant: "accent", hasBack };
   }
   const label = `Next: ${STEP_LABELS[nextStep(step) as PlanStep]}`;
