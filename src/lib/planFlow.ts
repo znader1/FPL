@@ -43,9 +43,17 @@ export interface FooterSpec {
   hint: string;
   variant: "primary" | "accent";
   hasBack: boolean;
+  /** Same action, fewer words — for the desktop GW bar, where the long label
+   *  wraps the bar onto a second row. Equals `label` on every step but squad. */
+  short: string;
 }
 
 export function footerFor(args: { step: PlanStep; plan: GwPlan | null; decisions: WeekDecision[]; warnings: ReviewWarning[]; gw: number }): FooterSpec {
+  const spec = footerSpec(args);
+  return { ...spec, short: spec.short ?? spec.label };
+}
+
+function footerSpec(args: { step: PlanStep; plan: GwPlan | null; decisions: WeekDecision[]; warnings: ReviewWarning[]; gw: number }): Omit<FooterSpec, "short"> & { short?: string } {
   const { step, plan, decisions, warnings, gw } = args;
   const hasBack = step !== "squad";
   if (!plan) return { label: step === "squad" ? `Start GW${gw} plan` : `Next: ${STEP_LABELS[nextStep(step) ?? "confirm"]}`, disabled: true, hint: "", variant: "primary", hasBack };
@@ -60,7 +68,8 @@ export function footerFor(args: { step: PlanStep; plan: GwPlan | null; decisions
         : doneN === 0
           ? `Start GW${gw} plan · ${decisions.length} decisions`
           : `Continue plan · ${left} left`;
-    return { label, disabled: false, hint: "", variant: "primary", hasBack };
+    const short = plan.locked || left === 0 ? "Review plan" : doneN === 0 ? `Start GW${gw} plan` : `Continue · ${left} left`;
+    return { label, short, disabled: false, hint: "", variant: "primary", hasBack };
   }
   if (step === "confirm") {
     // Saved: nothing left to do on this step, so the button is the way home.

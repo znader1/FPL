@@ -80,14 +80,14 @@ describe("PlanFooter", () => {
     const onBack = vi.fn();
     const onNext = vi.fn();
     const { rerender } = render(
-      <PlanFooter spec={{ label: "Next: Captain", disabled: true, hint: "Pick an option to continue", variant: "primary", hasBack: true }} onBack={onBack} onNext={onNext} />,
+      <PlanFooter spec={{ label: "Next: Captain", short: "Next: Captain", disabled: true, hint: "Pick an option to continue", variant: "primary", hasBack: true }} onBack={onBack} onNext={onNext} />,
     );
     // Once inline (desktop) and once above the buttons (phone).
     expect(screen.getAllByText("Pick an option to continue")).toHaveLength(2);
     expect((screen.getByRole("button", { name: "Next: Captain" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(onBack).toHaveBeenCalled();
-    rerender(<PlanFooter spec={{ label: "Save GW29 plan", disabled: false, hint: "", variant: "accent", hasBack: false }} onBack={onBack} onNext={onNext} />);
+    rerender(<PlanFooter spec={{ label: "Save GW29 plan", short: "Save GW29 plan", disabled: false, hint: "", variant: "accent", hasBack: false }} onBack={onBack} onNext={onNext} />);
     expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Save GW29 plan" }));
     expect(onNext).toHaveBeenCalled();

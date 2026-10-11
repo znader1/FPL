@@ -76,6 +76,14 @@ describe("firstUnfinishedStep", () => {
 });
 
 describe("footerFor", () => {
+  it("squad: a short label for the desktop GW bar, where the long one wraps the bar", () => {
+    const all = dec({ transfers: { done: true }, captain: { done: true }, bench: { done: true }, chip: { done: true } });
+    expect(footerFor({ step: "squad", plan: seed, decisions: dec(), warnings: [], gw: 29 }).short).toBe("Start GW29 plan");
+    expect(footerFor({ step: "squad", plan: seed, decisions: dec({ chip: { done: true } }), warnings: [], gw: 29 }).short).toBe("Continue · 3 left");
+    expect(footerFor({ step: "squad", plan: seed, decisions: all, warnings: [], gw: 29 }).short).toBe("Review plan");
+    expect(footerFor({ step: "squad", plan: { ...seed, locked: true }, decisions: all, warnings: [], gw: 29 }).short).toBe("Review plan");
+    expect(footerFor({ step: "confirm", plan: seed, decisions: all, warnings: [], gw: 29 }).short).toBe("Save GW29 plan");
+  });
   it("squad: Start / Continue with what's left, Review when all four are made, no Back", () => {
     expect(footerFor({ step: "squad", plan: seed, decisions: dec(), warnings: [], gw: 29 })).toMatchObject({ label: "Start GW29 plan · 4 decisions", hasBack: false, disabled: false });
     expect(footerFor({ step: "squad", plan: seed, decisions: dec({ chip: { done: true } }), warnings: [], gw: 29 }).label).toBe("Continue plan · 3 left");

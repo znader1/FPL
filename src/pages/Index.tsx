@@ -1123,7 +1123,7 @@ const Index = () => {
                   title={footer.hint || undefined}
                 >
                   <Zap className="h-3.5 w-3.5" />
-                  {footer.label}
+                  {footer.short}
                 </Button>
               ) : (
                 <Button

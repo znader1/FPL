@@ -56,7 +56,7 @@ export const GameweekNav = ({
   // One row on phones (no wrap; the rank truncates before anything wraps),
   // free to wrap from sm up where the action button joins.
   return (
-    <div className="flex flex-nowrap items-center gap-x-1.5 mb-3 bg-card border border-border rounded-xl px-2 py-1.5 sm:flex-wrap sm:gap-x-2 sm:gap-y-2 sm:px-2.5">
+    <div className="flex flex-nowrap items-center gap-x-1.5 mb-3 bg-card border border-border rounded-xl px-2 py-1.5 sm:flex-wrap sm:gap-x-2 sm:gap-y-2 sm:px-2.5 lg:flex-nowrap">
       {leading}
       {/* GW navigation */}
       <div className="flex items-center gap-1.5 shrink-0">
