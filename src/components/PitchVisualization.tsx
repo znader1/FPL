@@ -365,9 +365,9 @@ export const PitchVisualization = ({
         )}
 
         {hasTeam && !compact && (
-          <div className="mb-3 flex items-end justify-between gap-3 px-1">
+          <div className="mb-1.5 flex items-end justify-between gap-3 px-1">
             {teamName ? (
-              <h2 className="truncate text-xl font-extrabold tracking-tight text-foreground">{teamName}</h2>
+              <h2 className="truncate text-sm font-semibold tracking-tight text-muted-foreground">{teamName}</h2>
             ) : (
               <span />
             )}

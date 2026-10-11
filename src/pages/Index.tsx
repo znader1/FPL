@@ -1110,30 +1110,42 @@ const Index = () => {
                   onApplied={handleOptimizeApplied}
                 />
               )}
-              {/* The single recommend entry point on desktop. The sidebar keeps
-                  its own button for narrow viewports, where this bar has no room. */}
-              <Button
-                size="sm"
-                className="hidden lg:inline-flex"
-                onClick={handlePrimaryRecommend}
-                disabled={!canRecommend || !(entryId > 0) || recommendationMutation.isPending}
-                title={
-                  planGw !== resolvedGW
-                    ? `GW${resolvedGW} is in progress — plan GW${planGw} instead`
-                    : undefined
-                }
-              >
-                <Zap className="h-3.5 w-3.5" />
-                {recommendationMutation.isPending
-                  ? "Working…"
-                  : planGw !== resolvedGW
-                    ? `Plan GW${planGw}`
-                    : "Recommend"}
-              </Button>
+              {/* Desktop: the flow's own action lives here (Start / Continue /
+                  review), so the squad step needs no bottom bar and the pitch
+                  gets the height back. Re-running ZN Pick stays in the rail's
+                  Parameters form. Without a plan yet, this is the recommend button. */}
+              {plan && entryId > 0 ? (
+                <Button
+                  size="sm"
+                  className={`hidden lg:inline-flex ${footer.variant === "accent" ? "bg-accent text-white hover:bg-accent/90" : ""}`}
+                  onClick={onFooterNext}
+                  disabled={footer.disabled}
+                  title={footer.hint || undefined}
+                >
+                  <Zap className="h-3.5 w-3.5" />
+                  {footer.label}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  className="hidden lg:inline-flex"
+                  onClick={handlePrimaryRecommend}
+                  disabled={!canRecommend || !(entryId > 0) || recommendationMutation.isPending}
+                  title={planGw !== resolvedGW ? `GW${resolvedGW} is in progress — plan GW${planGw} instead` : undefined}
+                >
+                  <Zap className="h-3.5 w-3.5" />
+                  {recommendationMutation.isPending ? "Working…" : planGw !== resolvedGW ? `Plan GW${planGw}` : "Recommend"}
+                </Button>
+              )}
             </>
           }
         />
-        {entryId > 0 && plan && <PlanFooter spec={footer} onBack={onFooterBack} onNext={onFooterNext} />}
+        {/* Phones only: on desktop the same action sits in the GW bar above. */}
+        {entryId > 0 && plan && (
+          <div className="lg:hidden">
+            <PlanFooter spec={footer} onBack={onFooterBack} onNext={onFooterNext} />
+          </div>
+        )}
         </div>
       )}
       {step === "squad" && (
