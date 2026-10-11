@@ -93,6 +93,16 @@ describe("Fixture Planner page", () => {
     expect(details?.hasAttribute("open")).toBe(false);
   });
 
+  it("falls back to the ticker's own start GW when /events/next fails", async () => {
+    api.fetchNextEvent.mockRejectedValue(new Error("502"));
+    renderPage();
+    await waitFor(() => expect(within(screen.getByTestId("planner-grid")).getAllByRole("row").length).toBe(16));
+    expect(within(screen.getByTestId("planner-grid")).getByText("GW29")).toBeTruthy();
+    expect(screen.queryByText(/couldn't reach/i)).toBeNull();
+    expect(api.fetchFixtureDifficulty.mock.calls[0][0]).toEqual({ horizon_gws: 6 });
+    expect(api.fetchSquad).toHaveBeenCalledWith(expect.objectContaining({ eventId: 29 }), expect.anything());
+  });
+
   it("prompts to link a team when no entry id is known", async () => {
     localStorage.clear();
     renderPage();

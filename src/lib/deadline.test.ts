@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatCountdown, remainingMs } from "./deadline";
+import { formatCountdown, parseDeadline, remainingMs } from "./deadline";
 
 describe("formatCountdown", () => {
   it("renders days, hours, minutes and seconds zero-padded", () => {
@@ -22,6 +22,10 @@ describe("remainingMs", () => {
   });
   it("treats a timestamp without a zone suffix as UTC", () => {
     expect(remainingMs("2026-10-10T13:00:00", now)).toBe(3600_000);
+  });
+  it("exposes the parsed instant so the tooltip and the countdown agree on zone-less timestamps", () => {
+    expect(parseDeadline("2026-10-10T13:00:00")).toBe(Date.parse("2026-10-10T13:00:00Z"));
+    expect(parseDeadline("soon")).toBeNull();
   });
   it("returns null for a missing or unparseable deadline", () => {
     expect(remainingMs(null, now)).toBeNull();

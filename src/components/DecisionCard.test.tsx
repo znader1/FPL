@@ -354,12 +354,41 @@ describe("DecisionCard roll alternative card", () => {
     next_move: { gw: 6, moves: [mv(1, 3), mv(2, 4)], horizon_gain: 14 },
   });
 
-  it("shows the rejected move as a card with its net versus rolling, and no button without a beam match", () => {
+  it("shows the rejected move as a card netting what it earns on its own, and no button without a beam match", () => {
     render(<DecisionCard plan={plan(rollDetail(1))} onApplyTransferAtIndex={() => {}} />);
     const card = screen.getByTestId("move-card");
     expect(card.textContent).toContain("B3");
-    expect(within(card).getByTestId("move-net").textContent).toBe("−1.0");
+    expect(card.textContent).toContain("Free transfer");
+    expect(within(card).getByTestId("move-net").textContent).toBe("+6.0");
     expect(within(card).queryByRole("button")).toBeNull();
+  });
+
+  it("labels alternative moves free or hit by position and bills the hit the alternative actually carries", () => {
+    // Two moves on one FT: gains 6 + 5 = 11, alt.net 7 → the alternative's own hit is 4.
+    const d = detail({
+      action: "roll", moves: [], this_gw_gain: 0, horizon_gain: 0, ft_before: 1, ft_after: 2, plan_net: 14,
+      roll_alternative: { net: 7, gw: 5, moves: [mv(1, 3, 2.0, 6.0), mv(2, 4, 1.0, 5.0)] },
+    });
+    render(<DecisionCard plan={plan(d)} />);
+    const cards = screen.getAllByTestId("move-card");
+    expect(cards[0].textContent).toContain("Free transfer");
+    expect(within(cards[0]).getByTestId("move-net").textContent).toBe("+6.0");
+    expect(cards[1].textContent).toContain("−4 hit");
+    expect(within(cards[1]).getByTestId("move-net").textContent).toBe("+1.0");
+  });
+
+  it("bills an 8-point hit as −8, not a hard-coded −4", () => {
+    render(<DecisionCard plan={plan(detail({ moves: [mv(1, 2, 0.9, 2.8), mv(3, 4, 1.0, 5.2)], ft_before: 0, hit_cost: 8, horizon_gain: 8.0 }))} />);
+    const cards = screen.getAllByTestId("move-card");
+    expect(cards[0].textContent).toContain("−4 hit"); // 8 split over two hit moves
+    expect(cards[1].textContent).toContain("−4 hit");
+    render(<DecisionCard plan={plan(detail({ moves: [mv(1, 2, 0.9, 2.8)], ft_before: 0, hit_cost: 8, horizon_gain: 2.8 }))} />);
+    expect(screen.getAllByTestId("move-card")[2].textContent).toContain("−8 hit");
+  });
+
+  it("calls a move free when the plan carries no hit cost, however many free transfers it says (wildcard / free hit)", () => {
+    render(<DecisionCard plan={plan(detail({ moves: [mv(1, 2), mv(3, 4)], ft_before: 0, hit_cost: 0 }))} />);
+    for (const c of screen.getAllByTestId("move-card")) expect(c.textContent).toContain("Free transfer");
   });
 
   it("wires 'Make the move anyway' to the matching beam index when the FT is free", () => {

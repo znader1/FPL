@@ -1,4 +1,5 @@
 import type { FplTeamRecommendation, FplTeamRecommendationPlayer } from "@/lib/fplAssistantApi";
+import { parseFixtureLabel as parseSharedFixtureLabel } from "./fixtureLabel";
 
 export type CaptainGoal = "safe" | "chase";
 
@@ -49,12 +50,10 @@ const CANDIDATES = 3;
 const BIG_GAIN_RANKS = 20_000;
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
-/** `H-BOU(D2)` → parts; undefined when the label is empty or unrecognised. */
+/** The pitch's parser (`src/lib/fixtureLabel.ts`), narrowed to the captain card's shape. */
 export function parseFixtureLabel(label?: string | null): CaptainFixture | undefined {
-  if (!label) return undefined;
-  const m = label.trim().match(/^([HA])-([A-Z]{2,4})(?:\(D([1-5])\))?/i);
-  if (!m) return undefined;
-  return { opponent: m[2].toUpperCase(), isHome: m[1].toUpperCase() === "H", difficulty: m[3] ? Number(m[3]) : undefined };
+  const f = parseSharedFixtureLabel(label);
+  return f ? { opponent: f.opponent, isHome: f.isHome, difficulty: f.difficulty } : undefined;
 }
 
 const num = (v: number | null | undefined) => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
@@ -118,14 +117,18 @@ export function buildCaptainLab(rec: FplTeamRecommendation, goal: CaptainGoal, m
   const rankAware = ownershipBasis !== null;
   // The backend's total doubles its own suggested captain, who may sit outside
   // the top three (DGW logic server-side) — look across the whole XI for him.
-  const suggestedPlayer = rec.starting_xi.find((p) => p.is_captain_suggested);
+  const suggestedPlayer =
+    rec.starting_xi.find((p) => p.is_captain_suggested) ?? rec.starting_xi.find((p) => p.player_id === rec.captain_player_id);
   const suggested = eligible.find((c) => c.suggested) ?? eligible[0];
   const fallback = suggested ?? null;
   const own = (c: CaptainCandidate) => (ownershipBasis === "top10k" ? c.eoTop10k : c.ownershipPct);
 
   let zn: CaptainCandidate | undefined;
   if (ownershipBasis === "top10k") {
-    zn = goal === "safe" ? best(eligible, (c) => c.eoTop10k) : best(eligible, (c) => c.rankGainIfHaul ?? c.p90);
+    // Rank swings and xPts ceilings are different units: compare swings only
+    // among players that have one, and fall back to the ceiling only when none does.
+    const anySwing = eligible.some((c) => typeof c.rankGainIfHaul === "number");
+    zn = goal === "safe" ? best(eligible, (c) => c.eoTop10k) : best(eligible, (c) => (anySwing ? c.rankGainIfHaul : c.p90));
   } else if (ownershipBasis === "overall") {
     // No rank model: protect = ride the crowd; chase = the ceiling the fewest rivals share.
     zn =

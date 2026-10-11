@@ -31,6 +31,7 @@ const TONE: Record<Verdict, string> = {
 /** The comparison bars share one axis so a 14 → 17 move reads as a nudge, not a leap. */
 const BAR_SCALE_XPTS = 18;
 const HIT_COST = 4;
+const fmtHit = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
 
 /** `gwRange`, wrapped so it never wraps mid-string at phone width. */
 function GwRange({ h }: { h: { start_gw: number | null; end_gw: number | null } }) {
@@ -88,6 +89,8 @@ interface TransferMoveCardProps {
   m: FplTransferVerdictMove;
   /** "Free transfer" / "−4 hit". */
   cost: "free" | "hit";
+  /** This move's share of the hit bill (label only; default 4). */
+  hitCost?: number;
   /** xPts after the hit share (or versus rolling, on a rejected move). */
   net: number;
   horizon: FplTransferVerdictDetail["horizon"];
@@ -98,7 +101,7 @@ interface TransferMoveCardProps {
   onUndo?: () => void;
 }
 
-function TransferMoveCard({ m, cost, net, horizon, sellerHorizonXpts, action, isApplying, onApply, onUndo }: TransferMoveCardProps) {
+function TransferMoveCard({ m, cost, hitCost, net, horizon, sellerHorizonXpts, action, isApplying, onApply, onUndo }: TransferMoveCardProps) {
   const applied = action.kind === "applied";
   const positive = net >= 0;
   const hasBars = typeof sellerHorizonXpts === "number" && Number.isFinite(sellerHorizonXpts);
@@ -136,7 +139,7 @@ function TransferMoveCard({ m, cost, net, horizon, sellerHorizonXpts, action, is
               {m.forced_injury && (
                 <Badge variant="outline" className="border-destructive/50 px-1 py-0 text-[10px] text-destructive">flagged</Badge>
               )}
-              <span>· {cost === "free" ? "Free transfer" : `−${HIT_COST} hit`}</span>
+              <span>· {cost === "free" ? "Free transfer" : `−${fmtHit(hitCost ?? HIT_COST)} hit`}</span>
             </div>
           </div>
         </div>
@@ -352,7 +355,14 @@ export function DecisionCard({
         {header}
         {alt && alt.moves.length > 0 && alt.moves.map((m, i) => {
           const beamIndex = findBeamIndex(beamMoves, m);
-          const free = d.ft_before > 0;
+          // Same positional rule as the spend branch; the alternative's own hit
+          // bill is what its gains add up to beyond its net (default 4 a move).
+          const altHitMoves = Math.max(0, alt.moves.length - d.ft_before);
+          const altGains = alt.moves.reduce((s, x) => s + x.horizon_gain, 0);
+          const altHitTotal = altHitMoves > 0 ? (altGains - alt.net > 0.05 ? altGains - alt.net : HIT_COST * altHitMoves) : 0;
+          const altHitEach = altHitMoves > 0 ? altHitTotal / altHitMoves : 0;
+          const hit = i >= d.ft_before && altHitEach > 0;
+          const free = !hit;
           const action: MoveAction =
             !canApply || beamIndex < 0
               ? { kind: "none" }
@@ -364,7 +374,8 @@ export function DecisionCard({
               key={i}
               m={m}
               cost={free ? "free" : "hit"}
-              net={i === 0 ? alt.net - d.plan_net : m.horizon_gain}
+              hitCost={altHitEach}
+              net={m.horizon_gain - (hit ? altHitEach : 0)}
               horizon={d.horizon}
               sellerHorizonXpts={horizonXptsById?.[m.sell.id]}
               action={action}
@@ -398,12 +409,14 @@ export function DecisionCard({
     <div data-testid="plan-verdict-banner" className={`rounded-lg border p-3 flex flex-col gap-3 ${TONE[d.action]}`}>
       {header}
       {d.moves.map((m, i) => {
-        const hit = i >= d.ft_before;
+        // No hit bill (wildcard / free hit) means every move is free whatever ft_before says.
+        const hit = i >= d.ft_before && hitEach > 0;
         return (
           <TransferMoveCard
             key={i}
             m={m}
             cost={hit ? "hit" : "free"}
+            hitCost={hitEach}
             net={m.horizon_gain - (hit ? hitEach : 0)}
             horizon={d.horizon}
             sellerHorizonXpts={horizonXptsById?.[m.sell.id]}

@@ -28,9 +28,30 @@ describe("parseFixtureLabel", () => {
     expect(parseFixtureLabel("A-LIV(D5)")).toEqual({ opponent: "LIV", isHome: false, difficulty: 5 });
     expect(parseFixtureLabel("")).toBeUndefined();
   });
+  it("is the pitch's parser: tolerates a missing H-/A- prefix and finds (Dn) anywhere", () => {
+    expect(parseFixtureLabel("BOU(D2)")).toEqual({ opponent: "", isHome: undefined, difficulty: 2 });
+    expect(parseFixtureLabel("H-BOU DGW (D3)")).toEqual({ opponent: "BOU", isHome: true, difficulty: 3 });
+  });
 });
 
 describe("buildCaptainLab", () => {
+  it("chase compares rank swings only among players that have one — never a rank count against an xPts ceiling", () => {
+    // Haaland has no rank_gain_if_haul; Saka (41k) and Palmer (29k) do. Haaland's p90 of 18 must not
+    // be read as "18 ranks" and lose, nor as a swing and win: he is simply out of the comparison.
+    const mixed = [{ ...withEo[0], rank_gain_if_haul: undefined }, withEo[1], withEo[2], withEo[3]];
+    expect(buildCaptainLab(rec(mixed), "chase", null).znPickId).toBe(2);
+    // No candidate has a swing → ceiling decides.
+    const none = withEo.map((c) => ({ ...c, rank_gain_if_haul: undefined }));
+    expect(buildCaptainLab(rec(none), "chase", null).znPickId).toBe(1);
+  });
+
+  it("re-bases the projection on captain_player_id when no is_captain_suggested flag is sent", () => {
+    const xi = withEo.map((c) => ({ ...c, is_captain_suggested: undefined }));
+    const lab = buildCaptainLab(rec(xi, { captain_player_id: 1 }), "safe", 3);
+    // Re-based from Haaland (8.6) to Palmer (6.9): 66 − 8.6 + 6.9.
+    expect(lab.projected).toBeCloseTo(64.3, 5);
+  });
+
   const run = (goal: CaptainGoal, manual?: number, r = rec(withEo)) => buildCaptainLab(r, goal, manual ?? null);
 
   it("takes the three highest-xPts starters as candidates, with the ×2 value and range", () => {

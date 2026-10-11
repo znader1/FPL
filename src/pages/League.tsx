@@ -12,14 +12,8 @@ import {
   type LeagueStrategyResponse,
 } from "@/lib/fplAssistantApi";
 import { useEntitlement } from "@/hooks/useEntitlement";
+import { getInitialEntryId } from "@/lib/entryId";
 
-const getInitialEntryId = (): number => {
-  const fromQuery = Number(new URLSearchParams(window.location.search).get("entry_id"));
-  if (Number.isFinite(fromQuery) && fromQuery > 0) return fromQuery;
-  const fromStorage = Number(localStorage.getItem("fpl_entry_id"));
-  if (Number.isFinite(fromStorage) && fromStorage > 0) return fromStorage;
-  return 0;
-};
 
 const MODES: Array<{ id: LeagueStrategyMode; label: string; icon: typeof Target; blurb: string }> = [
   { id: "chase", label: "Chase", icon: Target, blurb: "Catch rivals above by targeting their differentials" },

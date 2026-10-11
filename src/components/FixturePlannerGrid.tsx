@@ -64,8 +64,10 @@ export function FixturePlannerGrid({ rows, gws, horizon, tags }: FixturePlannerG
       </thead>
       <tbody>
         {rows.map((r) => {
-          const visible = r.cells.filter((c) => c.inHorizon).length || 1;
-          const tone = TOTAL_TONE[totalTone(r.total === null ? null : r.total / visible)];
+          // Average over the cells that actually have xPts: a 3-GW answer shown
+          // as placeholder under a 6-GW horizon must not read as half the pace.
+          const withXpts = r.cells.filter((c) => c.inHorizon && typeof c.xpts === "number").length || 1;
+          const tone = TOTAL_TONE[totalTone(r.total === null ? null : r.total / withXpts)];
           return (
             <tr
               key={r.playerId}

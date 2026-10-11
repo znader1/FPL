@@ -52,7 +52,7 @@ import { QueryErrorCard } from "@/components/QueryErrorCard";
 import { isLatestSquad, resolveGwGateState, shouldAutoRecommend } from "@/lib/gwGate";
 import { Button } from "@/components/ui/button";
 import { Zap } from "lucide-react";
-import { parseEntryIdInput } from "@/lib/entryId";
+import { parseEntryIdInput, getInitialEntryId } from "@/lib/entryId";
 import { checkEntryIdentity, rolloverMessage } from "@/lib/entryIdentity";
 import { useProfile } from "@/hooks/useProfile";
 import { useAuth } from "@/contexts/AuthContext";
@@ -103,16 +103,6 @@ const getInitialGw = () => {
   return null;
 };
 
-const getInitialEntryId = () => {
-  const fromQuery = Number(new URLSearchParams(window.location.search).get("entry_id"));
-  if (Number.isFinite(fromQuery) && fromQuery > 0) return fromQuery;
-
-  const fromStorage = Number(localStorage.getItem("fpl_entry_id"));
-  if (Number.isFinite(fromStorage) && fromStorage > 0) return fromStorage;
-
-  // No stored ID — 0 triggers the onboarding overlay in PitchVisualization.
-  return 0;
-};
 
 const getInitialHorizon = () => {
   const fromQuery = Number(new URLSearchParams(window.location.search).get("horizon_gws"));

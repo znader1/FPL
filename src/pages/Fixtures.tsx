@@ -10,6 +10,7 @@ import { FixturePlannerGrid } from "@/components/FixturePlannerGrid";
 import { PlannerRail } from "@/components/PlannerRail";
 import { QueryErrorCard } from "@/components/QueryErrorCard";
 import { useProfile } from "@/hooks/useProfile";
+import { getInitialEntryId } from "@/lib/entryId";
 import {
   buildPlannerRows,
   chipWindowsInRange,
@@ -35,13 +36,6 @@ const GRID_GWS = 6;
 const HORIZONS = [3, 6] as const;
 type Horizon = (typeof HORIZONS)[number];
 
-const getInitialEntryId = () => {
-  const fromQuery = Number(new URLSearchParams(window.location.search).get("entry_id"));
-  if (Number.isFinite(fromQuery) && fromQuery > 0) return fromQuery;
-  const fromStorage = Number(localStorage.getItem("fpl_entry_id"));
-  if (Number.isFinite(fromStorage) && fromStorage > 0) return fromStorage;
-  return 0;
-};
 
 const parseHorizon = (raw: string | null): Horizon => (raw === "3" ? 3 : 6);
 
@@ -170,19 +164,26 @@ const Fixtures = () => {
   });
   // Planning basis: the next deadline's GW. /squad substitutes the latest picks
   // for a GW that hasn't locked, which is exactly what a planner wants.
-  const gw = nextEventQuery.data?.event_id ?? null;
   const hasEntry = entryId > 0;
+  // /events/next can 5xx on a Fly cold start while /fixtures/difficulty is fine:
+  // the ticker then runs without gw_start and its own first GW becomes the basis.
+  const nextEventFailed = nextEventQuery.isError;
+  const tickerQuery = useQuery<FixtureDifficultyResponse>({
+    queryKey: ["fixture-difficulty", nextEventQuery.data?.event_id ?? (nextEventFailed ? "fallback" : null), GRID_GWS],
+    queryFn: ({ signal }) =>
+      fetchFixtureDifficulty(
+        typeof nextEventQuery.data?.event_id === "number" ? { gw_start: nextEventQuery.data.event_id, horizon_gws: GRID_GWS } : { horizon_gws: GRID_GWS },
+        signal,
+      ),
+    enabled: typeof nextEventQuery.data?.event_id === "number" || nextEventFailed,
+    staleTime: 30 * 60_000,
+  });
+  const gw = nextEventQuery.data?.event_id ?? (nextEventFailed ? (tickerQuery.data?.gws?.[0] ?? null) : null);
 
   const squadQuery = useQuery<FplSquad>({
     queryKey: ["squad", entryId, gw],
     queryFn: ({ signal }) => fetchSquad({ entryId, eventId: gw as number }, signal),
     enabled: hasEntry && gw !== null,
-  });
-  const tickerQuery = useQuery<FixtureDifficultyResponse>({
-    queryKey: ["fixture-difficulty", gw, GRID_GWS],
-    queryFn: ({ signal }) => fetchFixtureDifficulty({ gw_start: gw as number, horizon_gws: GRID_GWS }, signal),
-    enabled: gw !== null,
-    staleTime: 30 * 60_000,
   });
   const chipPlanQuery = useQuery<ChipPlanResponse>({
     queryKey: ["chipPlan", entryId, gw],
@@ -253,7 +254,7 @@ const Fixtures = () => {
   );
 
   // Both feeds gate the grid: squad-only would paint fifteen rows of "—".
-  const loadingGrid = hasEntry && (nextEventQuery.isPending || squadQuery.isPending || tickerQuery.isPending);
+  const loadingGrid = hasEntry && ((nextEventQuery.isPending && !nextEventFailed) || squadQuery.isPending || tickerQuery.isPending);
   const recState = recQuery.isError ? "error" : recQuery.isSuccess && !recQuery.isPlaceholderData ? "ready" : "loading";
 
   return (
@@ -281,13 +282,16 @@ const Fixtures = () => {
               <Link to="/app">Open squad</Link>
             </Button>
           </Card>
-        ) : nextEventQuery.isError ? (
+        ) : nextEventQuery.isError && tickerQuery.isError ? (
           <div className="mx-auto max-w-md">
             <QueryErrorCard
               title="Couldn't reach the FPL Assistant"
               message="The server may be waking up. Try again in a moment."
-              onRetry={() => nextEventQuery.refetch()}
-              retrying={nextEventQuery.isFetching}
+              onRetry={() => {
+                nextEventQuery.refetch();
+                tickerQuery.refetch();
+              }}
+              retrying={nextEventQuery.isFetching || tickerQuery.isFetching}
             />
           </div>
         ) : nextEventQuery.isSuccess && gw === null ? (

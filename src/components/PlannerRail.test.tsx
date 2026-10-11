@@ -38,6 +38,12 @@ describe("PlannerRail", () => {
     expect(out?.textContent).toBe("Isak");
   });
 
+  it("never shows the other horizon's links while this one is loading", () => {
+    render(<PlannerRail chips={chips} links={links} horizon={3} recommendationState="loading" />);
+    expect(screen.queryAllByTestId("weak-link")).toHaveLength(0);
+    expect(screen.getByText(/loading your moves/i)).toBeTruthy();
+  });
+
   it("explains empty states", () => {
     render(<PlannerRail chips={[]} links={[]} horizon={3} recommendationState="loading" />);
     expect(screen.getByText(/No chip window in these gameweeks/)).toBeTruthy();

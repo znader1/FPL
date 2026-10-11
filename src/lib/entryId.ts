@@ -1,5 +1,15 @@
 export const ENTRY_ID_STORAGE_KEY = "fpl_entry_id";
 
+/** The entry to open with: `?entry_id=` on the URL, else the stored one, else 0
+ *  (which Index reads as "show onboarding"). One rule for every hub page. */
+export const getInitialEntryId = (search: string = window.location.search): number => {
+  const fromQuery = Number(new URLSearchParams(search).get("entry_id"));
+  if (Number.isFinite(fromQuery) && fromQuery > 0) return fromQuery;
+  const fromStorage = Number(localStorage.getItem(ENTRY_ID_STORAGE_KEY));
+  if (Number.isFinite(fromStorage) && fromStorage > 0) return fromStorage;
+  return 0;
+};
+
 /**
  * Parse raw user input into an FPL entry ID.
  * Accepts plain digits ("588004") or a pasted FPL URL

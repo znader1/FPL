@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Search } from "lucide-react";
 import { findIncomingPlayers } from "@/lib/incomingPlayers";
+import { parseFixtureLabel } from "@/lib/fixtureLabel";
 import {
   CHIP_LABELS,
   type ChipName,
@@ -69,25 +70,7 @@ const chipLabel = (value?: string | null) => {
   return Object.prototype.hasOwnProperty.call(CHIP_LABELS, value) ? CHIP_LABELS[value as ChipName] : value;
 };
 
-const parseNextFixturesLabel = (label?: string): Player["fixture"] | undefined => {
-  if (typeof label !== "string") return undefined;
-  const trimmed = label.trim();
-  if (!trimmed) return undefined;
-
-  const difficultyMatch = trimmed.match(/\(D([1-5])\)/i);
-  const difficulty = difficultyMatch ? Number(difficultyMatch[1]) : undefined;
-
-  const isHome = trimmed.startsWith("H-") ? true : trimmed.startsWith("A-") ? false : undefined;
-  const opponentMatch = trimmed.match(/^[HA]-([A-Z]{2,4})/);
-  const opponent = opponentMatch?.[1] ?? "";
-
-  return {
-    label: trimmed,
-    opponent,
-    isHome,
-    difficulty,
-  };
-};
+const parseNextFixturesLabel = (label?: string): Player["fixture"] | undefined => parseFixtureLabel(label);
 
 const getCaptainIds = (team: PitchTeam) => {
   const captainFromId = typeof team.captain_player_id === "number" ? team.captain_player_id : undefined;

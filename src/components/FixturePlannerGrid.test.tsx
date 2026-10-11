@@ -24,6 +24,16 @@ const rows = [
 const tags = [{ gw: 29, tag: null }, { gw: 30, tag: "DGW" as const }, { gw: 31, tag: "BLANK" as const }];
 
 describe("FixturePlannerGrid", () => {
+  it("tones the total by the average over cells that have xPts, not over every column in the horizon", () => {
+    // A 3-GW answer shown under a 6-GW horizon: 3 cells at 6.5, 3 without xPts → avg 6.5 = hot, not 3.25 = cold.
+    const half = row({
+      total: 19.5,
+      cells: [29, 30, 31, 32, 33, 34].map((gw, i) => ({ gw, blank: false, count: 1, fixtures: [], xpts: i < 3 ? 6.5 : undefined, inHorizon: true })),
+    });
+    render(<FixturePlannerGrid rows={[half]} gws={[29, 30, 31, 32, 33, 34]} tags={[]} horizon={6} />);
+    expect(screen.getByTestId("row-total").className).toContain("text-primary");
+  });
+
   it("renders GW heads with tags, fading those beyond the horizon", () => {
     render(<FixturePlannerGrid rows={rows} gws={[29, 30, 31]} horizon={2} tags={tags} />);
     const heads = screen.getAllByRole("columnheader");

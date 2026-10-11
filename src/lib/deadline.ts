@@ -16,9 +16,15 @@ const HAS_ZONE = /(Z|[+-]\d{2}:?\d{2})$/i;
  *  A bare ISO timestamp (no zone) is read as UTC — the backend's `deadline_time_utc`
  *  is UTC by name, and JS would otherwise parse it as local time. */
 export const remainingMs = (deadlineIso: string | null | undefined, now: number): number | null => {
+  const t = parseDeadline(deadlineIso);
+  return t === null ? null : t - now;
+};
+
+/** The deadline as epoch ms under the same zone rule as the countdown — the one
+ *  parser for anything that displays the instant. Null when absent or unparseable. */
+export const parseDeadline = (deadlineIso: string | null | undefined): number | null => {
   if (!deadlineIso) return null;
   const iso = HAS_ZONE.test(deadlineIso) ? deadlineIso : `${deadlineIso}Z`;
   const t = Date.parse(iso);
-  if (!Number.isFinite(t)) return null;
-  return t - now;
+  return Number.isFinite(t) ? t : null;
 };

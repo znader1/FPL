@@ -39,6 +39,14 @@ describe("DeadlineCountdown", () => {
     expect(pill.className).toContain("whitespace-nowrap");
   });
 
+  it("titles the pill with the deadline read as UTC when the backend sends no zone", async () => {
+    fetchNextEvent.mockResolvedValue({ event_id: 29, deadline_time_utc: "2026-10-11T16:12:33" });
+    renderWithClient(<DeadlineCountdown />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    const pill = screen.getByTestId("deadline-pill");
+    expect(pill.getAttribute("title")).toBe(`Deadline ${new Date("2026-10-11T16:12:33Z").toLocaleString()}`);
+  });
+
   it("renders nothing once the deadline has passed", async () => {
     fetchNextEvent.mockResolvedValue({ event_id: 29, deadline_time_utc: "2026-10-10T11:59:00Z" });
     renderWithClient(<DeadlineCountdown />);

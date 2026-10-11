@@ -61,7 +61,7 @@ export function PlannerRail({ chips, links, horizon, recommendationState = "read
               )}
             </p>
           )}
-          {links.map((l) => (
+          {recommendationState === "ready" && links.map((l) => (
             <div
               key={`${l.out}-${l.in}`}
               data-testid="weak-link"

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { fetchNextEvent, type FplNextEventSummary } from "@/lib/fplAssistantApi";
 import { useCountdown } from "@/hooks/useCountdown";
-import { formatCountdown } from "@/lib/deadline";
+import { formatCountdown, parseDeadline } from "@/lib/deadline";
 
 /** Navbar pill: pulsing dot · "GW29 deadline" · `1d 04:12:33`, ticking every second.
  *  Shares the `["next-event"]` cache entry with Index, so it costs no extra request.
@@ -19,7 +19,7 @@ export function DeadlineCountdown() {
     <div
       data-testid="deadline-pill"
       className="flex shrink-0 items-center gap-2 whitespace-nowrap rounded-full border border-primary/35 bg-primary/10 px-3 py-1.5 text-xs"
-      title={`Deadline ${new Date(data.deadline_time_utc as string).toLocaleString()}`}
+      title={`Deadline ${new Date(parseDeadline(data.deadline_time_utc) as number).toLocaleString()}`}
     >
       <span aria-hidden className="h-[7px] w-[7px] rounded-full bg-primary animate-fpl-pulse" />
       <span className="font-semibold text-foreground">GW{data.event_id} deadline</span>
