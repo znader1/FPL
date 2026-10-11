@@ -5,8 +5,6 @@ import type { PlanStep } from "@/lib/gwPlan";
 
 interface WeekChecklistProps {
   decisions: WeekDecision[];
-  /** Compact strip for narrow viewports: one count line plus label-only chips. */
-  compact?: boolean;
   /** When given, rows (and a "Squad overview" row) become buttons that open their step. */
   onSelect?: (step: PlanStep) => void;
   activeStep?: PlanStep;
@@ -17,7 +15,7 @@ interface WeekChecklistProps {
 
 /** "THIS WEEK · n of 4 decisions made" — the Command Center's left-rail checklist,
  *  and since the v2 flow the way between steps. */
-export function WeekChecklist({ decisions, compact = false, onSelect, activeStep, onReset, dirty = false }: WeekChecklistProps) {
+export function WeekChecklist({ decisions, onSelect, activeStep, onReset, dirty = false }: WeekChecklistProps) {
   const done = decisions.filter((d) => d.done).length;
   const pct = decisions.length ? Math.round((done / decisions.length) * 100) : 0;
   const interactive = Boolean(onSelect);
@@ -52,58 +50,6 @@ export function WeekChecklist({ decisions, compact = false, onSelect, activeStep
       {interactive && <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />}
     </>
   );
-
-  if (compact) {
-    // Phone strip above the pitch: one line (count + Reset), a hairline bar,
-    // and four label-only chips — the squad has to show in the first screen.
-    return (
-      <section aria-label="This week's decisions" className="flex flex-col gap-2">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-sm font-extrabold tracking-tight text-foreground">
-            {done} of {decisions.length} decisions made
-          </p>
-          {onReset && dirty && (
-            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground" onClick={onReset}>
-              Reset plan
-            </Button>
-          )}
-        </div>
-        <div className="h-1 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-          <div data-testid="week-progress" className="h-full rounded-full bg-accent transition-[width] duration-300" style={{ width: `${pct}%` }} />
-        </div>
-        <ul className="flex gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {decisions.map((d) => {
-            const active = activeStep === d.key;
-            const cls = `flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-2.5 py-1 text-xs font-semibold ${
-              active
-                ? "border-primary/55 bg-primary/10 text-foreground"
-                : d.warn
-                  ? "border-fdr-4/40 bg-fdr-4/[0.06] text-fdr-4"
-                  : d.done
-                    ? "border-border text-foreground"
-                    : "border-primary/40 bg-primary/[0.08] text-foreground"
-            }`;
-            const mark = d.warn ? <span aria-hidden className="text-fdr-4">!</span> : d.done ? <span aria-hidden className="text-accent">✓</span> : null;
-            return (
-              <li key={d.key} data-done={d.done} data-warn={Boolean(d.warn)} data-active={active}>
-                {interactive ? (
-                  <button type="button" onClick={() => onSelect?.(d.key)} className={cls} title={d.value}>
-                    {mark}
-                    {d.label}
-                  </button>
-                ) : (
-                  <span className={cls} title={d.value}>
-                    {mark}
-                    {d.label}
-                  </span>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      </section>
-    );
-  }
 
   return (
     <section aria-label="This week's decisions">

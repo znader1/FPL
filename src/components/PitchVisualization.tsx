@@ -337,7 +337,7 @@ export const PitchVisualization = ({
               <div className="flex items-center gap-1 shrink-0">
                 <button
                   onClick={() => onPitchModeChange("squad")}
-                  className={`px-3 py-1 rounded-lg text-sm font-semibold transition-all ${
+                  className={`px-2 py-1 rounded-lg text-xs font-semibold transition-all sm:px-3 sm:text-sm ${
                     pitchMode === "squad"
                       ? "bg-primary text-white shadow-sm"
                       : "text-muted-foreground hover:text-foreground"
@@ -348,7 +348,7 @@ export const PitchVisualization = ({
                 <button
                   onClick={() => hasRecommendation && onPitchModeChange("recommendation")}
                   disabled={!hasRecommendation}
-                  className={`px-3 py-1 rounded-lg text-sm font-semibold transition-all ${
+                  className={`px-2 py-1 rounded-lg text-xs font-semibold transition-all sm:px-3 sm:text-sm ${
                     pitchMode === "recommendation"
                       ? "bg-primary text-white shadow-sm"
                       : hasRecommendation

@@ -63,19 +63,6 @@ describe("WeekChecklist as the flow's navigation (v2)", () => {
     expect(onReset).toHaveBeenCalled();
   });
 
-  it("compact (phones): one count line with Reset beside it, chips with labels only, no values", () => {
-    // Above the pitch on a phone the full 2×2 cards pushed the squad below
-    // the fold; the strip is now one line of count + four chips.
-    const onReset = vi.fn();
-    render(<WeekChecklist decisions={rows} compact onSelect={() => {}} onReset={onReset} dirty />);
-    expect(screen.getByText("2 of 4 decisions made")).toBeTruthy();
-    expect(screen.queryByText("Saka (C) · Palmer (VC)")).toBeNull();
-    expect(screen.queryByText("This week")).toBeNull();
-    const chips = screen.getAllByRole("button").filter((b) => b.textContent !== "Reset plan");
-    expect(chips.map((c) => c.textContent)).toEqual(["Transfers", "✓Captain", "✓Bench order", "Chip"]);
-    expect(screen.getByRole("button", { name: /reset plan/i })).toBeTruthy();
-  });
-
   it("renders plain rows (no buttons) without onSelect", () => {
     render(<WeekChecklist decisions={rows} />);
     expect(within(screen.getAllByRole("listitem")[0]).queryByRole("button")).toBeNull();

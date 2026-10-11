@@ -52,15 +52,17 @@ export const GameweekNav = ({
     isLiveGw && typeof updatedAt === "number" && updatedAt > 0
       ? new Date(updatedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
       : null;
+  // One row on phones (no wrap; the rank truncates before anything wraps),
+  // free to wrap from sm up where the action button joins.
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-2 mb-3 bg-card border border-border rounded-xl px-2.5 py-1.5">
+    <div className="flex flex-nowrap items-center gap-x-1.5 mb-3 bg-card border border-border rounded-xl px-2 py-1.5 sm:flex-wrap sm:gap-x-2 sm:gap-y-2 sm:px-2.5">
       {leading}
       {/* GW navigation */}
       <div className="flex items-center gap-1.5 shrink-0">
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7 text-muted-foreground hover:text-foreground"
+          className="hidden h-7 w-7 text-muted-foreground hover:text-foreground sm:inline-flex"
           aria-label="Previous gameweek"
           onClick={onPrev}
           disabled={!navEnabled || currentGW <= 1}
@@ -74,7 +76,7 @@ export const GameweekNav = ({
             onValueChange={(v) => onSelectGW(Number(v))}
             disabled={!navEnabled}
           >
-            <SelectTrigger className="h-7 w-[92px] text-sm font-bold text-foreground border-0 bg-transparent focus:ring-0 px-1.5">
+            <SelectTrigger className="h-7 w-[68px] px-1 text-sm font-bold text-foreground border-0 bg-transparent focus:ring-0 sm:w-[92px] sm:px-1.5">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -94,7 +96,7 @@ export const GameweekNav = ({
         <Button
           variant="ghost"
           size="icon"
-          className="h-7 w-7 text-muted-foreground hover:text-foreground"
+          className="hidden h-7 w-7 text-muted-foreground hover:text-foreground sm:inline-flex"
           aria-label="Next gameweek"
           onClick={onNext}
           disabled={!navEnabled || currentGW >= totalGW}
@@ -121,8 +123,8 @@ export const GameweekNav = ({
       </div>
 
       {/* Stats */}
-      <div className="flex items-center gap-4 min-w-0">
-        <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-2 min-w-0 sm:gap-4">
+        <div className="flex items-center gap-1 sm:gap-1.5">
           <Star className="h-3.5 w-3.5 text-primary shrink-0" />
           <span className="hidden xl:inline text-xs text-muted-foreground shrink-0">
             {isRecommendation ? "Proj. xPts" : "GW Pts"}
@@ -133,7 +135,7 @@ export const GameweekNav = ({
         {!isRecommendation && rank !== "—" && (
           <>
             <div className="hidden xl:block h-4 w-px bg-border shrink-0" />
-            <div className="flex items-center gap-1.5 min-w-0">
+            <div className="flex items-center gap-1 min-w-0 sm:gap-1.5">
               <Trophy className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               <span className="hidden xl:inline text-xs text-muted-foreground shrink-0">Rank</span>
               <span className="text-sm font-bold text-foreground tabular-nums truncate">{rank}</span>

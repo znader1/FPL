@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { CommandRail } from "@/components/CommandRail";
-import { WeekChecklist } from "@/components/WeekChecklist";
 import { deriveWeekDecisions } from "@/lib/weekDecisions";
 import { GwPlanValueProvider, useGwPlanStore } from "@/contexts/GwPlanContext";
 import {
@@ -1072,12 +1071,8 @@ const Index = () => {
             <StepHeader copy={header} savedBanner />
           </div>
         )}
-        {/* Phones get the checklist as a strip above the pitch; the rail is lg+. */}
-        {!isDesktop && entryId > 0 && (
-          <div className="mx-auto w-full max-w-5xl px-4 pt-3 lg:hidden">
-            <WeekChecklist decisions={weekDecisions} compact onSelect={goStep} activeStep={step} onReset={resetPlan} dirty={planDirty} />
-          </div>
-        )}
+        {/* No checklist strip on phones: the step chips under the navbar already
+            carry the ✓ per decision, and the squad has to show in the first screen. */}
         {identityCheck.status === "rolled-over" && (
           <div className="mx-auto w-full max-w-5xl px-4 pt-4">
             <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
