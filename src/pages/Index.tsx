@@ -36,6 +36,7 @@ import { useCountdown } from "@/hooks/useCountdown";
 import { formatCountdown } from "@/lib/deadline";
 import { StepChips } from "@/components/plan/StepChips";
 import { StepHeader } from "@/components/plan/StepHeader";
+import { SavedStrip } from "@/components/plan/SavedStrip";
 import { PlanFooter } from "@/components/plan/PlanFooter";
 import { TransfersStep } from "@/components/plan/TransfersStep";
 import { CaptainStep } from "@/components/plan/CaptainStep";
@@ -1054,11 +1055,11 @@ const Index = () => {
         // stacks vertically and a collapsed-height column makes the pitch
         // overlap its siblings.
         <div className="flex flex-col lg:flex-1 lg:min-w-0 lg:min-h-0">
-        {/* Desktop only: on a phone the navbar pill already says "Saved" and the
-            title/sub pushed the squad below the fold. */}
-        {plan?.locked && (
+        {/* Desktop only, one line: the navbar pill already says "Saved", and the
+            old eyebrow/title/paragraph/banner stack pushed the squad down. */}
+        {plan?.locked && typeof deadlineGw === "number" && (
           <div className="mx-auto hidden w-full max-w-5xl px-4 pt-4 lg:block">
-            <StepHeader copy={header} savedBanner />
+            <SavedStrip gw={deadlineGw} />
           </div>
         )}
         {/* No checklist strip on phones: the step chips under the navbar already

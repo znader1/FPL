@@ -9,6 +9,7 @@ import { BenchStep } from "./BenchStep";
 import { ChipStep } from "./ChipStep";
 import { ReviewStep } from "./ReviewStep";
 import { StepHeader } from "./StepHeader";
+import { SavedStrip } from "./SavedStrip";
 import type { WeekDecision } from "@/lib/weekDecisions";
 import type { CaptainLab } from "@/lib/captainLab";
 import type { ChipOption, TransferOptions } from "@/lib/planFlow";
@@ -275,5 +276,15 @@ describe("ReviewStep", () => {
     expect(screen.getByText("GW29 plan saved")).toBeTruthy();
     expect(screen.getByText(/before the deadline \(1d 04:12:33\)/)).toBeTruthy();
     expect(screen.getByText("Transfer out Isak, bring in Solanke (free).")).toBeTruthy();
+  });
+});
+
+describe("SavedStrip", () => {
+  it("is one line: the GW, saved, and that an edit reopens it", () => {
+    render(<SavedStrip gw={29} />);
+    const strip = screen.getByRole("status");
+    expect(strip.textContent).toContain("GW29 plan saved");
+    expect(strip.textContent).toContain("any edit reopens it until the deadline");
+    expect(screen.queryByRole("heading")).toBeNull();
   });
 });
