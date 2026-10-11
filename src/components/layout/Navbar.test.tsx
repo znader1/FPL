@@ -14,12 +14,12 @@ vi.mock("./DeadlineCountdown", () => ({
 
 afterEach(cleanup);
 
-const renderAt = (path: string, extras?: React.ReactNode) => {
+const renderAt = (path: string, extras?: React.ReactNode, planStatus?: { changes: number; locked: boolean }) => {
   const client = new QueryClient();
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[path]}>
-        <Navbar extras={extras} />
+        <Navbar extras={extras} planStatus={planStatus} />
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -53,5 +53,39 @@ describe("Navbar on the landing page", () => {
   it("renders no deadline pill", () => {
     renderAt("/");
     expect(screen.queryByTestId("deadline-pill")).toBeNull();
+  });
+});
+
+describe("Navbar plan status pill (v2 flow)", () => {
+  it("reads No changes yet / n unsaved changes / Plan saved, with a short form for phones", () => {
+    const { rerender } = renderAt("/app", undefined, { changes: 0, locked: false });
+    expect(screen.getByTestId("plan-status").textContent).toContain("No changes yet");
+    cleanup();
+    renderAt("/app", undefined, { changes: 2, locked: false });
+    const pill = screen.getByTestId("plan-status");
+    expect(pill.textContent).toContain("2 unsaved changes");
+    expect(pill.textContent).toContain("2 unsaved");
+    expect(pill.getAttribute("data-tone")).toBe("warning");
+    cleanup();
+    renderAt("/app", undefined, { changes: 1, locked: false });
+    expect(screen.getByTestId("plan-status").textContent).toContain("1 unsaved change");
+    cleanup();
+    renderAt("/app", undefined, { changes: 2, locked: true });
+    expect(screen.getByTestId("plan-status").textContent).toContain("Plan saved");
+    expect(screen.getByTestId("plan-status").getAttribute("data-tone")).toBe("saved");
+    void rerender;
+  });
+
+  it("renders no pill without a plan status", () => {
+    renderAt("/app");
+    expect(screen.queryByTestId("plan-status")).toBeNull();
+  });
+
+  it("lights Squad on every plan step except the captain's, which lights Captain", () => {
+    renderAt("/app/plan/bench");
+    expect(screen.getByTestId("app-tabs").querySelector('[aria-current="page"]')?.textContent).toBe("Squad");
+    cleanup();
+    renderAt("/app/plan/captain");
+    expect(screen.getByTestId("app-tabs").querySelector('[aria-current="page"]')?.textContent).toBe("Captain");
   });
 });

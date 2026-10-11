@@ -49,7 +49,10 @@ const NON_MATERIAL: ReadonlySet<keyof GwPlan> = new Set(["reviewed", "locked"]);
 
 export function seedPlan(squad: FplSquad): GwPlan {
   const xi = squad.starting_xi.map((p) => p.player_id);
-  const bench = [...squad.bench].sort((a, b) => a.bench_order - b.bench_order).map((p) => p.player_id);
+  // FPL keeps the reserve keeper in the first bench slot; some payloads order
+  // him last, so pin him by position and sort only the outfield subs.
+  const sorted = [...squad.bench].sort((a, b) => a.bench_order - b.bench_order);
+  const bench = [...sorted.filter((p) => p.pos === "GKP"), ...sorted.filter((p) => p.pos !== "GKP")].map((p) => p.player_id);
   const all = [...squad.starting_xi, ...squad.bench];
   const cap = squad.captain_player_id ?? all.find((p) => p.is_captain)?.player_id ?? xi[0];
   const vice = squad.vice_player_id ?? all.find((p) => p.is_vice_captain)?.player_id ?? xi.find((id) => id !== cap) ?? xi[0];

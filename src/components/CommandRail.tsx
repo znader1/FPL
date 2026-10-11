@@ -5,9 +5,15 @@ import { WeekChecklist } from "@/components/WeekChecklist";
 import { ProjectedCard } from "@/components/ProjectedCard";
 import { ParameterForm, type ParameterFormProps } from "@/components/ParameterForm";
 import type { WeekDecision } from "@/lib/weekDecisions";
+import type { PlanStep } from "@/lib/gwPlan";
 
 interface CommandRailProps {
   decisions: WeekDecision[];
+  /** v2 flow: rows open their step; the active one is lit; Reset plan while dirty. */
+  onSelectStep?: (step: PlanStep) => void;
+  activeStep?: PlanStep;
+  onReset?: () => void;
+  dirty?: boolean;
   gw: number;
   projected?: number;
   delta?: number;
@@ -21,11 +27,11 @@ interface CommandRailProps {
  *  score, and the recommendation parameters folded away underneath. The old
  *  icon sidebar put settings first; the week's decisions are what the manager
  *  came for, so they lead. */
-export function CommandRail({ decisions, gw, projected, delta, percentile, top10kAvg, overallAvg, parameters }: CommandRailProps) {
+export function CommandRail({ decisions, onSelectStep, activeStep, onReset, dirty, gw, projected, delta, percentile, top10kAvg, overallAvg, parameters }: CommandRailProps) {
   const [open, setOpen] = useState(false);
   return (
     <aside className="flex w-[240px] shrink-0 flex-col gap-5 overflow-y-auto border-r border-sidebar-border bg-sidebar px-4 py-5 xl:w-[280px]">
-      <WeekChecklist decisions={decisions} />
+      <WeekChecklist decisions={decisions} onSelect={onSelectStep} activeStep={activeStep} onReset={onReset} dirty={dirty} />
       <ProjectedCard gw={gw} projected={projected} delta={delta} percentile={percentile} top10kAvg={top10kAvg} overallAvg={overallAvg} />
       <Collapsible open={open} onOpenChange={setOpen} className="-mx-4 mt-auto border-t border-sidebar-border">
         <CollapsibleTrigger className="flex w-full items-center gap-2 px-4 py-3 text-xs font-semibold text-sidebar-foreground/70 transition-colors hover:text-sidebar-foreground">

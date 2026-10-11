@@ -29,8 +29,9 @@ export interface Player {
   scoreBreakdown?: FplPlayerScoreBreakdown;
   /** Command Center: radial xPts glow behind the jersey, sized from `points`. */
   aura?: boolean;
-  /** Command Center: this-GW gain of the move that brought the player in ("IN +2.4"). */
-  inGain?: number;
+  /** Command Center: this-GW gain of the move that brought the player in ("IN +2.4");
+   *  null when the player is new but the gain is unknown (bare "IN"). */
+  inGain?: number | null;
 }
 
 interface PlayerCardProps {
@@ -136,9 +137,9 @@ export const PlayerCard = ({ player }: PlayerCardProps) => {
                 }}
               />
             )}
-            {typeof player.inGain === "number" && (
+            {player.inGain !== undefined && (
               <div className="absolute -top-3.5 left-1/2 z-10 -translate-x-1/2 whitespace-nowrap rounded-full bg-accent px-1.5 py-px text-[10px] font-bold text-white shadow-sm">
-                IN {player.inGain < 0 ? "−" : "+"}{Math.abs(player.inGain).toFixed(1)}
+                {typeof player.inGain === "number" ? `IN ${player.inGain < 0 ? "−" : "+"}${Math.abs(player.inGain).toFixed(1)}` : "IN"}
               </div>
             )}
             <JerseyIcon

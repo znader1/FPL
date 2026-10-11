@@ -42,6 +42,12 @@ interface PitchVisualizationProps {
   showActualPoints?: boolean;
   /** Optional action rendered next to the Squad / ZN Pick tabs (e.g. Optimize my squad). */
   headerAction?: ReactNode;
+  /** v2 flow: incoming players by id (gain, or null when unknown). Overrides the
+   *  payload-derived map, which a plan-built squad can't carry. */
+  incoming?: Record<number, number | null>;
+  /** v2 flow bench step: outline valid swap targets, dim invalid ones. */
+  starterState?: (playerId: number) => "valid" | "invalid" | undefined;
+  onStarterClick?: (playerId: number) => void;
 }
 
 export const getRowGapClass = (count: number) => {
@@ -191,6 +197,9 @@ export const PitchVisualization = ({
   updatedAt = null,
   showActualPoints = false,
   headerAction,
+  incoming: incomingProp,
+  starterState,
+  onStarterClick,
 }: PitchVisualizationProps) => {
   const [draftId, setDraftId] = useState("");
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -236,13 +245,37 @@ export const PitchVisualization = ({
   const bench = useMemo(() => {
     return [...(displayedTeam?.bench ?? [])].sort((a, b) => a.bench_order - b.bench_order);
   }, [displayedTeam]);
-  const incoming = useMemo(() => (team ? findIncomingPlayers(team) : {}), [team]);
+  const incomingFromTeam = useMemo(() => (team ? findIncomingPlayers(team) : {}), [team]);
+  const incoming = incomingProp ?? incomingFromTeam;
   const teamName = team?.entry?.team_name ?? undefined;
 
   const starter = (player: FplTeamRecommendationPlayer): Player => ({
     ...toPitchPlayer(player, captainId, viceId, getFixtureForPlayer(player), isLiveGw, showActualPoints, incoming[player.player_id]),
     aura: true,
   });
+
+  // Bench step: a bench row is selected, so every starter is either a valid
+  // swap target (teal outline, tappable) or not (dimmed; a tap explains why).
+  const Starter = ({ player }: { player: FplTeamRecommendationPlayer }) => {
+    const state = starterState?.(player.player_id);
+    const swapping = Boolean(starterState);
+    return (
+      <div
+        data-testid={`starter-${player.player_id}`}
+        data-swap={state}
+        onClick={swapping && onStarterClick ? () => onStarterClick(player.player_id) : undefined}
+        className={`rounded-xl transition-[opacity,box-shadow] duration-200 ${
+          state === "valid"
+            ? "cursor-pointer shadow-[0_0_0_2px_hsl(var(--accent))]"
+            : state === "invalid"
+              ? "cursor-not-allowed opacity-[.35]"
+              : ""
+        } ${swapping ? "[&_*]:pointer-events-none" : ""}`}
+      >
+        <PlayerCard player={starter(player)} />
+      </div>
+    );
+  };
 
   const getFixtureForTeam = (teamShort: string): Player["fixture"] | undefined => {
     const fixtures = fixturesByTeam?.[teamShort];
@@ -474,28 +507,28 @@ export const PitchVisualization = ({
               {/* Goalkeeper */}
               <div className="flex justify-center relative z-10">
                 {goalkeeper.map((player) => (
-                  <PlayerCard key={player.player_id} player={starter(player)} />
+                  <Starter key={player.player_id} player={player} />
                 ))}
               </div>
 
               {/* Defenders */}
               <div className={`flex justify-center ${getRowGapClass(defenders.length)} relative z-10`}>
                 {defenders.map((player) => (
-                  <PlayerCard key={player.player_id} player={starter(player)} />
+                  <Starter key={player.player_id} player={player} />
                 ))}
               </div>
 
               {/* Midfielders */}
               <div className={`flex justify-center ${getRowGapClass(midfielders.length)} relative z-10`}>
                 {midfielders.map((player) => (
-                  <PlayerCard key={player.player_id} player={starter(player)} />
+                  <Starter key={player.player_id} player={player} />
                 ))}
               </div>
 
               {/* Forwards */}
               <div className={`flex justify-center ${getRowGapClass(forwards.length)} relative z-10`}>
                 {forwards.map((player) => (
-                  <PlayerCard key={player.player_id} player={starter(player)} />
+                  <Starter key={player.player_id} player={player} />
                 ))}
               </div>
             </>

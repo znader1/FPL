@@ -97,6 +97,11 @@ describe("seedPlan", () => {
     expect(plan).toMatchObject({ transfer: null, chip: null, reviewed: {}, locked: false });
   });
 
+  it("pins the goalkeeper to the first bench slot whatever his bench_order", () => {
+    const gkLast: FplSquad = { ...SQUAD, bench: BENCH.map((p) => ({ ...p, bench_order: p.pos === "GKP" ? 4 : p.bench_order - 1 })) };
+    expect(seedPlan(gkLast).bench).toEqual([12, 14, 13, 15]);
+  });
+
   it("falls back to the is_captain flags when the ids are absent", () => {
     const plan = seedPlan({ ...SQUAD, captain_player_id: undefined, vice_player_id: undefined });
     expect(plan.cap).toBe(5);

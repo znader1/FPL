@@ -11,8 +11,8 @@ import {
 } from "@/lib/gwPlan";
 import type { FplSquad } from "@/lib/fplAssistantApi";
 
-interface GwPlanContextValue {
-  /** Null until the squad for this entry + GW has arrived. */
+export interface GwPlanContextValue {
+  /** Null until the squad for this entry + GW has arrived (or a stored plan exists). */
   plan: GwPlan | null;
   /** The seeded squad — what "no changes" and "Reset plan" mean. */
   base: GwPlan | null;
@@ -37,12 +37,12 @@ const write = (key: string, value: StoredPlan) => {
   }
 };
 
-interface GwPlanProviderProps {
+export interface GwPlanStoreArgs {
   entryId: number;
   gw: number;
-  /** The squad query's data for the plan GW; the plan seeds from it once. */
+  /** The latest squad (the one the plan GW will be played with). Pass undefined
+   *  while some other GW's picks are on screen; a stored plan stays readable. */
   squad: FplSquad | undefined;
-  children: ReactNode;
 }
 
 /**
@@ -51,7 +51,7 @@ interface GwPlanProviderProps {
  * holds the same 15 players, reseeded when it doesn't (the user transferred in
  * the FPL app). A new GW is a new key, so the deadline passing starts fresh.
  */
-export function GwPlanProvider({ entryId, gw, squad, children }: GwPlanProviderProps) {
+export function useGwPlanStore({ entryId, gw, squad }: GwPlanStoreArgs): GwPlanContextValue {
   const key = planStorageKey(entryId, gw);
   const [stored, setStored] = useState<StoredPlan | null>(null);
   const [storedKey, setStoredKey] = useState<string | null>(null);
@@ -61,12 +61,12 @@ export function GwPlanProvider({ entryId, gw, squad, children }: GwPlanProviderP
   const squadIds = squad ? [...squad.starting_xi, ...squad.bench].map((p) => p.player_id).sort((a, b) => a - b).join(",") : "";
 
   useEffect(() => {
+    const existing = read(key);
     if (!squad || squadIds === "") {
-      setStored(null);
-      setStoredKey(null);
+      setStored(existing);
+      setStoredKey(key);
       return;
     }
-    const existing = read(key);
     const next: StoredPlan =
       existing && samePlayers(existing.base, squad)
         ? existing
@@ -104,11 +104,20 @@ export function GwPlanProvider({ entryId, gw, squad, children }: GwPlanProviderP
     });
   }, [key]);
 
-  const value = useMemo<GwPlanContextValue>(
+  return useMemo<GwPlanContextValue>(
     () => ({ plan: ready ? stored.plan : null, base: ready ? stored.base : null, setPlan, resetPlan }),
     [ready, stored, setPlan, resetPlan],
   );
+}
 
+/** Owns the store and provides it. */
+export function GwPlanProvider({ children, ...args }: GwPlanStoreArgs & { children: ReactNode }) {
+  const value = useGwPlanStore(args);
+  return <GwPlanContext.Provider value={value}>{children}</GwPlanContext.Provider>;
+}
+
+/** Provides a store the parent already owns (Index derives from it before rendering). */
+export function GwPlanValueProvider({ value, children }: { value: GwPlanContextValue; children: ReactNode }) {
   return <GwPlanContext.Provider value={value}>{children}</GwPlanContext.Provider>;
 }
 

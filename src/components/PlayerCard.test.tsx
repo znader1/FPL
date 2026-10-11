@@ -114,6 +114,10 @@ describe("incoming-transfer pill", () => {
     renderCard({ inGain: 2.4 });
     expect(screen.getByText("IN +2.4")).toBeTruthy();
   });
+  it("shows a bare IN when the player is new but the gain is unknown", () => {
+    renderCard({ inGain: null });
+    expect(screen.getByText("IN")).toBeTruthy();
+  });
   it("shows nothing when the player was already in the squad", () => {
     renderCard();
     expect(screen.queryByText(/^IN /)).toBeNull();

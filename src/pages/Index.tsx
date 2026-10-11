@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate, useParams } from "react-router-dom";
 import { CommandRail } from "@/components/CommandRail";
 import { WeekChecklist } from "@/components/WeekChecklist";
 import { deriveWeekDecisions } from "@/lib/weekDecisions";
+import { GwPlanValueProvider, useGwPlanStore } from "@/contexts/GwPlanContext";
+import { buildPlayerLookup, countChanges, isPlanStep, makeMoves, projectPlan, resolvePlan, type PlanStep } from "@/lib/gwPlan";
+import { planToTeam } from "@/lib/planTeam";
 import { MobileParameterDrawer } from "@/components/MobileParameterDrawer";
 import { PitchVisualization } from "@/components/PitchVisualization";
 import { RecommendationsPanel } from "@/components/RecommendationsPanel";
@@ -122,16 +126,6 @@ const getInitialIncludeTransfers = () => {
   return true;
 };
 
-const getInitialApplyTransferCount = () => {
-  const fromQuery = Number(new URLSearchParams(window.location.search).get("apply_transfer_count"));
-  if (Number.isFinite(fromQuery) && fromQuery >= 0) return Math.max(0, Math.floor(fromQuery));
-
-  const fromStorage = Number(localStorage.getItem("fpl_apply_transfer_count"));
-  if (Number.isFinite(fromStorage) && fromStorage >= 0) return Math.max(0, Math.floor(fromStorage));
-
-  return 0;
-};
-
 const Index = () => {
   const [entryId, setEntryId] = useState(getInitialEntryId);
   const [selectedGW, setSelectedGW] = useState<number | null>(getInitialGw);
@@ -150,7 +144,6 @@ const Index = () => {
   );
   const [chipPlayEventId, setChipPlayEventId] = useState<number | undefined>(getInitialChipPlayEventId);
   const [includeTransfers, setIncludeTransfers] = useState(getInitialIncludeTransfers);
-  const [appliedTransferCount, setAppliedTransferCount] = useState(getInitialApplyTransferCount);
   const [pitchMode, setPitchMode] = useState<PitchMode>("squad");
   const [didApplyNextGwDefault, setDidApplyNextGwDefault] = useState(hasExplicitGwQuery);
 
@@ -311,7 +304,6 @@ const Index = () => {
       setSquadGW(38);
     }
 
-    setAppliedTransferCount(0);
     setPitchMode("squad");
     recommendationMutation.reset();
     setDidApplyNextGwDefault(true);
@@ -405,12 +397,11 @@ const Index = () => {
       localStorage.setItem("fpl_include_transfers", String(includeTransfers));
       localStorage.setItem("fpl_differential", String(differential));
       localStorage.setItem("fpl_prioritize_injured", String(prioritizeInjured));
-      localStorage.setItem("fpl_apply_transfer_count", String(appliedTransferCount));
     } catch {
       // ignore
     }
   }, [entryId, selectedGW, horizonGws, chipStrategy, chipPlayEventId, includeTransfers,
-      appliedTransferCount, nextEventQuery.isSuccess, prioritizeInjured]);
+      nextEventQuery.isSuccess, prioritizeInjured]);
 
   useEffect(() => {
     if (!recommendationMutation.data) return;
@@ -425,7 +416,6 @@ const Index = () => {
       setChipPlayEventId(nextChipPlayEventId);
     }
 
-    setAppliedTransferCount(0);
     recommendationMutation.mutate(
       buildRecommendationParams(selectedGW, {
         chipPlayEventId: nextChipPlayEventId,
@@ -446,15 +436,59 @@ const Index = () => {
   // not a false "off-season" card.
   const isOffSeason = nextEventQuery.isSuccess && !Number.isFinite(nextEventQuery.data?.event_id);
 
-  const applyTransferAtIndex = (index: number) => {
-    if (!recommendationMutation.data) return;
-    const normalized = Number.isFinite(index) ? Math.max(0, Math.floor(index)) : 0;
-    const moveCount = recommendationMutation.data?.transfers?.moves?.length ?? 0;
-    setAppliedTransferCount(Math.min(normalized + 1, moveCount));
+  // ---- The GW plan (v2 flow) --------------------------------------------------
+  // One client-side plan for the deadline GW. The pitch, the rail, the panel and
+  // every step read it; only resetPlan() rebuilds the squad. It is keyed by the
+  // deadline GW (not the GW on screen) and seeded from the latest picks — the
+  // squad on screen counts as "latest" only when it is the live GW's or later,
+  // so browsing back to GW20 never reseeds the plan from GW20's team.
+  const deadlineGw = typeof nextEventId === "number" ? nextEventId : undefined;
+  const squadIsLatest =
+    Boolean(squadQuery.data) &&
+    !squadQuery.isPlaceholderData &&
+    (typeof currentLiveGw === "number"
+      ? (squadQuery.data?.event_id ?? 0) >= currentLiveGw
+      : selectedGW === deadlineGw);
+  const [latestSquad, setLatestSquad] = useState<FplSquad | undefined>(undefined);
+  useEffect(() => {
+    if (squadIsLatest && squadQuery.data) setLatestSquad(squadQuery.data);
+  }, [squadIsLatest, squadQuery.data]);
+  useEffect(() => {
+    setLatestSquad(undefined);
+  }, [entryId]);
+  const planStore = useGwPlanStore({ entryId, gw: deadlineGw ?? 0, squad: squadIsLatest ? squadQuery.data : undefined });
+  const { plan, base: basePlan, setPlan, resetPlan } = planStore;
+
+  // The recommendation informs the plan only when it was run for the deadline GW.
+  const planRec =
+    recommendationMutation.data && recommendationMutation.data.event_id === deadlineGw ? recommendationMutation.data : undefined;
+  const planMoves = useMemo(() => makeMoves(planRec), [planRec]);
+  const playerLookup = useMemo(() => buildPlayerLookup(latestSquad ?? squadQuery.data, planRec), [latestSquad, squadQuery.data, planRec]);
+  const resolvedPlan = useMemo(() => (plan ? resolvePlan(plan, planMoves) : null), [plan, planMoves]);
+  // Derived, never stored: "make" applies the verdict's moves, nothing else does.
+  const appliedTransferCount = plan?.transfer === "make" ? planMoves.length : 0;
+  const planProjected = resolvedPlan && plan ? projectPlan(resolvedPlan, playerLookup, plan.chip) : null;
+  const baseProjected = basePlan ? projectPlan(resolvePlan(basePlan, []), playerLookup, null) : null;
+  const planDelta =
+    typeof planProjected === "number" && typeof baseProjected === "number" ? Math.round((planProjected - baseProjected) * 10) / 10 : undefined;
+  const planChanges = plan && basePlan ? countChanges(plan, basePlan, planMoves) : 0;
+  const planDirty = Boolean(plan && (planChanges > 0 || plan.transfer !== null || plan.chip !== null || Object.keys(plan.reviewed).length > 0));
+
+  // Steps route as /app/plan/:step; /app is the squad overview.
+  const { step: stepParam } = useParams();
+  const step: PlanStep = isPlanStep(stepParam) ? stepParam : "squad";
+  const navigate = useNavigate();
+  const goStep = (s: PlanStep) => navigate(s === "squad" ? "/app" : `/app/plan/${s}`);
+
+  // DecisionCard's Apply/Undo write the plan's transfer decision; the per-move
+  // index no longer matters — the plan applies the verdict's moves as one.
+  const applyTransferAtIndex = () => {
+    if (planMoves.length === 0) return;
+    setPlan({ transfer: "make" });
   };
 
   const resetAppliedTransfers = () => {
-    setAppliedTransferCount(0);
+    setPlan({ transfer: null });
   };
 
   const activeRecommendation = useMemo(() => {
@@ -478,10 +512,17 @@ const Index = () => {
     };
   }, [appliedTransferCount, recommendationMutation.data]);
 
+  // On the deadline GW the squad view is the plan: the user's XI, bench order
+  // and armbands with the transfer decision applied. Other GWs render their
+  // own picks as before.
+  const planTeam = useMemo(
+    () => (plan && resolvedPlan && latestSquad && selectedGW === deadlineGw ? planToTeam(latestSquad, resolvedPlan, playerLookup) : undefined),
+    [plan, resolvedPlan, latestSquad, selectedGW, deadlineGw, playerLookup],
+  );
   const activeTeam = useMemo(() => {
     if (pitchMode === "recommendation" && activeRecommendation) return activeRecommendation;
-    return squadQuery.data;
-  }, [pitchMode, activeRecommendation, squadQuery.data]);
+    return planTeam ?? squadQuery.data;
+  }, [pitchMode, activeRecommendation, planTeam, squadQuery.data]);
 
   const activeError =
     pitchMode === "recommendation"
@@ -509,7 +550,6 @@ const Index = () => {
   const setGwAndReset = (gw: number) => {
     setSelectedGW(gw);
     setSquadGW(gw);
-    setAppliedTransferCount(0);
     const shouldRefreshRecommendation =
       Boolean(recommendationMutation.data) &&
       (pitchMode === "recommendation" || chipStrategy !== "none");
@@ -534,7 +574,6 @@ const Index = () => {
     setEntryId(value);
     setSquadGW(selectedGW);
     setChipPlayEventId(undefined);
-    setAppliedTransferCount(0);
     setPitchMode("squad");
     recommendationMutation.reset();
     // The identity snapshot rides along with the id: without it a season
@@ -568,7 +607,6 @@ const Index = () => {
     if (chipStrategy === "wildcard") {
       setChipPlayEventId(nextChipPlayEventId);
     }
-    setAppliedTransferCount(0);
     setPitchMode("recommendation");
     recommendationMutation.mutate(
       buildRecommendationParams(resolvedGW, { chipPlayEventId: nextChipPlayEventId })
@@ -583,7 +621,6 @@ const Index = () => {
   const runRecommendation = (eventId: number) => {
     const nextChipPlayEventId = chipStrategy === "wildcard" ? eventId : undefined;
     if (chipStrategy === "wildcard") setChipPlayEventId(nextChipPlayEventId);
-    setAppliedTransferCount(0);
     recommendationMutation.mutate(
       buildRecommendationParams(eventId, { chipPlayEventId: nextChipPlayEventId })
     );
@@ -632,17 +669,18 @@ const Index = () => {
   };
 
   // The Command Center's four weekly decisions, derived — never stored — from
-  // the active recommendation step, the chip choice and the chip plan.
+  // the plan, with the recommendation and the chip plan as context.
   const weekDecisions = useMemo(
     () =>
       deriveWeekDecisions({
-        recommendation: activeRecommendation,
-        appliedTransferCount,
-        chipStrategy,
+        plan,
+        base: basePlan,
+        lookup: playerLookup,
+        recommendation: planRec,
         chipPlan: chipPlanQuery.data ?? null,
         chipPlanError: chipPlanQuery.isError,
       }),
-    [activeRecommendation, appliedTransferCount, chipStrategy, chipPlanQuery.data, chipPlanQuery.isError],
+    [plan, basePlan, playerLookup, planRec, chipPlanQuery.data, chipPlanQuery.isError],
   );
   const verdictDetail = activeRecommendation?.transfer_plan_horizon?.verdict_detail;
   const freeTransfers =
@@ -650,9 +688,10 @@ const Index = () => {
     activeRecommendation?.transfer_plan_horizon?.start_free_transfers ??
     activeRecommendation?.transfers?.transfer_plan?.free_transfers;
   const bank = squadQuery.data?.entry_history?.bank;
-  const projected = activeRecommendation?.projected_points_with_captain;
-  const projectedDelta =
-    appliedTransferCount > 0 ? activeRecommendation?.transfer_impact?.delta_projected_points_with_captain : undefined;
+  // Projected = the plan's own total (client-side, plan-GW xPts); until the
+  // recommendation brings those, fall back to the engine's number.
+  const projected = planProjected ?? activeRecommendation?.projected_points_with_captain;
+  const projectedDelta = planProjected !== null ? planDelta : undefined;
   const navbarStats =
     typeof bank === "number" || typeof freeTransfers === "number" ? (
       <>
@@ -690,8 +729,9 @@ const Index = () => {
   };
 
   return (
+    <GwPlanValueProvider value={planStore}>
     <div className="flex flex-col h-screen bg-background">
-      <Navbar extras={navbarStats} />
+      <Navbar extras={navbarStats} planStatus={plan ? { changes: planChanges, locked: plan.locked } : undefined} />
       <div className="flex flex-1 min-h-0 pt-14 flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
       {gwGateState === "error" ? (
         // A failed /events/next used to fall through to the "Loading…" branch
@@ -717,7 +757,11 @@ const Index = () => {
         <div className="hidden lg:flex shrink-0">
           <CommandRail
             decisions={weekDecisions}
-            gw={activeRecommendation?.event_id ?? planGw}
+            onSelectStep={goStep}
+            activeStep={step}
+            onReset={resetPlan}
+            dirty={planDirty}
+            gw={deadlineGw ?? planGw}
             projected={projected}
             delta={projectedDelta}
             percentile={activeRecommendation?.projected_percentile ?? undefined}
@@ -779,7 +823,7 @@ const Index = () => {
         {/* Phones get the checklist as a strip above the pitch; the rail is lg+. */}
         {!isDesktop && entryId > 0 && (
           <div className="mx-auto w-full max-w-5xl px-4 pt-4 lg:hidden">
-            <WeekChecklist decisions={weekDecisions} compact />
+            <WeekChecklist decisions={weekDecisions} compact onSelect={goStep} activeStep={step} />
           </div>
         )}
         {identityCheck.status === "rolled-over" && (
@@ -814,6 +858,7 @@ const Index = () => {
           fixturesByTeam={fixturesByTeam}
           pitchMode={pitchMode}
           onPitchModeChange={setPitchMode}
+          incoming={activeTeam === planTeam && resolvedPlan ? resolvedPlan.incoming : undefined}
           hasRecommendation={Boolean(recommendationMutation.data)}
           isLiveGw={isLiveGw}
           updatedAt={squadUpdatedAt}
@@ -871,6 +916,7 @@ const Index = () => {
       )}
       </div>
     </div>
+    </GwPlanValueProvider>
   );
 };
 

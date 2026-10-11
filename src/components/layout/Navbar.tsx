@@ -26,16 +26,55 @@ const appLinks = [
   { label: "Draft squad", to: "/app/squad-picker", secondary: true },
 ];
 
+export interface PlanStatus {
+  /** Things the user would have to change in the FPL app. */
+  changes: number;
+  /** The plan is saved. */
+  locked: boolean;
+}
+
 interface NavbarProps {
   /** Page-specific stats shown left of the deadline pill on app routes (e.g. Bank · FT). */
   extras?: ReactNode;
+  /** v2 flow: "No changes yet" / "n unsaved changes" / "Plan saved". Shown at every width. */
+  planStatus?: PlanStatus;
 }
 
-export function Navbar({ extras }: NavbarProps = {}) {
+/** Which tab a path lights. Plan steps live under /app/plan/:step and belong to
+ *  Squad, except the captain step, which the Captain tab owns. */
+export const activeTabFor = (pathname: string): string => {
+  if (pathname === "/app/plan/captain") return "/app/captain";
+  if (pathname.startsWith("/app/plan")) return "/app";
+  return pathname;
+};
+
+function PlanStatusPill({ status }: { status: PlanStatus }) {
+  const tone = status.locked ? "saved" : status.changes > 0 ? "warning" : "muted";
+  const long = status.locked ? "Plan saved" : status.changes > 0 ? `${status.changes} unsaved change${status.changes === 1 ? "" : "s"}` : "No changes yet";
+  const short = status.locked ? "Saved" : status.changes > 0 ? `${status.changes} unsaved` : "No changes";
+  return (
+    <span
+      data-testid="plan-status"
+      data-tone={tone}
+      className={cn(
+        "whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-semibold sm:text-xs",
+        tone === "saved" && "border-accent/45 bg-accent/10 text-accent",
+        tone === "warning" && "border-warning/45 bg-warning/[0.08] text-warning",
+        tone === "muted" && "border-border text-muted-foreground",
+      )}
+    >
+      <span className="hidden md:inline">{long}</span>
+      <span className="md:hidden">{short}</span>
+    </span>
+  );
+}
+
+export function Navbar({ extras, planStatus }: NavbarProps = {}) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
   const isApp = pathname.startsWith("/app");
+  const activeTab = activeTabFor(pathname);
 
   const handleSignOut = async () => {
     await signOut();
@@ -85,7 +124,7 @@ export function Navbar({ extras }: NavbarProps = {}) {
                 // out — the handoff's tab strip, and the only cue for which hub you're in.
                 <nav data-testid="app-tabs" className="hidden md:flex items-center gap-1">
                   {appLinks.map((l) => {
-                    const active = l.to === pathname;
+                    const active = l.to === activeTab;
                     return (
                       <Link
                         key={l.to}
@@ -103,6 +142,7 @@ export function Navbar({ extras }: NavbarProps = {}) {
                   })}
                 </nav>
               )}
+              {isApp && planStatus && <PlanStatusPill status={planStatus} />}
               {isApp && (
                 // Stats need the room only lg+ has; at md the tab strip plus the
                 // pill plus Sign out already fill the 56px row. Phones get neither
@@ -126,7 +166,7 @@ export function Navbar({ extras }: NavbarProps = {}) {
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     {appLinks
-                      .filter((l) => l.to !== pathname)
+                      .filter((l) => l.to !== activeTab)
                       .map((l) => (
                         <DropdownMenuItem key={l.to} asChild>
                           <Link to={l.to}>{l.label}</Link>

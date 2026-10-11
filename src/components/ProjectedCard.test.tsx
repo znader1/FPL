@@ -10,12 +10,22 @@ describe("ProjectedCard", () => {
     render(<ProjectedCard gw={29} projected={68.4} delta={2.4} />);
     expect(screen.getByText("Projected GW29")).toBeTruthy();
     expect(screen.getByTestId("projected-total").textContent).toBe("68.4");
-    expect(screen.getByText("+2.4 from your transfers")).toBeTruthy();
+    expect(screen.getByText("+2.4")).toBeTruthy();
+    expect(screen.getByText("vs. your squad with no changes")).toBeTruthy();
   });
 
-  it("hides the delta when nothing has been applied", () => {
+  it("shows a flat delta as ±0.0 and a loss in rose", () => {
+    const { rerender } = render(<ProjectedCard gw={29} projected={66} delta={0} />);
+    expect(screen.getByTestId("projected-delta").textContent).toBe("±0.0");
+    rerender(<ProjectedCard gw={29} projected={66} delta={-1.2} />);
+    expect(screen.getByTestId("projected-delta").textContent).toBe("−1.2");
+    expect(screen.getByTestId("projected-delta").className).toContain("text-fdr-4");
+  });
+
+  it("hides the delta line when there is no baseline", () => {
     render(<ProjectedCard gw={29} projected={66} />);
-    expect(screen.queryByText(/from your transfers/)).toBeNull();
+    expect(screen.queryByTestId("projected-delta")).toBeNull();
+    expect(screen.queryByText(/no changes/)).toBeNull();
   });
 
   it("renders the percentile ring and benchmark bars only when the backend sends them", () => {

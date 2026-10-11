@@ -36,6 +36,11 @@ describe("findIncomingPlayers", () => {
     expect(findIncomingPlayers(rec)).toEqual({ 9999: 5.1 });
   });
 
+  it("marks a newcomer with no matching move as null rather than a fake +0.0", () => {
+    const rec = withApplied({ transfers: { moves: [] } });
+    expect(findIncomingPlayers(rec)).toEqual({ 9999: null });
+  });
+
   it("returns nothing when no transfer has been applied", () => {
     expect(findIncomingPlayers(withApplied({ transfer_application: { requested: 0, applied: 0, skipped: 0 } }))).toEqual({});
     expect(findIncomingPlayers(base)).toEqual({});

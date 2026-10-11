@@ -68,6 +68,12 @@ describe("GwPlanProvider", () => {
     expect(result.current.base).toEqual(seedPlan(squad));
   });
 
+  it("keeps a stored plan readable while the squad on screen is some other GW's", () => {
+    localStorage.setItem(KEY, JSON.stringify({ plan: { ...seedPlan(squad), cap: 9 }, base: seedPlan(squad) }));
+    const { result } = renderHook(() => useGwPlan(), { wrapper: wrap(undefined) });
+    expect(result.current.plan?.cap).toBe(9);
+  });
+
   it("keys the plan by GW, so a new deadline starts a fresh plan", () => {
     localStorage.setItem(KEY, JSON.stringify({ plan: { ...seedPlan(squad), cap: 9 }, base: seedPlan(squad) }));
     const { result } = renderHook(() => useGwPlan(), { wrapper: wrap({ ...squad, event_id: 30 }, 30) });

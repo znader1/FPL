@@ -4,7 +4,7 @@ interface ProjectedCardProps {
   gw: number;
   /** `projected_points_with_captain` of the active step; undefined before ZN Pick runs. */
   projected?: number;
-  /** `transfer_impact.delta_projected_points_with_captain` once a move is applied. */
+  /** Plan minus the no-change squad; undefined until both project. */
   delta?: number;
   /** Top-N percentile (8 = top 8%). Backend field `projected_percentile`; absent today. */
   percentile?: number;
@@ -53,9 +53,15 @@ export function ProjectedCard({ gw, projected, delta, percentile, top10kAvg, ove
           <div data-testid="projected-total" className="text-[30px] font-black leading-none tracking-tight tabular-nums text-foreground">
             {hasProjection ? fmt1(projected as number) : "—"}
           </div>
-          {typeof delta === "number" && delta !== 0 ? (
-            <div className={`mt-1 text-xs font-semibold ${delta > 0 ? "text-accent" : "text-[hsl(var(--fdr-4))]"}`}>
-              {fmtGain(delta)} from your transfers
+          {typeof delta === "number" && Number.isFinite(delta) ? (
+            <div className="mt-1 text-xs">
+              <span
+                data-testid="projected-delta"
+                className={`font-semibold ${delta > 0.05 ? "text-accent" : delta < -0.05 ? "text-fdr-4" : "text-muted-foreground"}`}
+              >
+                {Math.abs(delta) < 0.05 ? "±0.0" : fmtGain(delta)}
+              </span>
+              <span className="ml-1 text-muted-foreground">vs. your squad with no changes</span>
             </div>
           ) : (
             <div className="mt-1 text-xs text-muted-foreground">{hasProjection ? "xPts with captain" : "Run ZN Pick to project"}</div>

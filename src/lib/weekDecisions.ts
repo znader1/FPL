@@ -1,12 +1,12 @@
 import {
   CHIP_LABELS,
   type ChipPlanResponse,
-  type FplChipStrategy,
   type FplTeamRecommendation,
 } from "@/lib/fplAssistantApi";
 import { fmtGain } from "@/lib/format";
+import { makeMoves, resolvePlan, type GwPlan, type PlanDecisionKey, type PlayerLookup } from "@/lib/gwPlan";
 
-export type WeekDecisionKey = "transfers" | "captain" | "bench" | "chip";
+export type WeekDecisionKey = PlanDecisionKey;
 
 export interface WeekDecision {
   key: WeekDecisionKey;
@@ -14,80 +14,94 @@ export interface WeekDecision {
   /** One line of status under the label. */
   value: string;
   done: boolean;
+  /** Something is wrong with this decision (e.g. the captain is on the bench). */
+  warn?: boolean;
 }
 
 export interface WeekDecisionInput {
-  /** The active recommendation (already resolved to the applied-transfer step). */
+  /** The GW plan; null until the squad has seeded it. */
+  plan: GwPlan | null;
+  base?: GwPlan | null;
+  lookup: PlayerLookup;
   recommendation?: FplTeamRecommendation;
-  appliedTransferCount: number;
-  chipStrategy: FplChipStrategy;
   chipPlan?: ChipPlanResponse | null;
   /** `/chips/plan` failed — say so rather than "waiting" forever. */
   chipPlanError?: boolean;
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const row = (key: WeekDecisionKey, label: string) => (value: string, done: boolean, warn = false): WeekDecision => ({ key, label, value, done, warn });
 
-function transfersRow(rec: FplTeamRecommendation | undefined, applied: number): WeekDecision {
-  const row = (value: string, done: boolean): WeekDecision => ({ key: "transfers", label: "Transfers", value, done });
+const transfersRow = row("transfers", "Transfers");
+const captainRow = row("captain", "Captain");
+const benchRow = row("bench", "Bench order");
+const chipRow = row("chip", "Chip");
+
+function transfers(plan: GwPlan, rec: FplTeamRecommendation | undefined): WeekDecision {
   const d = rec?.transfer_plan_horizon?.verdict_detail;
-  if (!rec) return row("Run ZN Pick to see your moves", false);
-  if (!d) {
-    const n = rec.transfers?.moves?.length ?? 0;
-    return n > 0 ? row(`${plural(n, "suggested move")} to review`, false) : row("No moves suggested", true);
-  }
-  if (d.action === "roll") {
+  const moves = makeMoves(rec);
+  if (plan.transfer === "roll") {
+    if (!d) return transfersRow("Roll the transfer", true);
     const nextGw = d.horizon.start_gw != null ? ` for GW${d.horizon.start_gw + 1}` : "";
-    return row(`Roll · ${plural(d.ft_after, "FT")}${nextGw}`, true);
+    return transfersRow(`Roll · ${plural(d.ft_after, "FT")}${nextGw}`, true);
   }
-  const k = d.moves.length;
-  if (k === 0) return row("No move clears the bar", true);
-  if (applied >= k) {
-    const m = d.moves[0];
-    return row(k === 1 ? `${m.sell.name} → ${m.buy.name} applied` : `${k} moves applied`, true);
+  if (plan.transfer === "make" && d && moves.length > 0) {
+    // Spend: the verdict's own total net of the hit. Roll: the rejected walk's
+    // moves summed — the verdict's totals describe rolling, not them.
+    const gain = d.action === "roll" ? moves.reduce((s, m) => s + m.horizon_gain, 0) : d.horizon_gain - d.hit_cost;
+    if (moves.length === 1) return transfersRow(`${moves[0].sell.name} → ${moves[0].buy.name} · ${fmtGain(gain)}`, true);
+    const hit = d.hit_cost > 0 && d.action !== "roll" ? ` after a −${d.hit_cost} hit` : "";
+    return transfersRow(`${plural(moves.length, "move")} · ${fmtGain(gain)}${hit}`, true);
   }
-  const hit = d.hit_cost > 0 ? ` after a −${d.hit_cost} hit` : "";
-  const what = k === 1 && d.hit_cost === 0 ? "1 free move" : plural(k, "move");
-  return row(`${what} worth ${fmtGain(d.horizon_gain)} xPts${hit}`, false);
+  if (!rec) return transfersRow("Run ZN Pick to see your moves", false);
+  if (!d) return transfersRow("Not decided", false);
+  return transfersRow(`Not decided · ${plural(d.ft_before, "FT")}`, false);
 }
 
-function captainRow(rec: FplTeamRecommendation | undefined): WeekDecision {
-  const row = (value: string, done: boolean): WeekDecision => ({ key: "captain", label: "Captain", value, done });
-  if (!rec) return row("Run ZN Pick to check your armband", false);
-  const all = [...rec.starting_xi, ...rec.bench];
-  const cap = all.find((p) => p.is_captain_suggested) ?? all.find((p) => p.player_id === rec.captain_player_id);
-  const vice = all.find((p) => p.is_vice_suggested) ?? all.find((p) => p.player_id === rec.vice_player_id);
-  if (!cap) return row("No captain pick returned", false);
-  return row(vice ? `${cap.web_name} (C) · ${vice.web_name} (VC)` : `${cap.web_name} (C)`, true);
+function captain(plan: GwPlan, rec: FplTeamRecommendation | undefined, lookup: PlayerLookup): WeekDecision {
+  const r = resolvePlan(plan, makeMoves(rec));
+  if (!r.xi.includes(r.cap)) return captainRow("Captain is on the bench", false, true);
+  const name = (id: number) => lookup[id]?.web_name ?? `#${id}`;
+  return captainRow(`${name(r.cap)} (C) · ${name(r.vice)} (VC)`, Boolean(plan.reviewed.captain));
 }
 
-function benchRow(rec: FplTeamRecommendation | undefined): WeekDecision {
-  const row = (value: string, done: boolean): WeekDecision => ({ key: "bench", label: "Bench order", value, done });
-  if (!rec) return row("Set after ZN Pick", false);
-  const bench = [...rec.bench].sort((a, b) => a.bench_order - b.bench_order);
-  const firstSub = bench.find((p) => p.pos !== "GKP");
-  const gk = bench.find((p) => p.pos === "GKP");
-  if (!firstSub) return row("No bench returned", false);
-  return row(gk ? `${firstSub.web_name} first sub · ${gk.web_name} covers GK` : `${firstSub.web_name} first sub`, true);
+function bench(plan: GwPlan, rec: FplTeamRecommendation | undefined, lookup: PlayerLookup): WeekDecision {
+  const r = resolvePlan(plan, makeMoves(rec));
+  const first = r.bench[1];
+  const name = first != null ? lookup[first]?.web_name ?? `#${first}` : undefined;
+  return benchRow(name ? `${name} first sub` : "No bench returned", Boolean(plan.reviewed.bench));
 }
 
-function chipRow(chipStrategy: FplChipStrategy, plan: ChipPlanResponse | null | undefined, planError: boolean): WeekDecision {
-  const row = (value: string, done: boolean): WeekDecision => ({ key: "chip", label: "Chip", value, done });
-  if (chipStrategy !== "none") return row(`${CHIP_LABELS[chipStrategy]} this week`, true);
-  if (!plan) return row(planError ? "Chip plan unavailable · pick one in Parameters" : "Waiting for the chip plan", false);
-  if (plan.nudge) {
-    return row(`${CHIP_LABELS[plan.nudge.chip]} nudge for GW${plan.nudge.event_id} · ${fmtGain(plan.nudge.ev_gain)} xPts`, false);
+function chip(plan: GwPlan, chipPlan: ChipPlanResponse | null | undefined, planError: boolean): WeekDecision {
+  if (plan.chip && plan.chip !== "none") return chipRow(`${CHIP_LABELS[plan.chip]} this week`, true);
+  if (plan.chip === "none") {
+    if (!chipPlan) return chipRow("Save chips", true);
+    const next = [...chipPlan.recommendations].sort((a, b) => a.event_id - b.event_id)[0];
+    return chipRow(next ? `Save · ${CHIP_LABELS[next.chip]} peaks in GW${next.event_id}` : "Save · no chip window ahead", true);
   }
-  const next = [...plan.recommendations].sort((a, b) => a.event_id - b.event_id)[0];
-  return row(next ? `Save · ${CHIP_LABELS[next.chip]} peaks in GW${next.event_id}` : "Save · no chip window ahead", true);
+  if (!chipPlan) return chipRow(planError ? "Chip plan unavailable · decide in the Chip step" : "Waiting for the chip plan", false);
+  if (chipPlan.nudge) {
+    return chipRow(`${CHIP_LABELS[chipPlan.nudge.chip]} nudge for GW${chipPlan.nudge.event_id} · ${fmtGain(chipPlan.nudge.ev_gain)} xPts`, false);
+  }
+  return chipRow("Not decided · Save is the ZN Pick", false);
 }
 
-/** The four weekly decisions on the Command Center rail, in display order. */
+/** The four weekly decisions on the Command Center rail, in display order — read
+ *  from the GW plan (never stored), with the recommendation and chip plan as context. */
 export function deriveWeekDecisions(input: WeekDecisionInput): WeekDecision[] {
+  const { plan, recommendation, lookup, chipPlan, chipPlanError } = input;
+  if (!plan) {
+    return [
+      transfersRow("Loading your squad…", false),
+      captainRow("—", false),
+      benchRow("—", false),
+      chipRow("—", false),
+    ];
+  }
   return [
-    transfersRow(input.recommendation, input.appliedTransferCount),
-    captainRow(input.recommendation),
-    benchRow(input.recommendation),
-    chipRow(input.chipStrategy, input.chipPlan, Boolean(input.chipPlanError)),
+    transfers(plan, recommendation),
+    captain(plan, recommendation, lookup),
+    bench(plan, recommendation, lookup),
+    chip(plan, chipPlan, Boolean(chipPlanError)),
   ];
 }
