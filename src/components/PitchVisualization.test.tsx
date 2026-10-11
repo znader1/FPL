@@ -81,3 +81,18 @@ describe("plan-driven pitch (v2 flow)", () => {
     expect(screen.getByTestId(`starter-${haaland}`).hasAttribute("data-swap")).toBe(false);
   });
 });
+
+describe("compact pitch for the bench step", () => {
+  it("hides the GW bar, the heading/legend and the bench strip", () => {
+    render(
+      <MemoryRouter>
+        <PitchVisualization team={squad} requestedGw={29} onRequestedGwChange={() => {}} gwSelectable={false} compact hideBench />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText("Glow = xPts this GW")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Aubameyangiality" })).toBeNull();
+    expect(screen.queryByText("Bench")).toBeNull();
+    expect(screen.queryByText(/GW\s*29/)).toBeNull();
+    expect(screen.getAllByTestId("xpts-aura").length).toBeGreaterThanOrEqual(11);
+  });
+});

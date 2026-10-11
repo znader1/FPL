@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
 import { CommandRail } from "@/components/CommandRail";
@@ -50,7 +50,7 @@ import { ChipNudgeCard } from "@/components/ChipNudgeCard";
 import { OptimizeSquadDialog } from "@/components/OptimizeSquadDialog";
 import { Navbar } from "@/components/layout/Navbar";
 import { QueryErrorCard } from "@/components/QueryErrorCard";
-import { resolveGwGateState } from "@/lib/gwGate";
+import { isLatestSquad, resolveGwGateState, shouldAutoRecommend } from "@/lib/gwGate";
 import { Button } from "@/components/ui/button";
 import { Zap } from "lucide-react";
 import { parseEntryIdInput } from "@/lib/entryId";
@@ -484,12 +484,11 @@ const Index = () => {
   // squad on screen counts as "latest" only when it is the live GW's or later,
   // so browsing back to GW20 never reseeds the plan from GW20's team.
   const deadlineGw = typeof nextEventId === "number" ? nextEventId : undefined;
-  const squadIsLatest =
-    Boolean(squadQuery.data) &&
-    !squadQuery.isPlaceholderData &&
-    (typeof currentLiveGw === "number"
-      ? (squadQuery.data?.event_id ?? 0) >= currentLiveGw
-      : selectedGW === deadlineGw);
+  const squadIsLatest = isLatestSquad({
+    squadEventId: squadQuery.data?.event_id,
+    deadlineGw,
+    placeholder: squadQuery.isPlaceholderData,
+  });
   const [latestSquad, setLatestSquad] = useState<FplSquad | undefined>(undefined);
   useEffect(() => {
     if (squadIsLatest && squadQuery.data) setLatestSquad(squadQuery.data);
@@ -763,14 +762,28 @@ const Index = () => {
     setPlan({ chip });
   };
 
-  // Entering a step needs ZN Pick's answer for the deadline GW; run it once if
-  // the user hasn't. (The squad itself is never refetched — handoff §1.)
-  const needsRecommendation =
-    step !== "squad" && !planRec && !recommendationMutation.isPending && !recommendationMutation.isError && canRecommend && entryId > 0 && gwResolved;
+  // Entering a step needs ZN Pick's answer for the deadline GW; run it once per
+  // entry + deadline GW if the user hasn't, asking for that GW explicitly (the
+  // Recommend button's planGw follows the GW on screen, which may be another).
+  // The squad itself is never refetched — handoff §1.
+  const autoRecommendFired = useRef<string | null>(null);
+  const autoRecommendKey = shouldAutoRecommend({
+    step,
+    hasPlanRec: Boolean(planRec),
+    pending: recommendationMutation.isPending,
+    canRecommend,
+    entryId,
+    deadlineGw,
+    firedKey: autoRecommendFired.current,
+  });
   useEffect(() => {
-    if (needsRecommendation) handlePrimaryRecommend();
+    if (!autoRecommendKey || typeof deadlineGw !== "number") return;
+    autoRecommendFired.current = autoRecommendKey;
+    setSelectedGW(deadlineGw);
+    setSquadGW(deadlineGw);
+    runRecommendation(deadlineGw);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needsRecommendation]);
+  }, [autoRecommendKey]);
 
   const parameterProps = {
     entryId,
@@ -928,7 +941,8 @@ const Index = () => {
         </div>
       ) : (
         <>
-          <MobileParameterDrawer {...parameterProps} />
+          {/* The drawer's floating button would sit on the flow footer's Next. */}
+          {step === "squad" && <MobileParameterDrawer {...parameterProps} />}
           {/* The drawer closes before the request resolves, and the only other
               place this renders is inside it — so on a phone a failed
               recommendation produced no feedback at all. */}
@@ -974,6 +988,8 @@ const Index = () => {
                       requestedGw={deadlineGw ?? planGw}
                       onRequestedGwChange={() => {}}
                       gwSelectable={false}
+                      compact
+                      hideBench
                       fixturesByTeam={fixturesByTeam}
                       incoming={resolvedPlan.incoming}
                       starterState={starterState}

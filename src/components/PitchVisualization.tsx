@@ -48,6 +48,10 @@ interface PitchVisualizationProps {
   /** v2 flow bench step: outline valid swap targets, dim invalid ones. */
   starterState?: (playerId: number) => "valid" | "invalid" | undefined;
   onStarterClick?: (playerId: number) => void;
+  /** Bench step: no GW bar, heading or legend — just the turf. */
+  compact?: boolean;
+  /** Bench step lists the bench itself; don't draw the strip under the pitch. */
+  hideBench?: boolean;
 }
 
 export const getRowGapClass = (count: number) => {
@@ -200,6 +204,8 @@ export const PitchVisualization = ({
   incoming: incomingProp,
   starterState,
   onStarterClick,
+  compact = false,
+  hideBench = false,
 }: PitchVisualizationProps) => {
   const [draftId, setDraftId] = useState("");
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -324,6 +330,7 @@ export const PitchVisualization = ({
           </div>
         )}
 
+        {!compact && (
         <GameweekNav
           leading={
             onPitchModeChange ? (
@@ -372,8 +379,9 @@ export const PitchVisualization = ({
           isLiveGw={isLiveGw}
           updatedAt={updatedAt}
         />
+        )}
 
-        {hasTeam && (
+        {hasTeam && !compact && (
           <div className="mb-3 flex items-end justify-between gap-3 px-1">
             {teamName ? (
               <h2 className="truncate text-xl font-extrabold tracking-tight text-foreground">{teamName}</h2>
@@ -536,7 +544,7 @@ export const PitchVisualization = ({
         </div>
 
         {/* Bench */}
-        {hasTeam && (
+        {hasTeam && !hideBench && (
           <div className="mx-auto mt-3 w-full max-w-[700px] px-3 py-2 rounded-xl bg-card border border-border">
             <div className="flex items-center justify-between mb-1.5">
               <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-[.08em]">Bench</p>
