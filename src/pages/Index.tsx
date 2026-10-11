@@ -1065,14 +1065,16 @@ const Index = () => {
         // stacks vertically and a collapsed-height column makes the pitch
         // overlap its siblings.
         <div className="flex flex-col lg:flex-1 lg:min-w-0 lg:min-h-0">
+        {/* Desktop only: on a phone the navbar pill already says "Saved" and the
+            title/sub pushed the squad below the fold. */}
         {plan?.locked && (
-          <div className="mx-auto w-full max-w-5xl px-4 pt-4">
+          <div className="mx-auto hidden w-full max-w-5xl px-4 pt-4 lg:block">
             <StepHeader copy={header} savedBanner />
           </div>
         )}
         {/* Phones get the checklist as a strip above the pitch; the rail is lg+. */}
         {!isDesktop && entryId > 0 && (
-          <div className="mx-auto w-full max-w-5xl px-4 pt-4 lg:hidden">
+          <div className="mx-auto w-full max-w-5xl px-4 pt-3 lg:hidden">
             <WeekChecklist decisions={weekDecisions} compact onSelect={goStep} activeStep={step} onReset={resetPlan} dirty={planDirty} />
           </div>
         )}
