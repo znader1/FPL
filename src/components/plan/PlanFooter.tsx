@@ -11,7 +11,10 @@ interface PlanFooterProps {
  *  and the primary/accent Next. Sticky on phones, full-width Next. */
 export function PlanFooter({ spec, onBack, onNext }: PlanFooterProps) {
   return (
-    <div className="sticky bottom-0 z-20 flex shrink-0 items-center gap-2.5 border-t border-border bg-card px-4 pb-5 pt-3 lg:px-8 lg:py-3.5">
+    <div className="sticky bottom-0 z-20 flex shrink-0 flex-wrap items-center gap-2.5 border-t border-border bg-card px-4 pb-5 pt-3 lg:flex-nowrap lg:px-8 lg:py-3.5">
+      {/* Phones have no room beside the buttons, so a disabled Next's reason
+          goes on its own line above them (desktop keeps it inline). */}
+      {spec.disabled && spec.hint && <span className="basis-full text-center text-xs text-muted-foreground lg:hidden">{spec.hint}</span>}
       {spec.hasBack && (
         <Button type="button" variant="ghost" className="h-11 min-w-[44px] lg:h-10" onClick={onBack}>
           Back

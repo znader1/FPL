@@ -54,7 +54,8 @@ export function footerFor(args: { step: PlanStep; plan: GwPlan | null; decisions
     return { label: doneN > 0 ? "Continue plan" : `Start GW${gw} plan`, disabled: false, hint: "", variant: "primary", hasBack };
   }
   if (step === "confirm") {
-    if (plan.locked) return { label: "Saved ✓", disabled: true, hint: "", variant: "accent", hasBack };
+    // Saved: nothing left to do on this step, so the button is the way home.
+    if (plan.locked) return { label: "Done · back to squad", disabled: false, hint: "Plan saved", variant: "accent", hasBack };
     if (warnings.length > 0) return { label: `Save GW${gw} plan`, disabled: true, hint: "Fix the warning to save", variant: "accent", hasBack };
     // The step chips / rail can land here without visiting Transfers or Chip,
     // whose own Next buttons gate on a choice — so Save gates on them too.

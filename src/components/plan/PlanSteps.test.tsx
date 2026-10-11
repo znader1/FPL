@@ -37,6 +37,12 @@ describe("StepChips", () => {
 });
 
 describe("StepChips scroll", () => {
+  it("pins the Squad chip outside the scrolling row so the way home is always visible", () => {
+    render(<StepChips decisions={decisions} step="confirm" onSelect={() => {}} />);
+    const squad = screen.getByRole("button", { name: "Squad" });
+    expect(squad.getAttribute("data-pinned")).toBe("true");
+    expect(squad.parentElement?.className).not.toContain("overflow-x-auto");
+  });
   it("scrolls the active chip into view so Review is never hidden off the right edge", () => {
     const spy = vi.fn();
     Element.prototype.scrollIntoView = spy;
@@ -64,7 +70,8 @@ describe("PlanFooter", () => {
     const { rerender } = render(
       <PlanFooter spec={{ label: "Next: Captain", disabled: true, hint: "Pick an option to continue", variant: "primary", hasBack: true }} onBack={onBack} onNext={onNext} />,
     );
-    expect(screen.getByText("Pick an option to continue")).toBeTruthy();
+    // Once inline (desktop) and once above the buttons (phone).
+    expect(screen.getAllByText("Pick an option to continue")).toHaveLength(2);
     expect((screen.getByRole("button", { name: "Next: Captain" }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(onBack).toHaveBeenCalled();

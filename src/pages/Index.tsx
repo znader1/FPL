@@ -828,7 +828,8 @@ const Index = () => {
   const onFooterNext = () => {
     if (!plan) return;
     if (step === "confirm") {
-      setPlan({ locked: true });
+      if (plan.locked) goStep("squad");
+      else setPlan({ locked: true });
       return;
     }
     if (step === "squad") {
