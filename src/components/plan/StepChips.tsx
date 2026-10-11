@@ -26,6 +26,7 @@ export function StepChips({ decisions, step, onSelect }: StepChipsProps) {
         ref={active ? activeRef : undefined}
         type="button"
         data-pinned={pinned || undefined}
+        data-state={d ? (d.warn ? "warn" : d.done ? "done" : "pending") : undefined}
         onClick={() => onSelect(k)}
         aria-current={active ? "step" : undefined}
         className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
@@ -33,7 +34,9 @@ export function StepChips({ decisions, step, onSelect }: StepChipsProps) {
             ? "border-primary bg-primary text-white"
             : d?.warn
               ? "border-transparent bg-muted/60 text-fdr-4"
-              : "border-transparent bg-muted/60 text-foreground"
+              : d && !d.done
+                ? "border-primary/45 bg-primary/[0.08] text-foreground"
+                : "border-transparent bg-muted/60 text-foreground"
         }`}
       >
         {mark}

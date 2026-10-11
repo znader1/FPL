@@ -76,9 +76,12 @@ describe("firstUnfinishedStep", () => {
 });
 
 describe("footerFor", () => {
-  it("squad: Start / Continue, no Back", () => {
-    expect(footerFor({ step: "squad", plan: seed, decisions: dec(), warnings: [], gw: 29 })).toMatchObject({ label: "Start GW29 plan", hasBack: false, disabled: false });
-    expect(footerFor({ step: "squad", plan: seed, decisions: dec({ chip: { done: true } }), warnings: [], gw: 29 }).label).toBe("Continue plan");
+  it("squad: Start / Continue with what's left, Review when all four are made, no Back", () => {
+    expect(footerFor({ step: "squad", plan: seed, decisions: dec(), warnings: [], gw: 29 })).toMatchObject({ label: "Start GW29 plan · 4 decisions", hasBack: false, disabled: false });
+    expect(footerFor({ step: "squad", plan: seed, decisions: dec({ chip: { done: true } }), warnings: [], gw: 29 }).label).toBe("Continue plan · 3 left");
+    const all = dec({ transfers: { done: true }, captain: { done: true }, bench: { done: true }, chip: { done: true } });
+    expect(footerFor({ step: "squad", plan: seed, decisions: all, warnings: [], gw: 29 }).label).toBe("Review and save plan");
+    expect(footerFor({ step: "squad", plan: { ...seed, locked: true }, decisions: all, warnings: [], gw: 29 }).label).toBe("Plan saved · review");
   });
   it("names the next step and blocks Transfers/Chip until a choice is made", () => {
     expect(footerFor({ step: "transfers", plan: seed, decisions: dec(), warnings: [], gw: 29 })).toMatchObject({ label: "Next: Captain", disabled: true, hint: "Pick an option to continue", hasBack: true });

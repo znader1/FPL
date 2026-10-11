@@ -50,8 +50,17 @@ export function footerFor(args: { step: PlanStep; plan: GwPlan | null; decisions
   const hasBack = step !== "squad";
   if (!plan) return { label: step === "squad" ? `Start GW${gw} plan` : `Next: ${STEP_LABELS[nextStep(step) ?? "confirm"]}`, disabled: true, hint: "", variant: "primary", hasBack };
   if (step === "squad") {
+    // The button is the one line on a phone that says what's left to decide.
     const doneN = decisions.filter((d) => d.done).length;
-    return { label: doneN > 0 ? "Continue plan" : `Start GW${gw} plan`, disabled: false, hint: "", variant: "primary", hasBack };
+    const left = decisions.length - doneN;
+    const label = plan.locked
+      ? "Plan saved · review"
+      : left === 0
+        ? "Review and save plan"
+        : doneN === 0
+          ? `Start GW${gw} plan · ${decisions.length} decisions`
+          : `Continue plan · ${left} left`;
+    return { label, disabled: false, hint: "", variant: "primary", hasBack };
   }
   if (step === "confirm") {
     // Saved: nothing left to do on this step, so the button is the way home.

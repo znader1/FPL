@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { ChevronLeft, ChevronRight, Trophy, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { compactRank } from "@/lib/format";
 import {
   Select,
   SelectContent,
@@ -108,7 +109,7 @@ export const GameweekNav = ({
       {/* State pill. Live collapses to a pulsing dot (details on hover) so the
           bar keeps everything — including the Plan button — on one row. */}
       <div
-        className="flex items-center gap-1.5 shrink-0 rounded-full bg-muted/50 px-2 py-0.5"
+        className="hidden items-center gap-1.5 shrink-0 rounded-full bg-muted/50 px-2 py-0.5 sm:flex"
         title={
           isLiveGw
             ? `Live${updatedLabel ? ` · last refreshed ${updatedLabel}` : ""}`
@@ -138,7 +139,8 @@ export const GameweekNav = ({
             <div className="flex items-center gap-1 min-w-0 sm:gap-1.5">
               <Trophy className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               <span className="hidden xl:inline text-xs text-muted-foreground shrink-0">Rank</span>
-              <span className="text-sm font-bold text-foreground tabular-nums truncate">{rank}</span>
+              <span className="hidden text-sm font-bold text-foreground tabular-nums sm:inline">{rank}</span>
+              <span className="text-sm font-bold text-foreground tabular-nums sm:hidden">{compactRank(rank)}</span>
             </div>
           </>
         )}

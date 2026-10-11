@@ -38,6 +38,12 @@ describe("live-gameweek indicator", () => {
 });
 
 describe("control-bar slots", () => {
+  it("offers a compact rank for phones beside the full one", () => {
+    render(<GameweekNav {...base} rank="1,896,801" />);
+    expect(screen.getByText("1,896,801").className).toContain("sm:inline");
+    expect(screen.getByText("1.9M").className).toContain("sm:hidden");
+  });
+
   it("renders the squad toggle inside the gameweek bar", () => {
     // Merged into one bar so the two control strips cost one band of vertical
     // space — the difference between the bench being on screen or not.

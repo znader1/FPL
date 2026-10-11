@@ -36,6 +36,17 @@ describe("StepChips", () => {
   });
 });
 
+describe("StepChips state", () => {
+  it("tints undecided steps so what's left to do reads at a glance", () => {
+    render(<StepChips decisions={decisions} step="squad" onSelect={() => {}} />);
+    const transfers = screen.getByRole("button", { name: "Transfers" });
+    const bench = screen.getByRole("button", { name: "✓ Bench" });
+    expect(transfers.getAttribute("data-state")).toBe("pending");
+    expect(transfers.className).toContain("border-primary");
+    expect(bench.getAttribute("data-state")).toBe("done");
+  });
+});
+
 describe("StepChips scroll", () => {
   it("pins the Squad chip outside the scrolling row so the way home is always visible", () => {
     render(<StepChips decisions={decisions} step="confirm" onSelect={() => {}} />);
