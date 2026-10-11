@@ -10,6 +10,7 @@ import { ChipStep } from "./ChipStep";
 import { ReviewStep } from "./ReviewStep";
 import { StepHeader } from "./StepHeader";
 import { SavedStrip } from "./SavedStrip";
+import { RunPickCard } from "./RunPickCard";
 import type { WeekDecision } from "@/lib/weekDecisions";
 import type { CaptainLab } from "@/lib/captainLab";
 import type { ChipOption, TransferOptions } from "@/lib/planFlow";
@@ -286,5 +287,29 @@ describe("SavedStrip", () => {
     expect(strip.textContent).toContain("GW29 plan saved");
     expect(strip.textContent).toContain("any edit reopens it until the deadline");
     expect(screen.queryByRole("heading")).toBeNull();
+  });
+});
+
+describe("RunPickCard", () => {
+  it("offers a Run ZN Pick button when idle, shows the error, and a spinner while working", () => {
+    const onRun = vi.fn();
+    const { rerender } = render(<RunPickCard idle="Run ZN Pick to see your moves." working="Working…" loading={false} error={undefined} onRun={onRun} />);
+    fireEvent.click(screen.getByRole("button", { name: "Run ZN Pick" }));
+    expect(onRun).toHaveBeenCalledTimes(1);
+    rerender(<RunPickCard idle="Run ZN Pick to see your moves." working="Working…" loading={false} error="502 from Fly" onRun={onRun} />);
+    expect(screen.getByRole("alert").textContent).toContain("502 from Fly");
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+    rerender(<RunPickCard idle="Run ZN Pick to see your moves." working="Working…" loading error={undefined} onRun={onRun} />);
+    expect(screen.getByText("Working…")).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+});
+
+describe("TransfersStep without options", () => {
+  it("renders the run card so the step is never a dead end", () => {
+    const onRun = vi.fn();
+    render(<TransfersStep options={null} value={null} onPick={() => {}} onRun={onRun} />);
+    fireEvent.click(screen.getByRole("button", { name: "Run ZN Pick" }));
+    expect(onRun).toHaveBeenCalled();
   });
 });

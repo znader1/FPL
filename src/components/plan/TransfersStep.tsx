@@ -1,9 +1,10 @@
-import { ArrowRight, Loader2 } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { JerseyIcon } from "@/components/JerseyIcon";
 import { fmtGain } from "@/lib/format";
 import type { TransferOptions } from "@/lib/planFlow";
 import { RadioCard, RadioDot } from "./RadioCard";
+import { RunPickCard } from "./RunPickCard";
 
 interface TransfersStepProps {
   /** Null until the recommendation has answered. */
@@ -11,17 +12,15 @@ interface TransfersStepProps {
   value: "make" | "roll" | null;
   onPick: (choice: "make" | "roll") => void;
   loading?: boolean;
+  /** Ask ZN Pick (again) for the deadline GW. */
+  onRun?: () => void;
+  error?: string;
 }
 
 /** Step 1: "Make the move" (the verdict's moves) vs "Roll the transfer", as two radio cards. */
-export function TransfersStep({ options, value, onPick, loading = false }: TransfersStepProps) {
+export function TransfersStep({ options, value, onPick, loading = false, onRun = () => {}, error }: TransfersStepProps) {
   if (!options) {
-    return (
-      <div className="flex items-center justify-center gap-2 rounded-2xl border border-border bg-card p-10 text-sm text-muted-foreground">
-        {loading ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : null}
-        {loading ? "ZN Pick is working out your moves…" : "Run ZN Pick to see your moves."}
-      </div>
-    );
+    return <RunPickCard idle="Run ZN Pick to see your moves." working="ZN Pick is working out your moves…" loading={loading} error={error} onRun={onRun} />;
   }
   const { make, roll, alsoConsidered } = options;
   return (

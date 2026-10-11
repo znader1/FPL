@@ -36,6 +36,7 @@ import { useCountdown } from "@/hooks/useCountdown";
 import { formatCountdown } from "@/lib/deadline";
 import { StepChips } from "@/components/plan/StepChips";
 import { StepHeader } from "@/components/plan/StepHeader";
+import { RunPickCard } from "@/components/plan/RunPickCard";
 import { SavedStrip } from "@/components/plan/SavedStrip";
 import { PlanFooter } from "@/components/plan/PlanFooter";
 import { TransfersStep } from "@/components/plan/TransfersStep";
@@ -296,6 +297,7 @@ const Index = () => {
     };
   };
 
+  const autoRecommendFired = useRef<string | null>(null);
   const recommendationMutation = useMutation<FplTeamRecommendation, unknown, TeamRecommendationParams>({
     mutationFn: async (params) => fetchTeamRecommendation(params),
     onSuccess: (data) => {
@@ -305,6 +307,10 @@ const Index = () => {
       setPitchMode("recommendation");
     },
   });
+  const resetRecommendation = () => {
+    recommendationMutation.reset();
+    autoRecommendFired.current = null;
+  };
 
   useEffect(() => {
     if (didApplyNextGwDefault) return;
@@ -338,6 +344,7 @@ const Index = () => {
 
     setPitchMode("squad");
     recommendationMutation.reset();
+    autoRecommendFired.current = null;
     setDidApplyNextGwDefault(true);
   }, [
     didApplyNextGwDefault,
@@ -674,7 +681,7 @@ const Index = () => {
     }
 
     setPitchMode("squad");
-    recommendationMutation.reset();
+    resetRecommendation();
   };
 
   const setEntryAndReset = (value: number, identity?: FplEntryIdentity | null) => {
@@ -682,7 +689,7 @@ const Index = () => {
     setSquadGW(selectedGW);
     setChipPlayEventId(undefined);
     setPitchMode("squad");
-    recommendationMutation.reset();
+    resetRecommendation();
     // The identity snapshot rides along with the id: without it a season
     // rollover is undetectable and the app renders a stranger's squad.
     if (value > 0) {
@@ -725,6 +732,14 @@ const Index = () => {
   // Do it for them: the same constraint, expressed as the next step.
   const planGw = isLiveGw ? clampGw((currentLiveGw ?? resolvedGW) + 1) : resolvedGW;
 
+  /** Ask ZN Pick again for the deadline GW — the steps' and the GW bar's rerun. */
+  const rerunPick = () => {
+    if (typeof deadlineGw !== "number") return;
+    setSelectedGW(deadlineGw);
+    setSquadGW(deadlineGw);
+    runRecommendation(deadlineGw);
+  };
+
   const runRecommendation = (eventId: number) => {
     const nextChipPlayEventId = chipStrategy === "wildcard" ? eventId : undefined;
     if (chipStrategy === "wildcard") setChipPlayEventId(nextChipPlayEventId);
@@ -758,7 +773,9 @@ const Index = () => {
   // entry + deadline GW if the user hasn't, asking for that GW explicitly (the
   // Recommend button's planGw follows the GW on screen, which may be another).
   // The squad itself is never refetched — handoff §1.
-  const autoRecommendFired = useRef<string | null>(null);
+  // Cleared by resetRecommendation(): a reset after the auto-run (GW or entry
+  // change, the default-GW effect) dropped the answer and left the step empty
+  // with no way to ask again, since the latch still held the key.
   const autoRecommendKey = shouldAutoRecommend({
     step,
     hasPlanRec: Boolean(planRec),
@@ -963,15 +980,21 @@ const Index = () => {
                   value={plan?.transfer ?? null}
                   onPick={(choice) => setPlan({ transfer: choice })}
                   loading={recommendationMutation.isPending}
+                  error={recommendErrorMessage}
+                  onRun={rerunPick}
                 />
               )}
               {step === "captain" &&
                 (captainLab ? (
                   <CaptainStep lab={captainLab} goal={captainGoal} onGoal={changeGoal} onMakeCaptain={makeCaptain} onMakeVice={makeVice} />
                 ) : (
-                  <div className="rounded-2xl border border-border bg-card p-10 text-center text-sm text-muted-foreground">
-                    {recommendationMutation.isPending ? "Projecting your captain options…" : "Run ZN Pick to see your captain options."}
-                  </div>
+                  <RunPickCard
+                    idle="Run ZN Pick to see your captain options."
+                    working="Projecting your captain options…"
+                    loading={recommendationMutation.isPending}
+                    error={recommendErrorMessage}
+                    onRun={rerunPick}
+                  />
                 ))}
               {step === "bench" && resolvedPlan && plan && (
                 <>
@@ -1015,7 +1038,7 @@ const Index = () => {
                   countdown={countdownText}
                 />
               )}
-              {recommendErrorMessage && step !== "bench" && (
+              {recommendErrorMessage && step !== "bench" && step !== "transfers" && (step !== "captain" || captainLab) && (
                 <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                   {recommendErrorMessage}
                 </div>
@@ -1114,6 +1137,20 @@ const Index = () => {
                   review), so the squad step needs no bottom bar and the pitch
                   gets the height back. Re-running ZN Pick stays in the rail's
                   Parameters form. Without a plan yet, this is the recommend button. */}
+              {plan && entryId > 0 && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="hidden lg:inline-flex"
+                  onClick={rerunPick}
+                  disabled={!canRecommend || recommendationMutation.isPending}
+                  title={`Re-run ZN Pick for GW${deadlineGw ?? planGw}`}
+                  aria-label="Re-run ZN Pick"
+                >
+                  <Zap className="h-3.5 w-3.5" />
+                  {recommendationMutation.isPending ? "Working…" : "ZN Pick"}
+                </Button>
+              )}
               {plan && entryId > 0 ? (
                 <Button
                   size="sm"
@@ -1122,7 +1159,6 @@ const Index = () => {
                   disabled={footer.disabled}
                   title={footer.hint || undefined}
                 >
-                  <Zap className="h-3.5 w-3.5" />
                   {footer.short}
                 </Button>
               ) : (
