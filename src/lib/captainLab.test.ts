@@ -103,3 +103,18 @@ describe("buildCaptainLab", () => {
     expect(lab.candidates.map((c) => c.bigGain)).toEqual([false, true, true]);
   });
 });
+
+describe("buildCaptainLab from the plan (v2 flow)", () => {
+  it("draws candidates from the given pool, flags the benched ones, and reads the plan's armbands", () => {
+    const bench = p(5, "Isak", "NEW", 7.9);
+    const r = rec(withEo, { bench: [{ ...bench, bench_order: 2 }] });
+    const lab = buildCaptainLab(r, "chase", 3, { pool: [...withEo, bench], benchedIds: new Set([5]), viceId: 1 });
+    expect(lab.candidates.map((c) => c.name)).toEqual(["Haaland", "Isak", "Saka"]);
+    expect(lab.candidates[1].benched).toBe(true);
+    expect(lab.candidates[0].benched).toBe(false);
+    expect(lab.captainId).toBe(3);
+    expect(lab.viceId).toBe(1);
+    // A benched player is never the ZN Pick.
+    expect(lab.znPickId).toBe(2);
+  });
+});

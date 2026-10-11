@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   applyPatch,
+  toPlanId,
   buildPlayerLookup,
   buildTodo,
   countChanges,
@@ -188,6 +189,12 @@ describe("makeMoves / resolvePlan", () => {
     const rolled = resolvePlan({ ...plan, transfer: "roll" }, makeMoves(rec(detail())));
     expect(rolled.xi).toContain(11);
     expect(rolled.incoming).toEqual({});
+  });
+
+  it("toPlanId maps a buy back to the seller it replaced, so edits store pre-transfer ids", () => {
+    const moves = makeMoves(rec(detail()));
+    expect(toPlanId(99, moves)).toBe(11);
+    expect(toPlanId(5, moves)).toBe(5);
   });
 
   it("treats make with nothing to make as undecided", () => {

@@ -145,6 +145,10 @@ export function resolvePlan(plan: GwPlan, moves: FplTransferVerdictMove[]): Reso
   return { xi: plan.xi.map(sub), bench: plan.bench.map(sub), cap: sub(plan.cap), vice: sub(plan.vice), incoming };
 }
 
+/** The id the plan stores for a player on screen: a buy maps back to the seller
+ *  he replaced, so a later "roll" leaves the lineup edits intact. */
+export const toPlanId = (id: number, moves: FplTransferVerdictMove[]) => moves.find((m) => m.buy.id === id)?.sell.id ?? id;
+
 // ---- player records ---------------------------------------------------------
 
 export type PlayerLookup = Record<number, FplTeamRecommendationPlayer>;

@@ -26,6 +26,8 @@ export interface CaptainCandidate {
   bigGain: boolean;
   fixture?: CaptainFixture;
   suggested: boolean;
+  /** v2 flow: the player sits on the plan's bench, so he can't wear the armband yet. */
+  benched: boolean;
 }
 
 export interface CaptainLab {
@@ -75,7 +77,17 @@ function toCandidate(p: FplTeamRecommendationPlayer): CaptainCandidate {
     bigGain: typeof rankGain === "number" && rankGain >= BIG_GAIN_RANKS,
     fixture: parseFixtureLabel(p.next_fixtures ?? p.fixtures_horizon?.[0]?.fixtures),
     suggested: Boolean(p.is_captain_suggested),
+    benched: false,
   };
+}
+
+export interface CaptainLabOptions {
+  /** Candidate pool (the plan's 15); defaults to the recommendation's XI. */
+  pool?: FplTeamRecommendationPlayer[];
+  /** Ids on the plan's bench — shown dimmed, never the ZN Pick. */
+  benchedIds?: Set<number>;
+  /** The plan's vice; when given it replaces the best-remaining derivation. */
+  viceId?: number | null;
 }
 
 const best = <T,>(xs: T[], score: (x: T) => number | undefined): T | undefined => {
@@ -92,11 +104,13 @@ const best = <T,>(xs: T[], score: (x: T) => number | undefined): T | undefined =
 };
 
 /** Everything the Captain Lab renders, from one recommendation + the user's goal and pick. */
-export function buildCaptainLab(rec: FplTeamRecommendation, goal: CaptainGoal, manualCaptainId: number | null): CaptainLab {
-  const candidates = [...rec.starting_xi]
+export function buildCaptainLab(rec: FplTeamRecommendation, goal: CaptainGoal, manualCaptainId: number | null, opts: CaptainLabOptions = {}): CaptainLab {
+  const benchedIds = opts.benchedIds ?? new Set<number>();
+  const candidates = [...(opts.pool ?? rec.starting_xi)]
     .sort((a, b) => b.xpts - a.xpts)
     .slice(0, CANDIDATES)
-    .map(toCandidate);
+    .map((p) => ({ ...toCandidate(p), benched: benchedIds.has(p.player_id) }));
+  const eligible = candidates.filter((c) => !c.benched);
 
   const hasTop10k = candidates.some((c) => typeof c.eoTop10k === "number" || typeof c.rankGainIfHaul === "number");
   const hasOverall = candidates.some((c) => typeof c.ownershipPct === "number");
@@ -105,27 +119,29 @@ export function buildCaptainLab(rec: FplTeamRecommendation, goal: CaptainGoal, m
   // The backend's total doubles its own suggested captain, who may sit outside
   // the top three (DGW logic server-side) — look across the whole XI for him.
   const suggestedPlayer = rec.starting_xi.find((p) => p.is_captain_suggested);
-  const suggested = candidates.find((c) => c.suggested) ?? candidates[0];
+  const suggested = eligible.find((c) => c.suggested) ?? eligible[0];
   const fallback = suggested ?? null;
   const own = (c: CaptainCandidate) => (ownershipBasis === "top10k" ? c.eoTop10k : c.ownershipPct);
 
   let zn: CaptainCandidate | undefined;
   if (ownershipBasis === "top10k") {
-    zn = goal === "safe" ? best(candidates, (c) => c.eoTop10k) : best(candidates, (c) => c.rankGainIfHaul ?? c.p90);
+    zn = goal === "safe" ? best(eligible, (c) => c.eoTop10k) : best(eligible, (c) => c.rankGainIfHaul ?? c.p90);
   } else if (ownershipBasis === "overall") {
     // No rank model: protect = ride the crowd; chase = the ceiling the fewest rivals share.
     zn =
       goal === "safe"
-        ? best(candidates, (c) => c.ownershipPct)
-        : best(candidates, (c) => (typeof c.p90 === "number" && typeof c.ownershipPct === "number" ? c.p90 * (1 - c.ownershipPct / 100) : undefined));
+        ? best(eligible, (c) => c.ownershipPct)
+        : best(eligible, (c) => (typeof c.p90 === "number" && typeof c.ownershipPct === "number" ? c.p90 * (1 - c.ownershipPct / 100) : undefined));
   }
   zn = zn ?? fallback ?? undefined;
   const znPickId = zn?.id ?? null;
 
-  const captain = candidates.find((c) => c.id === manualCaptainId) ?? zn;
+  // The plan may captain someone outside the top three; honour any pool member.
+  const manualInPool = manualCaptainId !== null ? (opts.pool ?? rec.starting_xi).find((p) => p.player_id === manualCaptainId) : undefined;
+  const captain = candidates.find((c) => c.id === manualCaptainId) ?? (manualInPool ? toCandidate(manualInPool) : undefined) ?? zn;
   const captainId = captain?.id ?? null;
   const vice = best(candidates.filter((c) => c.id !== captainId), (c) => c.xpts);
-  const viceId = vice?.id ?? null;
+  const viceId = opts.viceId !== undefined ? opts.viceId : vice?.id ?? null;
 
   const topXpts = candidates[0];
   let headline = "Pick your captain.";

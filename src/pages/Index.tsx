@@ -5,8 +5,44 @@ import { CommandRail } from "@/components/CommandRail";
 import { WeekChecklist } from "@/components/WeekChecklist";
 import { deriveWeekDecisions } from "@/lib/weekDecisions";
 import { GwPlanValueProvider, useGwPlanStore } from "@/contexts/GwPlanContext";
-import { buildPlayerLookup, countChanges, isPlanStep, makeMoves, projectPlan, resolvePlan, type PlanStep } from "@/lib/gwPlan";
+import {
+  buildPlayerLookup,
+  buildTodo,
+  countChanges,
+  isPlanStep,
+  makeMoves,
+  moveBench,
+  projectPlan,
+  resolvePlan,
+  swapCheck,
+  swapPlayers,
+  toPlanId,
+  type PlanStep,
+} from "@/lib/gwPlan";
 import { planToTeam } from "@/lib/planTeam";
+import {
+  autoSubPreview,
+  chipOptions,
+  firstUnfinishedStep,
+  footerFor,
+  nextStep,
+  prevStep,
+  reviewSummary,
+  reviewWarnings,
+  stepCopy,
+  transferOptions,
+} from "@/lib/planFlow";
+import { buildCaptainLab, type CaptainGoal } from "@/lib/captainLab";
+import { useCountdown } from "@/hooks/useCountdown";
+import { formatCountdown } from "@/lib/deadline";
+import { StepChips } from "@/components/plan/StepChips";
+import { StepHeader } from "@/components/plan/StepHeader";
+import { PlanFooter } from "@/components/plan/PlanFooter";
+import { TransfersStep } from "@/components/plan/TransfersStep";
+import { CaptainStep } from "@/components/plan/CaptainStep";
+import { BenchStep, type BenchMessage } from "@/components/plan/BenchStep";
+import { ChipStep } from "@/components/plan/ChipStep";
+import { ReviewStep } from "@/components/plan/ReviewStep";
 import { MobileParameterDrawer } from "@/components/MobileParameterDrawer";
 import { PitchVisualization } from "@/components/PitchVisualization";
 import { RecommendationsPanel } from "@/components/RecommendationsPanel";
@@ -126,8 +162,13 @@ const getInitialIncludeTransfers = () => {
   return true;
 };
 
+const getInitialCaptainGoal = (): CaptainGoal => (localStorage.getItem("fpl_captain_goal") === "safe" ? "safe" : "chase");
+
 const Index = () => {
   const [entryId, setEntryId] = useState(getInitialEntryId);
+  const [captainGoal, setCaptainGoal] = useState<CaptainGoal>(getInitialCaptainGoal);
+  const [swapSelection, setSwapSelection] = useState<number | null>(null);
+  const [benchMessage, setBenchMessage] = useState<BenchMessage | null>(null);
   const [selectedGW, setSelectedGW] = useState<number | null>(getInitialGw);
   // Invariant: squadGW always initializes equal to selectedGW and is only ever
   // written in lockstep with it (setGwAndReset / setEntryAndReset / next-event default).
@@ -467,7 +508,12 @@ const Index = () => {
   const resolvedPlan = useMemo(() => (plan ? resolvePlan(plan, planMoves) : null), [plan, planMoves]);
   // Derived, never stored: "make" applies the verdict's moves, nothing else does.
   const appliedTransferCount = plan?.transfer === "make" ? planMoves.length : 0;
-  const planProjected = resolvedPlan && plan ? projectPlan(resolvedPlan, playerLookup, plan.chip) : null;
+  const chipOpts = useMemo(
+    () => (resolvedPlan && typeof deadlineGw === "number" ? chipOptions({ resolved: resolvedPlan, lookup: playerLookup, chipPlan: chipPlanQuery.data, gw: deadlineGw }) : []),
+    [resolvedPlan, playerLookup, chipPlanQuery.data, deadlineGw],
+  );
+  const freeHitGain = chipOpts.find((o) => o.chip === "free_hit")?.gain ?? null;
+  const planProjected = resolvedPlan && plan ? projectPlan(resolvedPlan, playerLookup, plan.chip, freeHitGain) : null;
   const baseProjected = basePlan ? projectPlan(resolvePlan(basePlan, []), playerLookup, null) : null;
   const planDelta =
     typeof planProjected === "number" && typeof baseProjected === "number" ? Math.round((planProjected - baseProjected) * 10) / 10 : undefined;
@@ -478,7 +524,72 @@ const Index = () => {
   const { step: stepParam } = useParams();
   const step: PlanStep = isPlanStep(stepParam) ? stepParam : "squad";
   const navigate = useNavigate();
-  const goStep = (s: PlanStep) => navigate(s === "squad" ? "/app" : `/app/plan/${s}`);
+  const goStep = (s: PlanStep) => {
+    setSwapSelection(null);
+    setBenchMessage(null);
+    navigate(s === "squad" ? "/app" : `/app/plan/${s}`);
+  };
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("fpl_captain_goal", captainGoal);
+    } catch {
+      // ignore
+    }
+  }, [captainGoal]);
+
+  // The step views (flow handoff §3). Everything here reads the plan; nothing
+  // refetches the squad.
+  const transferOpts = useMemo(() => (planRec ? transferOptions(planRec) : null), [planRec]);
+  const planPosOf = (id: number) => playerLookup[id]?.pos ?? "MID";
+  const captainLab = useMemo(() => {
+    if (!planRec || !resolvedPlan) return null;
+    const pool = [...resolvedPlan.xi, ...resolvedPlan.bench].map((id) => playerLookup[id]).filter(Boolean);
+    return buildCaptainLab(planRec, captainGoal, resolvedPlan.cap, { pool, benchedIds: new Set(resolvedPlan.bench), viceId: resolvedPlan.vice });
+  }, [planRec, resolvedPlan, playerLookup, captainGoal]);
+  const planWarnings = resolvedPlan ? reviewWarnings(resolvedPlan) : [];
+  const deadlineRemaining = useCountdown(nextEventQuery.data?.deadline_time_utc);
+  const countdownText = deadlineRemaining !== null && deadlineRemaining > 0 ? formatCountdown(deadlineRemaining) : "";
+
+  const makeCaptain = (id: number) => {
+    const pid = toPlanId(id, planMoves);
+    setPlan((p) => ({ cap: pid, vice: p.vice === pid ? p.cap : p.vice }));
+  };
+  const makeVice = (id: number) => setPlan({ vice: toPlanId(id, planMoves) });
+  const changeGoal = (g: CaptainGoal) => setCaptainGoal(g);
+
+  const armSwap = (id: number | null) => {
+    setSwapSelection(id);
+    setBenchMessage(id === null ? null : { text: `Tap a highlighted starter to bring ${playerLookup[id]?.web_name ?? "him"} on.`, tone: "primary" });
+  };
+  const starterState = swapSelection !== null && resolvedPlan
+    ? (id: number) => (swapCheck(resolvedPlan.xi, swapSelection, id, planPosOf) ? ("invalid" as const) : ("valid" as const))
+    : undefined;
+  const onStarterClick = (starterId: number) => {
+    if (swapSelection === null || !resolvedPlan || !plan) return;
+    const rule = swapCheck(resolvedPlan.xi, swapSelection, starterId, planPosOf);
+    if (rule) {
+      setBenchMessage({ text: rule, tone: "warning" });
+      return;
+    }
+    const next = swapPlayers(plan, toPlanId(swapSelection, planMoves), toPlanId(starterId, planMoves));
+    setPlan({ xi: next.xi, bench: next.bench });
+    const inName = playerLookup[swapSelection]?.web_name ?? "He";
+    const outName = playerLookup[starterId]?.web_name ?? "the starter";
+    const capOut = starterId === resolvedPlan.cap;
+    setBenchMessage(
+      capOut
+        ? { text: `${inName} is in for ${outName}. Your captain is now on the bench, so pick a new one.`, tone: "danger" }
+        : { text: `${inName} is in for ${outName}.`, tone: "accent" },
+    );
+    setSwapSelection(null);
+  };
+  const onMoveBench = (index: number, dir: -1 | 1) => {
+    if (!plan) return;
+    const next = moveBench(plan, index, dir);
+    if (next !== plan) setPlan({ bench: next.bench });
+  };
+
 
   // DecisionCard's Apply/Undo write the plan's transfer decision; the per-move
   // index no longer matters — the plan applies the verdict's moves as one.
@@ -518,6 +629,11 @@ const Index = () => {
   const planTeam = useMemo(
     () => (plan && resolvedPlan && latestSquad && selectedGW === deadlineGw ? planToTeam(latestSquad, resolvedPlan, playerLookup) : undefined),
     [plan, resolvedPlan, latestSquad, selectedGW, deadlineGw, playerLookup],
+  );
+  // The bench step always shows the plan, whatever GW the squad view is on.
+  const benchTeam = useMemo(
+    () => (plan && resolvedPlan && latestSquad ? planToTeam(latestSquad, resolvedPlan, playerLookup) : undefined),
+    [plan, resolvedPlan, latestSquad, playerLookup],
   );
   const activeTeam = useMemo(() => {
     if (pitchMode === "recommendation" && activeRecommendation) return activeRecommendation;
@@ -644,7 +760,17 @@ const Index = () => {
   // existing effect that reacts to chipStrategy changes; no separate write needed.
   const handleApplyChipNudge = (chip: ChipName) => {
     setChipStrategy(chip);
+    setPlan({ chip });
   };
+
+  // Entering a step needs ZN Pick's answer for the deadline GW; run it once if
+  // the user hasn't. (The squad itself is never refetched — handoff §1.)
+  const needsRecommendation =
+    step !== "squad" && !planRec && !recommendationMutation.isPending && !recommendationMutation.isError && canRecommend && entryId > 0 && gwResolved;
+  useEffect(() => {
+    if (needsRecommendation) handlePrimaryRecommend();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsRecommendation]);
 
   const parameterProps = {
     entryId,
@@ -682,6 +808,31 @@ const Index = () => {
       }),
     [plan, basePlan, playerLookup, planRec, chipPlanQuery.data, chipPlanQuery.isError],
   );
+  const reviewRows = plan && basePlan ? reviewSummary(plan, basePlan, planMoves, playerLookup, weekDecisions) : [];
+  const planTodo =
+    plan && basePlan ? buildTodo(plan, basePlan, planMoves, playerLookup, planRec?.transfer_plan_horizon?.verdict_detail?.hit_cost ?? 0) : [];
+  const footer = footerFor({ step, plan, decisions: weekDecisions, warnings: planWarnings, gw: deadlineGw ?? planGw });
+  const onFooterNext = () => {
+    if (!plan) return;
+    if (step === "confirm") {
+      setPlan({ locked: true });
+      return;
+    }
+    if (step === "squad") {
+      goStep(firstUnfinishedStep(weekDecisions));
+      return;
+    }
+    setPlan((p) => ({ reviewed: { ...p.reviewed, [step]: true } }));
+    const next = nextStep(step);
+    if (next) goStep(next);
+  };
+  const onFooterBack = () => {
+    const prev = prevStep(step);
+    if (prev) goStep(prev);
+  };
+  const header = stepCopy(step, deadlineGw ?? planGw, { locked: Boolean(plan?.locked), desktop: isDesktop });
+  const stepHeader =
+    step === "captain" && captainLab ? { ...header, title: captainLab.headline, sub: captainLab.subcopy } : header;
   const verdictDetail = activeRecommendation?.transfer_plan_horizon?.verdict_detail;
   const freeTransfers =
     verdictDetail?.ft_before ??
@@ -732,7 +883,12 @@ const Index = () => {
     <GwPlanValueProvider value={planStore}>
     <div className="flex flex-col h-screen bg-background">
       <Navbar extras={navbarStats} planStatus={plan ? { changes: planChanges, locked: plan.locked } : undefined} />
-      <div className="flex flex-1 min-h-0 pt-14 flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
+      {entryId > 0 && gwGateState === "ready" && (
+        <div className="fixed inset-x-0 top-14 z-40 border-b border-border bg-background/95 backdrop-blur lg:hidden">
+          <StepChips decisions={weekDecisions} step={step} onSelect={goStep} />
+        </div>
+      )}
+      <div className={`flex flex-1 min-h-0 flex-col lg:flex-row overflow-y-auto lg:overflow-hidden ${entryId > 0 && gwGateState === "ready" ? "pt-[106px] lg:pt-14" : "pt-14"}`}>
       {gwGateState === "error" ? (
         // A failed /events/next used to fall through to the "Loading…" branch
         // below and stay there forever (audit U1). Give the user a way out.
@@ -789,7 +945,77 @@ const Index = () => {
       {/* entryId <= 0 falls through to the pitch so the onboarding overlay stays
           reachable during pre-season — otherwise first-run signups in the launch
           window would only ever see the off-season card. */}
-      {isOffSeason && entryId > 0 ? (
+      {step !== "squad" && entryId > 0 ? (
+        <div className="flex flex-1 flex-col lg:min-h-0 lg:min-w-0">
+          <div className="flex-1 px-4 py-5 lg:overflow-y-auto lg:px-8 lg:py-6">
+            <div className="mx-auto flex max-w-[880px] flex-col gap-4">
+              <StepHeader copy={stepHeader} savedBanner={false} />
+              {step === "transfers" && (
+                <TransfersStep
+                  options={transferOpts}
+                  value={plan?.transfer ?? null}
+                  onPick={(choice) => setPlan({ transfer: choice })}
+                  loading={recommendationMutation.isPending}
+                />
+              )}
+              {step === "captain" &&
+                (captainLab ? (
+                  <CaptainStep lab={captainLab} goal={captainGoal} onGoal={changeGoal} onMakeCaptain={makeCaptain} onMakeVice={makeVice} />
+                ) : (
+                  <div className="rounded-2xl border border-border bg-card p-10 text-center text-sm text-muted-foreground">
+                    {recommendationMutation.isPending ? "Projecting your captain options…" : "Run ZN Pick to see your captain options."}
+                  </div>
+                ))}
+              {step === "bench" && resolvedPlan && plan && (
+                <>
+                  {benchTeam && (
+                    <PitchVisualization
+                      team={benchTeam}
+                      requestedGw={deadlineGw ?? planGw}
+                      onRequestedGwChange={() => {}}
+                      gwSelectable={false}
+                      fixturesByTeam={fixturesByTeam}
+                      incoming={resolvedPlan.incoming}
+                      starterState={starterState}
+                      onStarterClick={onStarterClick}
+                    />
+                  )}
+                  <BenchStep
+                    resolved={resolvedPlan}
+                    lookup={playerLookup}
+                    swapSelection={swapSelection}
+                    onSwapSelect={armSwap}
+                    onMoveBench={onMoveBench}
+                    autoSub={autoSubPreview(resolvedPlan, playerLookup)}
+                    message={benchMessage}
+                  />
+                </>
+              )}
+              {step === "chip" && plan && <ChipStep options={chipOpts} value={plan.chip} onPick={(chip) => setPlan({ chip })} />}
+              {step === "confirm" && plan && (
+                <ReviewStep
+                  rows={reviewRows}
+                  onRow={goStep}
+                  warnings={planWarnings}
+                  onFix={goStep}
+                  projected={planProjected}
+                  delta={planDelta}
+                  locked={plan.locked}
+                  todo={planTodo}
+                  gw={deadlineGw ?? planGw}
+                  countdown={countdownText}
+                />
+              )}
+              {recommendErrorMessage && step !== "bench" && (
+                <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  {recommendErrorMessage}
+                </div>
+              )}
+            </div>
+          </div>
+          <PlanFooter spec={footer} onBack={onFooterBack} onNext={onFooterNext} />
+        </div>
+      ) : isOffSeason && entryId > 0 ? (
         <div className="flex-1 flex items-center justify-center p-6">
           <div className="max-w-sm text-center rounded-2xl border border-border bg-card p-8">
             <h3 className="font-bold text-foreground mb-2">Season hasn't started</h3>
@@ -820,10 +1046,15 @@ const Index = () => {
         // stacks vertically and a collapsed-height column makes the pitch
         // overlap its siblings.
         <div className="flex flex-col lg:flex-1 lg:min-w-0 lg:min-h-0">
+        {plan?.locked && (
+          <div className="mx-auto w-full max-w-5xl px-4 pt-4">
+            <StepHeader copy={header} savedBanner />
+          </div>
+        )}
         {/* Phones get the checklist as a strip above the pitch; the rail is lg+. */}
         {!isDesktop && entryId > 0 && (
           <div className="mx-auto w-full max-w-5xl px-4 pt-4 lg:hidden">
-            <WeekChecklist decisions={weekDecisions} compact onSelect={goStep} activeStep={step} />
+            <WeekChecklist decisions={weekDecisions} compact onSelect={goStep} activeStep={step} onReset={resetPlan} dirty={planDirty} />
           </div>
         )}
         {identityCheck.status === "rolled-over" && (
@@ -895,8 +1126,10 @@ const Index = () => {
             </>
           }
         />
+        {entryId > 0 && plan && <PlanFooter spec={footer} onBack={onFooterBack} onNext={onFooterNext} />}
         </div>
       )}
+      {step === "squad" && (
       <RecommendationsPanel
         squad={squadQuery.data}
         recommendation={activeRecommendation}
@@ -912,6 +1145,7 @@ const Index = () => {
         isChipPlanLoading={chipPlanQuery.isLoading}
         isChipPlanError={chipPlanQuery.isError}
       />
+      )}
         </>
       )}
       </div>
