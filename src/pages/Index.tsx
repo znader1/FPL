@@ -56,6 +56,7 @@ import { Zap } from "lucide-react";
 import { parseEntryIdInput } from "@/lib/entryId";
 import { checkEntryIdentity, rolloverMessage } from "@/lib/entryIdentity";
 import { useProfile } from "@/hooks/useProfile";
+import { useAuth } from "@/contexts/AuthContext";
 import { useIsDesktop } from "@/hooks/use-desktop";
 import {
   fetchFixtures,
@@ -496,7 +497,8 @@ const Index = () => {
   useEffect(() => {
     setLatestSquad(undefined);
   }, [entryId]);
-  const planStore = useGwPlanStore({ entryId, gw: deadlineGw ?? 0, squad: squadIsLatest ? squadQuery.data : undefined });
+  const { user } = useAuth();
+  const planStore = useGwPlanStore({ entryId, gw: deadlineGw ?? 0, squad: squadIsLatest ? squadQuery.data : undefined, userId: user?.id ?? null });
   const { plan, base: basePlan, setPlan, resetPlan } = planStore;
 
   // The recommendation informs the plan only when it was run for the deadline GW.

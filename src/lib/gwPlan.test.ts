@@ -291,5 +291,8 @@ describe("storage", () => {
     expect(parseStoredPlan("{}")).toBeNull();
     expect(parseStoredPlan("not json")).toBeNull();
     expect(parseStoredPlan(JSON.stringify({ plan: { xi: "x" }, base: stored.base }))).toBeNull();
+    // updatedAt is optional (rows written before account sync had none) and kept when present.
+    expect(parseStoredPlan(JSON.stringify({ ...stored, updatedAt: "2026-10-11T10:00:00.000Z" }))).toEqual({ ...stored, updatedAt: "2026-10-11T10:00:00.000Z" });
+    expect(parseStoredPlan(JSON.stringify({ ...stored, updatedAt: 42 }))).toEqual(stored);
   });
 });

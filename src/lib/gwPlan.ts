@@ -258,6 +258,9 @@ export const planStorageKey = (entryId: number, gw: number) => `fpl_gw_plan:${en
 export interface StoredPlan {
   plan: GwPlan;
   base: GwPlan;
+  /** ISO time of the last edit; absent on an untouched seed (so the account's
+   *  copy always beats it) and on rows written before account sync existed. */
+  updatedAt?: string;
 }
 
 const isIdList = (v: unknown, n?: number): v is number[] =>
@@ -282,8 +285,9 @@ function isGwPlan(v: unknown): v is GwPlan {
 export function parseStoredPlan(raw: string | null): StoredPlan | null {
   if (!raw) return null;
   try {
-    const v = JSON.parse(raw) as { plan?: unknown; base?: unknown };
-    return isGwPlan(v?.plan) && isGwPlan(v?.base) ? { plan: v.plan, base: v.base } : null;
+    const v = JSON.parse(raw) as { plan?: unknown; base?: unknown; updatedAt?: unknown };
+    if (!isGwPlan(v?.plan) || !isGwPlan(v?.base)) return null;
+    return typeof v.updatedAt === "string" ? { plan: v.plan, base: v.base, updatedAt: v.updatedAt } : { plan: v.plan, base: v.base };
   } catch {
     return null;
   }

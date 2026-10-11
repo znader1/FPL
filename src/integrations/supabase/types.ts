@@ -39,6 +39,33 @@ export type Database = {
   }
   public: {
     Tables: {
+      gw_plans: {
+        Row: {
+          base: Json
+          entry_id: number
+          gw: number
+          plan: Json
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          base: Json
+          entry_id: number
+          gw: number
+          plan: Json
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          base?: Json
+          entry_id?: number
+          gw?: number
+          plan?: Json
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
