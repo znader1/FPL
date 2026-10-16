@@ -13,6 +13,8 @@ interface CaptainCardProps {
   onMakeVice: (id: number) => void;
   /** Which ownership figure the tile shows; null renders a dash. */
   ownershipBasis?: "top10k" | "overall" | null;
+  /** The GW the top-10k sample was taken in; named on the tile since it lags the plan. */
+  eoEventId?: number | null;
 }
 
 /** The range bar's axis: 0–20 points, so a 2–16 band reads the same on every card. */
@@ -23,7 +25,7 @@ const fmtRank = (n: number) => `${n >= 0 ? "+" : "−"}${Math.round(Math.abs(n) 
 
 /** One captain candidate: xPts hero, likely range, EO and rank-if-haul tiles, note,
  *  and separate Make captain / Make vice buttons (v2 flow — no whole-card click). */
-export function CaptainCard({ c, role, znPick, onMakeCaptain, onMakeVice, ownershipBasis = "top10k" }: CaptainCardProps) {
+export function CaptainCard({ c, role, znPick, onMakeCaptain, onMakeVice, ownershipBasis = "top10k", eoEventId = null }: CaptainCardProps) {
   const hasRange = typeof c.p10 === "number" && typeof c.p90 === "number";
   const ownership = ownershipBasis === "overall" ? c.ownershipPct : c.eoTop10k;
   const isCap = role === "C";
@@ -100,7 +102,7 @@ export function CaptainCard({ c, role, znPick, onMakeCaptain, onMakeVice, owners
       <div className="grid grid-cols-2 gap-2">
         <div className="rounded-[10px] bg-background/60 px-2.5 py-2">
           <div className="text-[10px] font-semibold uppercase tracking-[.06em] text-muted-foreground">
-            {ownershipBasis === "overall" ? "Ownership" : "Top 10k EO"}
+            {ownershipBasis === "overall" ? "Ownership" : typeof eoEventId === "number" ? `Top 10k EO · GW${eoEventId}` : "Top 10k EO"}
           </div>
           <div className="mt-0.5 text-base font-extrabold tabular-nums text-foreground">
             {typeof ownership === "number" ? `${Math.round(ownership)}%` : "—"}

@@ -34,6 +34,8 @@ export interface FplTeamRecommendationPlayer {
   xpts_p90?: number | null;
   /** Effective ownership in the top 10k, percent (can exceed 100 with captaincy). No source yet. */
   eo_top10k?: number | null;
+  /** The GW the top-10k sample was taken in (picks are readable only after a deadline, so it lags the planned GW by one). */
+  eo_top10k_event_id?: number | null;
   /** FPL's overall selected_by_percent — the honest ownership figure the backend does send. */
   ownership_pct?: number | null;
   /** Estimated ranks gained if the player hauls. */

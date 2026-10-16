@@ -40,9 +40,17 @@ describe("buildCaptainLab", () => {
     // be read as "18 ranks" and lose, nor as a swing and win: he is simply out of the comparison.
     const mixed = [{ ...withEo[0], rank_gain_if_haul: undefined }, withEo[1], withEo[2], withEo[3]];
     expect(buildCaptainLab(rec(mixed), "chase", null).znPickId).toBe(2);
-    // No candidate has a swing → ceiling decides.
+    // No candidate has a swing (EO sampled, rank model not yet): the ceiling the
+    // fewest top-10k rivals share decides — Haaland's 142% EO (everyone captains
+    // him) makes his 18 worth nothing as a climb; Palmer 15 × (1 − 0.22) wins.
     const none = withEo.map((c) => ({ ...c, rank_gain_if_haul: undefined }));
-    expect(buildCaptainLab(rec(none), "chase", null).znPickId).toBe(1);
+    expect(buildCaptainLab(rec(none), "chase", null).znPickId).toBe(3);
+  });
+
+  it("carries the GW the top-10k sample was taken in, so the tile can say it lags the plan", () => {
+    const sampled = withEo.map((c) => ({ ...c, eo_top10k_event_id: 6 }));
+    expect(buildCaptainLab(rec(sampled), "safe", null).eoEventId).toBe(6);
+    expect(buildCaptainLab(rec(withEo), "safe", null).eoEventId).toBeNull();
   });
 
   it("re-bases the projection on captain_player_id when no is_captain_suggested flag is sent", () => {

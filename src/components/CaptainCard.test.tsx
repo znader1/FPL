@@ -60,6 +60,11 @@ describe("CaptainCard", () => {
     expect(screen.queryByText("Top 10k EO")).toBeNull();
   });
 
+  it("names the sampled GW on the top-10k tile when it is known", () => {
+    render(<CaptainCard c={{ ...saka, eoTop10k: 38 }} role={null} znPick={false} onMakeCaptain={() => {}} onMakeVice={() => {}} ownershipBasis="top10k" eoEventId={6} />);
+    expect(screen.getByText("Top 10k EO · GW6")).toBeTruthy();
+  });
+
   it("shows dashes for missing ownership and rank data", () => {
     render(<CaptainCard c={{ ...saka, eoTop10k: undefined, rankGainIfHaul: undefined, bigGain: false, p10: undefined, p90: undefined }} role={null} znPick={false} onMakeCaptain={() => {}} onMakeVice={() => {}} />);
     expect(screen.getAllByText("—")).toHaveLength(3); // EO, rank, range label

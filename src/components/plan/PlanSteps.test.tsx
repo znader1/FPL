@@ -151,6 +151,7 @@ const lab: CaptainLab = {
   subcopy: "Haaland projects higher, but…",
   rankAware: true,
   ownershipBasis: "top10k",
+  eoEventId: null,
   projected: 66,
 };
 

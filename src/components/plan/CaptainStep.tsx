@@ -42,6 +42,7 @@ export function CaptainStep({ lab, goal, onGoal, onMakeCaptain, onMakeVice }: Ca
             role={c.id === lab.captainId ? "C" : c.id === lab.viceId ? "VC" : null}
             znPick={c.id === lab.znPickId}
             ownershipBasis={lab.ownershipBasis}
+            eoEventId={lab.eoEventId}
             onMakeCaptain={onMakeCaptain}
             onMakeVice={onMakeVice}
           />

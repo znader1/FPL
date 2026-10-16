@@ -42,6 +42,8 @@ export interface CaptainLab {
   rankAware: boolean;
   /** Which ownership figure drove the picks and labels the tile. */
   ownershipBasis: "top10k" | "overall" | null;
+  /** The GW the top-10k sample was taken in, when the backend says. */
+  eoEventId: number | null;
   /** Backend total re-based on the chosen captain. */
   projected: number;
 }
@@ -127,8 +129,13 @@ export function buildCaptainLab(rec: FplTeamRecommendation, goal: CaptainGoal, m
   if (ownershipBasis === "top10k") {
     // Rank swings and xPts ceilings are different units: compare swings only
     // among players that have one, and fall back to the ceiling only when none does.
+    // Without any swing (EO sampled, no rank model yet) chase = the ceiling the
+    // fewest top-10k rivals share; EO above 100% (captained by all) is clamped
+    // so such a pick is worth nothing as a climb rather than going negative.
     const anySwing = eligible.some((c) => typeof c.rankGainIfHaul === "number");
-    zn = goal === "safe" ? best(eligible, (c) => c.eoTop10k) : best(eligible, (c) => (anySwing ? c.rankGainIfHaul : c.p90));
+    const climb = (c: CaptainCandidate) =>
+      typeof c.p90 === "number" && typeof c.eoTop10k === "number" ? c.p90 * (1 - Math.min(c.eoTop10k, 100) / 100) : undefined;
+    zn = goal === "safe" ? best(eligible, (c) => c.eoTop10k) : best(eligible, (c) => (anySwing ? c.rankGainIfHaul : climb(c)));
   } else if (ownershipBasis === "overall") {
     // No rank model: protect = ride the crowd; chase = the ceiling the fewest rivals share.
     zn =
@@ -181,5 +188,6 @@ export function buildCaptainLab(rec: FplTeamRecommendation, goal: CaptainGoal, m
       ? round1(base - suggestedPlayer.xpts + captain.xpts)
       : base;
 
-  return { candidates, znPickId, captainId, viceId, headline, subcopy, rankAware, ownershipBasis, projected };
+  const eoEventId = num((opts.pool ?? rec.starting_xi).find((p) => typeof p.eo_top10k_event_id === "number")?.eo_top10k_event_id) ?? null;
+  return { candidates, znPickId, captainId, viceId, headline, subcopy, rankAware, ownershipBasis, eoEventId, projected };
 }
