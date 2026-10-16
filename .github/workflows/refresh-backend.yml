@@ -46,6 +46,29 @@ jobs:
             -H "Content-Type: application/json" -H "X-API-Key: ${FPL_DEV_ADMIN_KEY}" \
             -d '{"run_snapshot": true}' | tee staging-refresh-response.json
 
+      - name: Sample top-10k ownership (no-op until a new GW's deadline passes)
+        continue-on-error: true
+        env:
+          FPL_API_BASE_URL: ${{ secrets.FPL_API_BASE_URL }}
+          FPL_ADMIN_KEY: ${{ secrets.FPL_ADMIN_KEY }}
+        run: |
+          curl -fsS -m 600 -X POST "${FPL_API_BASE_URL%/}/admin/refresh-top10k" \
+            -H "Content-Type: application/json" -H "X-API-Key: ${FPL_ADMIN_KEY}" \
+            -d '{}' | tee top10k-response.json
+
+      - name: Sample top-10k ownership on staging
+        continue-on-error: true
+        env:
+          FPL_DEV_API_BASE_URL: ${{ secrets.FPL_DEV_API_BASE_URL }}
+          FPL_DEV_ADMIN_KEY: ${{ secrets.FPL_DEV_ADMIN_KEY }}
+        run: |
+          if [ -z "$FPL_DEV_API_BASE_URL" ] || [ -z "$FPL_DEV_ADMIN_KEY" ]; then
+            echo "Staging top-10k sample skipped: FPL_DEV_* secrets not set"; exit 0
+          fi
+          curl -fsS -m 600 -X POST "${FPL_DEV_API_BASE_URL%/}/admin/refresh-top10k" \
+            -H "Content-Type: application/json" -H "X-API-Key: ${FPL_DEV_ADMIN_KEY}" \
+            -d '{}' | tee staging-top10k-response.json
+
       - name: Print next deadline summary
         env:
           FPL_API_BASE_URL: ${{ secrets.FPL_API_BASE_URL }}

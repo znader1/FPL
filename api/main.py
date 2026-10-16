@@ -23,7 +23,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, recommender, seed_models, transfer_planner, transforms
+from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, recommender, seed_models, top10k_eo, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key, require_user, authenticated_subject
 from src import auth, llm_usage
 from src.ratelimit import (
@@ -1365,6 +1365,9 @@ def build_recommendations(payload):
         chip_profile_gws = [int(wildcard_play_event_id) + i for i in range(int(chip_build_horizon_gws))]
 
     ts = time.perf_counter()
+    # Top-10k EO sample (one file per GW on the volume; None until the job has
+    # run this season). Loaded once per request, shared by every record.
+    eo_top10k = top10k_eo.load_eo(season=season_label_from_bootstrap(ctx["bootstrap"]))
     starting_records, bench_records = pack_lineup_records(
         starting_df=res["starting_xi"],
         bench_df=res["bench"],
@@ -1375,6 +1378,7 @@ def build_recommendations(payload):
         chip_strategy=chip_strategy if chip_info.get("is_active") else "none",
         objective_score_col=chip_info.get("objective_score_col"),
         optimize_event_id=optimize_event_id,
+        eo_top10k=eo_top10k,
     )
     timings["pack_base_lineup_ms"] = elapsed_ms(ts)
 
@@ -1551,6 +1555,7 @@ def build_recommendations(payload):
         base_points=float(res["projected_points_with_captain"]),
         base_starting_records=starting_records,
         base_bench_records=bench_records,
+        eo_top10k=eo_top10k,
     )
     if moves:
         for idx in range(0, len(moves) + 1):
@@ -1749,6 +1754,54 @@ def admin_refresh(
         "match_history": match_history_info,
         "match_history_error": match_history_error,
         "projections_warmed": warmed,
+    }))
+
+
+@app.post("/admin/refresh-top10k")
+def admin_refresh_top10k(
+    payload=Body(None),
+    api_key=None,
+    x_api_key=Header(None),
+    authorization=Header(None),
+):
+    """Sample the top-10k's picks for the current GW into the EO file.
+
+    Picks are readable only after a GW's deadline, so the current GW
+    (``is_current``) is the newest sample possible. Idempotent per GW: a file
+    already holding this season + GW is left alone unless ``force`` is set,
+    so the 6-hourly refresh workflow can call this every time at no cost.
+    """
+    payload = payload or {}
+    err = check_admin_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key or payload.get("api_key"))
+    if err:
+        return err
+    force = parse_bool(payload.get("force"), default=False)
+
+    bootstrap = get_bootstrap_cached()
+    season = season_label_from_bootstrap(bootstrap)
+    event_id = _event_id(bootstrap, "is_current")
+    if not event_id:
+        return JSONResponse(content={"ok": False, "skipped": True, "reason": "no current gameweek (pre-season)"})
+
+    existing = top10k_eo.read_file()
+    if not force and top10k_eo.is_current(existing, season=season, event_id=event_id):
+        return JSONResponse(content=jsonable_encoder({
+            "ok": True, "skipped": True, "season": season, "event_id": int(event_id),
+            "sample_n": safe_int((existing or {}).get("sample_n")),
+            "sampled_at_utc": (existing or {}).get("sampled_at_utc"),
+        }))
+
+    ts = time.perf_counter()
+    try:
+        sample = top10k_eo.build_sample(event_id=int(event_id), season=season)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("top10k sample failed: %s", exc)
+        return JSONResponse(status_code=502, content={"ok": False, "skipped": False, "error": str(exc)})
+    path = top10k_eo.save_sample(sample)
+    return JSONResponse(content=jsonable_encoder({
+        "ok": True, "skipped": False, "season": season, "event_id": int(event_id),
+        "sample_n": sample["sample_n"], "errors": sample["errors"], "players": len(sample["players"]),
+        "path": str(path), "elapsed_ms": elapsed_ms(ts),
     }))
 
 

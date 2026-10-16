@@ -54,6 +54,13 @@ EVENT_LIVE_TTL = 60  # [operational] live GW scores move during matches, so cach
 PROJECTIONS_TTL = 1800  # [operational]
 FIXTURES_TTL  = 300  # [operational]
 
+# Top-10k effective ownership sample (src/top10k_eo.py, POST /admin/refresh-top10k)
+TOP10K_EO_LEAGUE_ID = 314  # [operational] FPL's overall classic league
+TOP10K_EO_PATH = "data/processed/top10k_eo.json"  # [operational] on the Fly volume; one file, rewritten per GW
+TOP10K_EO_POOL_RANKS = 10_000  # [untested] sample from the first N overall ranks
+TOP10K_EO_SAMPLE_ENTRIES = 1_000  # [untested] entries read per GW (one picks call each)
+TOP10K_EO_CONCURRENCY = 8  # [operational] parallel picks calls
+
 # Elements features you care about
 ELEMENTS_KEEP = [
     "id","web_name","team","element_type","total_points","form",

@@ -143,7 +143,7 @@ def _build_score_breakdown(record, chip_strategy="none", objective_score_col=Non
     return breakdown
 
 
-def decorate_projection_record(record, gws, chip_strategy="none", objective_score_col=None, optimize_event_id=None):
+def decorate_projection_record(record, gws, chip_strategy="none", objective_score_col=None, optimize_event_id=None, eo_top10k=None):
     fixtures_h = []
     for gw in gws:
         fixtures_h.append({
@@ -169,6 +169,19 @@ def decorate_projection_record(record, gws, chip_strategy="none", objective_scor
     record["xpts_p90"] = safe_int(record.get("p80_high"))
     _own = safe_float(record.get("selected_by_percent"), default=None)
     record["ownership_pct"] = round(float(_own), 1) if _own is not None else None
+    # Top-10k EO from the sampled file (src/top10k_eo.py). The sample is the
+    # last GW whose deadline passed, so it lags the GW being planned by one;
+    # eo_top10k_event_id says which. A sampled GW where nobody holds the player
+    # is a real 0.0, not unknown.
+    _eo_players = (eo_top10k or {}).get("players") if isinstance(eo_top10k, dict) else None
+    if isinstance(_eo_players, dict):
+        _pid = safe_int(record.get("player_id"))
+        _hit = _eo_players.get(_pid) if _pid is not None else None
+        record["eo_top10k"] = float((_hit or {}).get("eo_pct") or 0.0)
+        record["eo_top10k_event_id"] = safe_int(eo_top10k.get("event_id"))
+    else:
+        record["eo_top10k"] = None
+        record["eo_top10k_event_id"] = None
     record["alerts"] = _build_player_alerts(record, optimize_event_id=optimize_event_id)
     record["score_breakdown"] = _build_score_breakdown(record, chip_strategy=chip_strategy, objective_score_col=objective_score_col)
     return record
@@ -206,6 +219,7 @@ def pack_lineup_records(
     chip_strategy="none",
     objective_score_col=None,
     optimize_event_id=None,
+    eo_top10k=None,
 ):
     el_img = elements.copy()
     cols = [c for c in ["id", "team", "code", "photo"] if c in el_img.columns]
@@ -235,6 +249,7 @@ def pack_lineup_records(
         decorate_projection_record(
             rec, gws=gws, chip_strategy=chip_strategy,
             objective_score_col=objective_score_col, optimize_event_id=optimize_event_id,
+            eo_top10k=eo_top10k,
         )
 
     return starting_records, bench_records
