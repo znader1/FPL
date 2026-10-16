@@ -1,6 +1,7 @@
 import pandas as pd
 
 from src import config
+from src import rank_model as rank_model_mod
 from src.media import attach_media
 from src.utils import df_records, round_float, safe_float, safe_int, safe_player_id
 
@@ -143,7 +144,7 @@ def _build_score_breakdown(record, chip_strategy="none", objective_score_col=Non
     return breakdown
 
 
-def decorate_projection_record(record, gws, chip_strategy="none", objective_score_col=None, optimize_event_id=None, eo_top10k=None):
+def decorate_projection_record(record, gws, chip_strategy="none", objective_score_col=None, optimize_event_id=None, eo_top10k=None, rank_model=None):
     fixtures_h = []
     for gw in gws:
         fixtures_h.append({
@@ -182,6 +183,18 @@ def decorate_projection_record(record, gws, chip_strategy="none", objective_scor
     else:
         record["eo_top10k"] = None
         record["eo_top10k_event_id"] = None
+    # Rank gain if he hauls (src/rank_model.py): the haul is his p90 (the
+    # likely ceiling), the field's EO is the sample inside the top 10k and
+    # scaled overall ownership outside. Absent without a rank model.
+    record["rank_gain_if_haul"] = None
+    record["rank_gain_basis"] = None
+    if isinstance(rank_model, dict):
+        _pid = safe_int(record.get("player_id"))
+        _sample = _eo_players.get(_pid) if isinstance(_eo_players, dict) and _pid is not None else None
+        _field = rank_model_mod.field_eo_pct(_sample, record.get("ownership_pct"), rank_model.get("overall_rank"))
+        _haul = record.get("xpts_p90") if record.get("xpts_p90") is not None else config.RANK_MODEL_HAUL_POINTS
+        record["rank_gain_if_haul"] = rank_model_mod.rank_gain_if_haul(_haul, _field, rank_model.get("ranks_per_point"), rank_model.get("overall_rank"))
+        record["rank_gain_basis"] = rank_model.get("basis") if record["rank_gain_if_haul"] is not None else None
     record["alerts"] = _build_player_alerts(record, optimize_event_id=optimize_event_id)
     record["score_breakdown"] = _build_score_breakdown(record, chip_strategy=chip_strategy, objective_score_col=objective_score_col)
     return record
@@ -220,6 +233,7 @@ def pack_lineup_records(
     objective_score_col=None,
     optimize_event_id=None,
     eo_top10k=None,
+    rank_model=None,
 ):
     el_img = elements.copy()
     cols = [c for c in ["id", "team", "code", "photo"] if c in el_img.columns]
@@ -249,7 +263,7 @@ def pack_lineup_records(
         decorate_projection_record(
             rec, gws=gws, chip_strategy=chip_strategy,
             objective_score_col=objective_score_col, optimize_event_id=optimize_event_id,
-            eo_top10k=eo_top10k,
+            eo_top10k=eo_top10k, rank_model=rank_model,
         )
 
     return starting_records, bench_records

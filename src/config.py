@@ -61,6 +61,14 @@ TOP10K_EO_POOL_RANKS = 10_000  # [untested] sample from the first N overall rank
 TOP10K_EO_SAMPLE_ENTRIES = 1_000  # [untested] entries read per GW (one picks call each)
 TOP10K_EO_CONCURRENCY = 8  # [operational] parallel picks calls
 
+# Rank gain if a captain hauls (src/rank_model.py)
+RANK_MODEL_TOP10K_CUTOFF = 10_000  # [operational] inside: the sampled top-10k EO is the field; outside: scaled overall ownership
+RANK_MODEL_SPAN = 0.5  # [untested] second standings page sits at this fraction of your rank (slope is local)
+RANK_MODEL_PAGE_SIZE = 50  # [operational] entries per overall-league standings page
+RANK_MODEL_CACHE_BUCKET = 10_000  # [operational] ranks per cache bucket (one standings pair per bucket per GW)
+RANK_MODEL_TTL = 3600  # [operational] seconds; overall points move only while matches run
+RANK_MODEL_HAUL_POINTS = 10  # [untested] haul size when a player has no p90 band
+
 # Elements features you care about
 ELEMENTS_KEEP = [
     "id","web_name","team","element_type","total_points","form",

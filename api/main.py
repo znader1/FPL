@@ -23,7 +23,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, recommender, seed_models, top10k_eo, transfer_planner, transforms
+from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, rank_model as rank_model_mod, recommender, seed_models, top10k_eo, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key, require_user, authenticated_subject
 from src import auth, llm_usage
 from src.ratelimit import (
@@ -1368,6 +1368,11 @@ def build_recommendations(payload):
     # Top-10k EO sample (one file per GW on the volume; None until the job has
     # run this season). Loaded once per request, shared by every record.
     eo_top10k = top10k_eo.load_eo(season=season_label_from_bootstrap(ctx["bootstrap"]))
+    # Rank gain if a captain hauls needs the entry's overall rank (from the
+    # picks payload) and the local ranks-per-point slope (two standings pages,
+    # cached per GW and rank bucket). None → records carry no rank gain.
+    _eh = (ctx.get("myteam") or {}).get("entry_history") or {}
+    rank_model = rank_model_mod.build(overall_rank=_eh.get("overall_rank"), event_id=optimize_event_id)
     starting_records, bench_records = pack_lineup_records(
         starting_df=res["starting_xi"],
         bench_df=res["bench"],
@@ -1379,6 +1384,7 @@ def build_recommendations(payload):
         objective_score_col=chip_info.get("objective_score_col"),
         optimize_event_id=optimize_event_id,
         eo_top10k=eo_top10k,
+        rank_model=rank_model,
     )
     timings["pack_base_lineup_ms"] = elapsed_ms(ts)
 
@@ -1414,6 +1420,8 @@ def build_recommendations(payload):
         "entry_id": int(entry_id),
         "squad_event_id": int(squad_event_id),
         "event_id": int(optimize_event_id),
+        "rank_model": rank_model,
+        "eo_top10k_event_id": safe_int((eo_top10k or {}).get("event_id")) if isinstance(eo_top10k, dict) else None,
         "horizon_gws": int(display_horizon_gws),
         "gws": gws,
         "notes": notes,
@@ -1556,6 +1564,7 @@ def build_recommendations(payload):
         base_starting_records=starting_records,
         base_bench_records=bench_records,
         eo_top10k=eo_top10k,
+        rank_model=rank_model,
     )
     if moves:
         for idx in range(0, len(moves) + 1):

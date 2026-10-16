@@ -38,3 +38,15 @@ def test_pack_lineup_records_threads_the_map():
     s, b = lineup_builder.pack_lineup_records(starting, bench, elements, proj, gws=[], teams_code={}, eo_top10k=eo)
     assert s[0]["eo_top10k"] == 150.0
     assert b[0]["eo_top10k"] == 0.0
+
+
+def test_record_carries_rank_gain_if_haul_from_the_rank_model():
+    eo = {"event_id": 28, "players": {1: {"owned_pct": 90.0, "captained_pct": 45.0, "eo_pct": 135.0}}}
+    rm = {"overall_rank": 1_600_000, "ranks_per_point": 4_000, "basis": "overall", "event_id": 29}
+    # Outside the top 10k: field EO = 38.4 × 1.5 = 57.6; haul = p90 16 → 32 − 9.216 = 22.784 pts × 4000 = 91,136 ranks.
+    rec = lineup_builder.decorate_projection_record(_record(), gws=[29], eo_top10k=eo, rank_model=rm)
+    assert rec["rank_gain_if_haul"] == 91_136
+    assert rec["rank_gain_basis"] == "overall"
+    # No rank model → absent, not zero.
+    rec = lineup_builder.decorate_projection_record(_record(), gws=[29], eo_top10k=eo, rank_model=None)
+    assert rec["rank_gain_if_haul"] is None

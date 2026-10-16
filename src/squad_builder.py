@@ -116,6 +116,7 @@ def build_transfer_step(
     base_starting_records,
     base_bench_records,
     eo_top10k=None,
+    rank_model=None,
 ):
     applied_count = max(0, int(applied_count or 0))
     moves = list(moves or [])
@@ -176,6 +177,7 @@ def build_transfer_step(
         gws=gws,
         teams_code=teams_code,
         eo_top10k=eo_top10k,
+        rank_model=rank_model,
     )
 
     return {
