@@ -39,7 +39,7 @@ Dev-only flags (never set in production): `VITE_REPLAY_MODE=1` (+ `VITE_REPLAY_E
 
 **Stack:** React + TypeScript + Vite, Tailwind CSS, shadcn/ui, TanStack Query, Supabase auth, React Router.
 
-**Backend:** Separate repo (`FPL/`) running FastAPI on Fly.io. This frontend is purely a consumer — no data processing happens here.
+**Backend:** the repo root (FastAPI on Fly.io) — this app lives in `frontend/` of the monorepo. This frontend is purely a consumer — no data processing happens here.
 
 ### Request flow
 
@@ -133,7 +133,7 @@ The fixture chip (`fixtureShort`) renders on its **own line** between the player
 
 ### Deployment
 
-Vercel auto-deploys on push to `main`. `vercel.json` rewrites all paths to `index.html` for SPA routing. Set `VITE_FPL_API_BASE_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY` as Vercel environment variables.
+Vercel auto-deploys on push to `master` when `frontend/` changed (Root Directory `frontend`, Ignored Build Step skips other commits). `vercel.json` rewrites all paths to `index.html` for SPA routing. Set `VITE_FPL_API_BASE_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY` as Vercel environment variables.
 
 For feature branch testing, create a Vercel preview environment variable pointing `VITE_FPL_API_BASE_URL` at `fpl-assistant-api-dev.fly.dev`.
 
