@@ -17,12 +17,16 @@ import {
   swapCheck,
   swapPlayers,
   toPlanId,
+  type PlanChip,
   type PlanStep,
 } from "@/lib/gwPlan";
 import { planToTeam } from "@/lib/planTeam";
 import {
   autoSubPreview,
   chipOptions,
+  chipPick,
+  wildcardDraftShown,
+  wildcardToggle,
   firstUnfinishedStep,
   footerFor,
   nextStep,
@@ -49,6 +53,7 @@ import { MobileParameterDrawer } from "@/components/MobileParameterDrawer";
 import { PitchVisualization } from "@/components/PitchVisualization";
 import { RecommendationsPanel } from "@/components/RecommendationsPanel";
 import { ChipNudgeCard } from "@/components/ChipNudgeCard";
+import { WildcardCard } from "@/components/WildcardCard";
 import { OptimizeSquadDialog } from "@/components/OptimizeSquadDialog";
 import { Navbar } from "@/components/layout/Navbar";
 import { QueryErrorCard } from "@/components/QueryErrorCard";
@@ -58,6 +63,7 @@ import { Zap } from "lucide-react";
 import { parseEntryIdInput, getInitialEntryId } from "@/lib/entryId";
 import { checkEntryIdentity, rolloverMessage } from "@/lib/entryIdentity";
 import { useProfile } from "@/hooks/useProfile";
+import { useEntitlement } from "@/hooks/useEntitlement";
 import { useAuth } from "@/contexts/AuthContext";
 import { useIsDesktop } from "@/hooks/use-desktop";
 import {
@@ -443,13 +449,18 @@ const Index = () => {
   }, [entryId, selectedGW, horizonGws, chipStrategy, chipPlayEventId, includeTransfers,
       nextEventQuery.isSuccess, prioritizeInjured]);
 
+  // Set by a chip pick that changes the strategy: the wildcard draft has to be
+  // fetched even when ZN Pick hasn't run yet this session.
+  const runOnStrategyChange = useRef(false);
   useEffect(() => {
-    if (!recommendationMutation.data) return;
+    const forced = runOnStrategyChange.current;
+    runOnStrategyChange.current = false;
+    if (!recommendationMutation.data && !forced) return;
     if (recommendationMutation.isPending) return;
 
     const nextChipPlayEventId =
       chipStrategy === "wildcard"
-        ? recommendationMutation.data.chip_strategy?.play_event_id ?? chipPlayEventId ?? selectedGW
+        ? recommendationMutation.data?.chip_strategy?.play_event_id ?? chipPlayEventId ?? selectedGW
         : undefined;
 
     if (chipStrategy === "wildcard" && nextChipPlayEventId !== chipPlayEventId) {
@@ -507,9 +518,20 @@ const Index = () => {
   const resolvedPlan = useMemo(() => (plan ? resolvePlan(plan, planMoves) : null), [plan, planMoves]);
   // Derived, never stored: "make" applies the verdict's moves, nothing else does.
   const appliedTransferCount = plan?.transfer === "make" ? planMoves.length : 0;
+  const { canUseWildcardDrafter } = useEntitlement();
   const chipOpts = useMemo(
-    () => (resolvedPlan && typeof deadlineGw === "number" ? chipOptions({ resolved: resolvedPlan, lookup: playerLookup, chipPlan: chipPlanQuery.data, gw: deadlineGw }) : []),
-    [resolvedPlan, playerLookup, chipPlanQuery.data, deadlineGw],
+    () =>
+      resolvedPlan && typeof deadlineGw === "number"
+        ? chipOptions({
+            resolved: resolvedPlan,
+            lookup: playerLookup,
+            chipPlan: chipPlanQuery.data,
+            gw: deadlineGw,
+            wildcardAllowed: canUseWildcardDrafter,
+            pickPending: recommendationMutation.isPending,
+          })
+        : [],
+    [resolvedPlan, playerLookup, chipPlanQuery.data, deadlineGw, canUseWildcardDrafter, recommendationMutation.isPending],
   );
   const freeHitGain = chipOpts.find((o) => o.chip === "free_hit")?.gain ?? null;
   const planProjected = resolvedPlan && plan ? projectPlan(resolvedPlan, playerLookup, plan.chip, freeHitGain) : null;
@@ -766,8 +788,49 @@ const Index = () => {
   // onChipStrategyChange does. Persistence to localStorage is handled by the
   // existing effect that reacts to chipStrategy changes; no separate write needed.
   const handleApplyChipNudge = (chip: ChipName) => {
+    if (chip === "wildcard") return handlePickChip(chip);
     setChipStrategy(chip);
     setPlan({ chip });
+  };
+
+  // The Chip step's pick. A wildcard (in or out) changes ZN Pick's strategy for the
+  // deadline GW; the strategy effect reruns the recommendation, whose pitch is the
+  // wildcard draft.
+  const switchStrategyForDeadline = (next: FplChipStrategy) => {
+    runOnStrategyChange.current = true;
+    if (typeof deadlineGw === "number") {
+      setSelectedGW(deadlineGw);
+      setSquadGW(deadlineGw);
+    }
+    setChipStrategy(next);
+  };
+  const handlePickChip = (chip: Exclude<PlanChip, null>) => {
+    const pick = chipPick(chip, chipStrategy);
+    if (pick.chipStrategy !== null) switchStrategyForDeadline(pick.chipStrategy);
+    setPlan(pick.patch);
+    if (pick.goTo) goStep(pick.goTo);
+  };
+
+  // Main-page wildcard card: a preview — it switches the pitch to the wildcard
+  // draft without recording the chip; the Chip step is where it's committed.
+  // Shown while the wildcard is still in hand and in the user's plan, unless the
+  // nudge above already names it or the plan has already played it.
+  const wildcardRow = chipPlanQuery.data?.outlook?.find((row) => row.chip === "wildcard");
+  const showWildcardCard =
+    canUseWildcardDrafter &&
+    wildcardRow !== undefined &&
+    plan?.chip !== "wildcard" &&
+    chipPlanQuery.data?.nudge?.chip !== "wildcard";
+  const wildcardShown = wildcardDraftShown({ pitchMode, rec: recommendationMutation.data });
+  const toggleWildcardPreview = () => {
+    const action = wildcardToggle(chipStrategy, wildcardShown);
+    if (action === "fetch") {
+      // The strategy was persisted from an earlier visit but nothing has run yet.
+      if (typeof deadlineGw === "number") rerunPick();
+    } else {
+      switchStrategyForDeadline(action === "start" ? "wildcard" : "none");
+    }
+    goStep("squad");
   };
 
   // Entering a step needs ZN Pick's answer for the deadline GW; run it once per
@@ -1032,7 +1095,7 @@ const Index = () => {
                   />
                 </>
               )}
-              {step === "chip" && plan && <ChipStep options={chipOpts} value={plan.chip} onPick={(chip) => setPlan({ chip })} />}
+              {step === "chip" && plan && <ChipStep options={chipOpts} value={plan.chip} onPick={handlePickChip} />}
               {step === "confirm" && plan && (
                 <ReviewStep
                   rows={reviewRows}
@@ -1113,6 +1176,11 @@ const Index = () => {
               activeChipStrategy={chipStrategy}
               onApplyChip={handleApplyChipNudge}
             />
+          </div>
+        )}
+        {showWildcardCard && (
+          <div className="mx-auto w-full max-w-5xl px-4 pt-4">
+            <WildcardCard row={wildcardRow} previewing={wildcardShown} busy={recommendationMutation.isPending} onToggle={toggleWildcardPreview} />
           </div>
         )}
         <PitchVisualization
