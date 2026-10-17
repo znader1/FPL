@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
+import { percentileFromQuantiles } from "@/lib/fieldPercentile";
 import { CommandRail } from "@/components/CommandRail";
 import { deriveWeekDecisions } from "@/lib/weekDecisions";
 import { GwPlanValueProvider, useGwPlanStore } from "@/contexts/GwPlanContext";
@@ -866,6 +867,14 @@ const Index = () => {
   // recommendation brings those, fall back to the engine's number.
   const projected = planProjected ?? activeRecommendation?.projected_points_with_captain;
   const projectedDelta = planProjected !== null ? planDelta : undefined;
+  // "Top N%": place our (client-side) total on the backend's field quantiles so
+  // the ring follows a captain swap or bench edit; without the grid, the
+  // backend's own figure for the active step, then the base squad.
+  const projectedPercentile =
+    percentileFromQuantiles(activeRecommendation?.projected_field?.overall_quantiles, projected) ??
+    activeRecommendation?.squad_with_transfers?.projected_percentile ??
+    activeRecommendation?.projected_percentile ??
+    undefined;
   const navbarStats =
     typeof bank === "number" || typeof freeTransfers === "number" ? (
       <>
@@ -943,7 +952,7 @@ const Index = () => {
             gw={deadlineGw ?? planGw}
             projected={projected}
             delta={projectedDelta}
-            percentile={activeRecommendation?.projected_percentile ?? undefined}
+            percentile={projectedPercentile}
             top10kAvg={activeRecommendation?.projected_top10k_avg ?? undefined}
             overallAvg={activeRecommendation?.projected_overall_avg ?? undefined}
             parameters={parameterProps}

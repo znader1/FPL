@@ -382,6 +382,8 @@ export interface FplOptimizedSquad extends FplSquad {
   captain_player_id: number;
   vice_player_id: number;
   projected_points_with_captain: number;
+  /** "Top N%" of the sampled field for this squad's total (transfer steps carry their own). */
+  projected_percentile?: number | null;
 }
 
 export interface FplTransferAppliedStep extends FplOptimizedSquad {
@@ -443,6 +445,16 @@ export interface FplHistoryContext {
   season?: string | null;
 }
 
+/** The sampled field behind the benchmarks: `overall_quantiles` is q0…q100 of
+ *  the uniformly sampled league's projected totals, so a client-side total can
+ *  be placed without another request (`percentileFromQuantiles`). */
+export interface FplProjectedField {
+  event_id?: number | null;
+  top10k_n?: number | null;
+  overall_n?: number | null;
+  overall_quantiles?: number[] | null;
+}
+
 export interface FplTeamRecommendation extends FplSquad {
   entry_id: number;
   event_id: number;
@@ -453,11 +465,14 @@ export interface FplTeamRecommendation extends FplSquad {
   captain_player_id: number;
   vice_player_id: number;
   projected_points_with_captain: number;
-  /** Command Center benchmarks (2026-10 handoff). None are emitted by today's
-   *  backend; the projected card renders its ring and bars only when present. */
+  /** Command Center benchmarks (2026-10 handoff), from the backend's sampled
+   *  picks scored against this request's xPts (branch `feature/top10k-eo`);
+   *  null until the sample job has run. The card renders its ring and bars
+   *  only when present. */
   projected_percentile?: number | null;
   projected_top10k_avg?: number | null;
   projected_overall_avg?: number | null;
+  projected_field?: FplProjectedField | null;
   chip_strategy?: FplChipStrategySummary;
   transfers?: FplTransfersRecommendation;
   transfer_plan_horizon?: FplTransferPlanHorizon;
