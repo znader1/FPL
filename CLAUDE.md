@@ -40,6 +40,16 @@ ANTHROPIC_API_KEY=...     # LLM rationale in src/explainer.py
 REQUESTS_CA_BUNDLE=...    # optional, for corporate proxies
 ```
 
+## FPL rules (2026-27) — check advice against these
+
+The rulebook lives in `src/rules.py` (re-exported by `config.py`); never tune it. Rules that recommendation logic and copy must respect:
+
+- **Chips come in two sets.** Each of Wildcard, Free Hit, Bench Boost and Triple Captain can be played once in GW1–19 and once in GW20–38 (`CHIP_PLAN_PHASE_SPLIT_GW = 19`). A first-set chip not played by the GW19 deadline is lost — it does not carry over. `chip_advisor.chip_windows` gives each chip's `half` and `expires_gw`.
+- **Advice must stay inside the chip's own half.** FA Cup blanks (usually GW29–33) and most doubles fall in the second half, so "save it for the blank/double" is only valid for a second-set chip. First-half guidance comes from `CHIP_PLAN_SEASON_PRIORS_FIRST_HALF`; second-half from `CHIP_PLAN_SEASON_PRIORS`.
+- **One chip per gameweek.** A Wildcard or Free Hit week uses no free transfers and grants no +1: the banked count carries through unchanged (FPL rule since 2025-26; `ft_tracker`). GW1 is squad creation; everyone enters GW2 with 1 FT.
+- **Free transfers bank up to 5** (`FT_MAX`, raised from 2 for 2026-27); each extra transfer costs 4 points (`TRANSFER_HIT_POINTS_STEP`).
+- **Squad:** 15 players (2 GKP, 5 DEF, 5 MID, 3 FWD), £100m, max 3 per club (`CHIP_MAX_PER_TEAM` / `TRANSFER_MAX_PER_TEAM`).
+
 ## Architecture
 
 **Stack:** FastAPI, uvicorn, pandas, requests, `cachetools.TTLCache`, Anthropic SDK.
