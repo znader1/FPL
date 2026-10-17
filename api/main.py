@@ -1585,6 +1585,11 @@ def build_recommendations(payload):
     else:
         transfer_steps.append(build_transfer_step(applied_count=0, **step_kwargs))
 
+    # Every step places its own total in the sampled field (the client reads
+    # the active step's figure when it has no quantile grid to place a total on).
+    for _step in transfer_steps:
+        _step["projected_percentile"] = field_projection.fields(field_summary, _step.get("projected_points_with_captain"))["projected_percentile"]
+
     selected_step = transfer_steps[effective_apply_count] if effective_apply_count < len(transfer_steps) else transfer_steps[0]
 
     out["transfer_application"] = selected_step.get("transfer_application")
@@ -1593,7 +1598,7 @@ def build_recommendations(payload):
         "captain_player_id": selected_step.get("captain_player_id"),
         "vice_player_id": selected_step.get("vice_player_id"),
         "projected_points_with_captain": selected_step.get("projected_points_with_captain"),
-        "projected_percentile": field_projection.fields(field_summary, selected_step.get("projected_points_with_captain"))["projected_percentile"],
+        "projected_percentile": selected_step.get("projected_percentile"),
         "starting_xi": selected_step.get("starting_xi"),
         "bench": selected_step.get("bench"),
     }
