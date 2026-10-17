@@ -195,10 +195,18 @@ def _build_plan_response(entry_id: int, current_gw: int, model_horizon: int):
             proj_plan["team_short"] = proj_plan["team"].map(ctx.get("teams_short_map") or {})
         gws = sorted(ctx["gw_projections"].keys())
         squad_ids = [int(x) for x in ctx["squad"]["player_id"].tolist()]
-        transfer_plan = transfer_planner.plan_transfers(
-            proj_plan, squad_ids, gws,
+        plan_kwargs = dict(
             itb_m=float(ctx["bank_m"]), start_ft=int(ctx["free_transfers"]),
-            ft_cap=5, allow_hits=True)
+            ft_cap=int(config.FT_MAX), allow_hits=True)
+        if config.CHIP_PLAN_BASELINE_HEADLINE_SETTINGS:
+            # Net the Wildcard against the plan the user is actually shown
+            # (no hits, FT-bounded moves, horizon-scaled bar) instead of a
+            # hits-allowed 3-moves-a-week walk nobody is advised to make.
+            plan_kwargs.update(
+                allow_hits=bool(config.TRANSFER_PLAN_ALLOW_HITS),
+                max_moves_per_gw=int(config.TRANSFER_PLAN_MAX_MOVES_PER_GW),
+                min_gain=transfer_planner.scaled_min_gain(len(gws)))
+        transfer_plan = transfer_planner.plan_transfers(proj_plan, squad_ids, gws, **plan_kwargs)
     except Exception as e:  # noqa: BLE001
         logger.warning("transfer plan baseline failed: %s", e)
 
