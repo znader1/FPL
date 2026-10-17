@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   autoSubPreview,
   chipOptions,
+  chipPick,
   firstUnfinishedStep,
   footerFor,
   reviewSummary,
@@ -181,7 +182,7 @@ describe("chipOptions", () => {
   const r = resolvePlan(seed, []);
   it("lists Save, Bench Boost, Free Hit and Triple Captain with this week's gain and the best week", () => {
     const opts = chipOptions({ resolved: r, lookup, chipPlan: chipPlan(), gw: 29 });
-    expect(opts.map((o) => o.chip)).toEqual(["none", "bench_boost", "free_hit", "triple_captain"]);
+    expect(opts.map((o) => o.chip)).toEqual(["none", "bench_boost", "free_hit", "triple_captain", "wildcard"]);
     const [save, bb, fh, tc] = opts;
     expect(save).toMatchObject({ zn: true, gain: 0 });
     expect(save.why).toBe("Bench Boost is worth +15.1 in GW32, the best week left for any chip.");
@@ -212,6 +213,54 @@ describe("chipOptions", () => {
     const opts = chipOptions({ resolved: resolvePlan(swapPlayers(seed, 136, 449), []), lookup, chipPlan: null, gw: 29 });
     expect(opts[3].gain).toBeNull();
     expect(opts[3].why).toBe("Your captain is on the bench.");
+  });
+});
+
+describe("chipOptions — wildcard", () => {
+  const r = resolvePlan(seed, []);
+  const wcOutlook = { chip: "wildcard" as const, event_id: 31, ev_gain: 18.4, bar: 120, status: "hold" as const, reasons: [], guidance: "Hold for now. GW31 is the best week so far (+18.4 pts)." };
+  const wc = (over: Partial<ChipPlanResponse> = {}, gw = 29) =>
+    chipOptions({ resolved: r, lookup, chipPlan: chipPlan({ outlook: [wcOutlook], ...over }), gw }).find((o) => o.chip === "wildcard");
+
+  it("is offered with the engine's guidance; no gain when its best week is another GW", () => {
+    expect(wc()).toMatchObject({ title: "Wildcard", zn: false, gain: null, used: false });
+    expect(wc()?.why).toBe("Rebuilds all 15 for free. Hold for now. GW31 is the best week so far (+18.4 pts).");
+  });
+  it("takes the multi-GW uplift as its gain on its best week, labelled as such", () => {
+    expect(wc({}, 31)).toMatchObject({ gain: 18.4, gainNote: "over the wildcard window" });
+  });
+  it("is the ZN Pick when the nudge names it", () => {
+    expect(wc({ nudge: { chip: "wildcard", event_id: 29, ev_gain: 130 } })?.zn).toBe(true);
+  });
+  it("is disabled once played this half", () => {
+    const used = chipPlan().chips_remaining.map((c) => (c.name === "wildcard" ? { ...c, available: false } : c));
+    expect(wc({ chips_remaining: used })?.used).toBe(true);
+  });
+  it("falls back to a plain line without an outlook row or a chip plan", () => {
+    expect(wc({ outlook: [] })?.why).toBe("Rebuilds all 15 for free. No wildcard week stands out yet.");
+    expect(chipOptions({ resolved: r, lookup, chipPlan: null, gw: 29 }).find((o) => o.chip === "wildcard")?.why).toBe(
+      "Rebuilds all 15 for free. The chip plan hasn't answered yet.",
+    );
+  });
+  it("is left out when the wildcard drafter isn't in the user's plan", () => {
+    const opts = chipOptions({ resolved: r, lookup, chipPlan: chipPlan(), gw: 29, wildcardAllowed: false });
+    expect(opts.map((o) => o.chip)).not.toContain("wildcard");
+  });
+});
+
+describe("chipPick", () => {
+  it("wildcard switches ZN Pick to a wildcard draft and shows the drafted squad", () => {
+    expect(chipPick("wildcard", "none")).toEqual({ patch: { chip: "wildcard" }, chipStrategy: "wildcard", goTo: "squad" });
+  });
+  it("picking the wildcard again doesn't ask for a second draft", () => {
+    expect(chipPick("wildcard", "wildcard")).toEqual({ patch: { chip: "wildcard" }, chipStrategy: null, goTo: "squad" });
+  });
+  it("leaving a wildcard restores the normal pick and stays on the step", () => {
+    expect(chipPick("bench_boost", "wildcard")).toEqual({ patch: { chip: "bench_boost" }, chipStrategy: "none", goTo: null });
+    expect(chipPick("none", "wildcard")).toEqual({ patch: { chip: "none" }, chipStrategy: "none", goTo: null });
+  });
+  it("any other chip only records the choice", () => {
+    expect(chipPick("triple_captain", "none")).toEqual({ patch: { chip: "triple_captain" }, chipStrategy: null, goTo: null });
   });
 });
 

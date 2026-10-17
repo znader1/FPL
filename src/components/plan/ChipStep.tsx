@@ -10,8 +10,8 @@ interface ChipStepProps {
   onPick: (chip: Exclude<PlanChip, null>) => void;
 }
 
-/** Step 4: Save / Bench Boost / Free Hit / Triple Captain as radio cards, each with
- *  this week's gain and how it compares with the chip's best week. */
+/** Step 4: Save / Bench Boost / Free Hit / Triple Captain / Wildcard as radio cards,
+ *  each with its gain and how it compares with the chip's best week. */
 export function ChipStep({ options, value, onPick }: ChipStepProps) {
   return (
     <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(200px,1fr))]">
@@ -31,6 +31,7 @@ export function ChipStep({ options, value, onPick }: ChipStepProps) {
               }`}
             >
               {o.gain === null ? "—" : fmtGain(o.gain)}
+              {o.gainNote && <span className="ml-1.5 text-xs font-medium text-muted-foreground">{o.gainNote}</span>}
             </div>
             <p className="text-xs leading-relaxed text-muted-foreground">{o.why}</p>
           </RadioCard>

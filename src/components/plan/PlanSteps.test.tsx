@@ -224,14 +224,15 @@ const chipOpts: ChipOption[] = [
   { chip: "bench_boost", title: "Bench Boost", zn: false, gain: 7.4, why: "Adds your bench this week.", used: false },
   { chip: "free_hit", title: "Free Hit", zn: false, gain: null, why: "Hold it.", used: false },
   { chip: "triple_captain", title: "Triple Captain", zn: false, gain: 8.6, why: "On Haaland.", used: true },
+  { chip: "wildcard", title: "Wildcard", zn: false, gain: 18.4, gainNote: "over the wildcard window", why: "Rebuilds all 15 for free.", used: false },
 ];
 
 describe("ChipStep", () => {
-  it("renders four radio cards, dashes unknown gains, disables used chips, and picks", () => {
+  it("renders a radio card per chip, dashes unknown gains, disables used chips, and picks", () => {
     const onPick = vi.fn();
     render(<ChipStep options={chipOpts} value="none" onPick={onPick} />);
     const radios = screen.getAllByRole("radio");
-    expect(radios).toHaveLength(4);
+    expect(radios).toHaveLength(5);
     expect(radios[0].getAttribute("aria-checked")).toBe("true");
     expect(within(radios[0]).getByText("ZN Pick")).toBeTruthy();
     expect(within(radios[1]).getByText("+7.4")).toBeTruthy();
@@ -242,6 +243,15 @@ describe("ChipStep", () => {
     expect(onPick).toHaveBeenCalledWith("bench_boost");
     fireEvent.click(radios[3]);
     expect(onPick).not.toHaveBeenCalledWith("triple_captain");
+  });
+  it("labels a multi-GW gain so it doesn't read as this week's", () => {
+    const onPick = vi.fn();
+    render(<ChipStep options={chipOpts} value="none" onPick={onPick} />);
+    const wc = screen.getAllByRole("radio")[4];
+    expect(within(wc).getByText("+18.4")).toBeTruthy();
+    expect(within(wc).getByText("over the wildcard window")).toBeTruthy();
+    fireEvent.click(wc);
+    expect(onPick).toHaveBeenCalledWith("wildcard");
   });
 });
 

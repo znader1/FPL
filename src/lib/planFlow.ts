@@ -2,6 +2,7 @@ import {
   CHIP_LABELS,
   type ChipName,
   type ChipPlanResponse,
+  type FplChipStrategy,
   type FplTeamRecommendation,
   type FplTransferVerdictMove,
 } from "@/lib/fplAssistantApi";
@@ -254,6 +255,8 @@ export interface ChipOption {
   zn: boolean;
   /** This week's gain; null when unknown or the chip can't be played. */
   gain: number | null;
+  /** Set when `gain` isn't a this-week number (the wildcard's is a multi-GW uplift). */
+  gainNote?: string;
   why: string;
   /** Already played this season. */
   used: boolean;
@@ -274,8 +277,15 @@ const thisWeek = (plan: ChipPlanResponse | null | undefined, chip: ChipName, gw:
   return o ? (o.ev_gain as number) : null;
 };
 
-export function chipOptions(args: { resolved: ResolvedPlan; lookup: PlayerLookup; chipPlan: ChipPlanResponse | null | undefined; gw: number }): ChipOption[] {
-  const { resolved: r, lookup, chipPlan, gw } = args;
+export function chipOptions(args: {
+  resolved: ResolvedPlan;
+  lookup: PlayerLookup;
+  chipPlan: ChipPlanResponse | null | undefined;
+  gw: number;
+  /** Entitlement `canUseWildcardDrafter`; false leaves the wildcard out. */
+  wildcardAllowed?: boolean;
+}): ChipOption[] {
+  const { resolved: r, lookup, chipPlan, gw, wildcardAllowed = true } = args;
   const nudge = chipPlan?.nudge && chipPlan.nudge.event_id === gw ? chipPlan.nudge.chip : null;
   const used = (chip: ChipName) => chipPlan?.chips_remaining.some((c) => c.name === chip && !c.available) ?? false;
   const capIn = r.xi.includes(r.cap);
@@ -304,6 +314,23 @@ export function chipOptions(args: { resolved: ResolvedPlan; lookup: PlayerLookup
     ? "Your captain is on the bench."
     : `On ${capName}.${tcBest ? ` Worth ${fmtGain(tcBest.gain)} in GW${tcBest.gw}.` : " No double gameweek this week, so the upside is capped."}`;
 
+  // The wildcard's EV is its uplift over the whole wildcard window (net of the
+  // transfer plan), not this week's points — gainNote says so on the card.
+  const wcGain = thisWeek(chipPlan, "wildcard", gw);
+  const wcOutlook = chipPlan?.outlook?.find((x) => x.chip === "wildcard");
+  const wcWhy = `Rebuilds all 15 for free. ${
+    wcOutlook?.guidance ?? (chipPlan ? "No wildcard week stands out yet." : "The chip plan hasn't answered yet.")
+  }`;
+  const wildcard: ChipOption = {
+    chip: "wildcard",
+    title: CHIP_LABELS.wildcard,
+    zn: nudge === "wildcard",
+    gain: wcGain,
+    ...(wcGain !== null && { gainNote: "over the wildcard window" }),
+    why: wcWhy,
+    used: used("wildcard"),
+  };
+
   return [
     { chip: "none", title: "Save chips", zn: nudge === null, gain: 0, why: saveWhy, used: false },
     { chip: "bench_boost", title: CHIP_LABELS.bench_boost, zn: nudge === "bench_boost", gain: bbGain, why: bbWhy, used: used("bench_boost") },
@@ -316,7 +343,26 @@ export function chipOptions(args: { resolved: ResolvedPlan; lookup: PlayerLookup
       why: tcWhy,
       used: used("triple_captain"),
     },
+    ...(wildcardAllowed ? [wildcard] : []),
   ];
+}
+
+export interface ChipPick {
+  patch: Partial<GwPlan>;
+  /** The chip strategy ZN Pick should run with next; null leaves it alone. */
+  chipStrategy: FplChipStrategy | null;
+  goTo: PlanStep | null;
+}
+
+/** A wildcard replaces the squad, so picking it reruns ZN Pick as a wildcard draft
+ *  and goes to the squad view, where the pitch shows the drafted 15; leaving it
+ *  reruns the normal pick. Other chips don't touch the draft — only the choice is
+ *  recorded. The backend skips the transfer planner while a wildcard is active, so
+ *  there is no transfer decision to re-open. */
+export function chipPick(chip: Exclude<PlanChip, null>, current: FplChipStrategy): ChipPick {
+  if (chip === "wildcard") return { patch: { chip }, chipStrategy: current === "wildcard" ? null : "wildcard", goTo: "squad" };
+  if (current === "wildcard") return { patch: { chip }, chipStrategy: "none", goTo: null };
+  return { patch: { chip }, chipStrategy: null, goTo: null };
 }
 
 /* ── bench step ───────────────────────────────────────────────────────────── */
