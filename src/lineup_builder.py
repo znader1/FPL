@@ -1,6 +1,7 @@
 import pandas as pd
 
 from src import config
+from src import rank_model as rank_model_mod
 from src.media import attach_media
 from src.utils import df_records, round_float, safe_float, safe_int, safe_player_id
 
@@ -143,7 +144,7 @@ def _build_score_breakdown(record, chip_strategy="none", objective_score_col=Non
     return breakdown
 
 
-def decorate_projection_record(record, gws, chip_strategy="none", objective_score_col=None, optimize_event_id=None):
+def decorate_projection_record(record, gws, chip_strategy="none", objective_score_col=None, optimize_event_id=None, eo_top10k=None, rank_model=None):
     fixtures_h = []
     for gw in gws:
         fixtures_h.append({
@@ -160,6 +161,40 @@ def decorate_projection_record(record, gws, chip_strategy="none", objective_scor
 
     record["fixtures_horizon"] = fixtures_h
     record["next_fixtures"] = fixtures_h[0]["fixtures"] if fixtures_h else ""
+    # Captain Lab (frontend handoff 1b). The distribution's 80% band is the
+    # 10th-90th percentile pair, so these alias it under the names the UI reads.
+    # Ownership is FPL's overall selected_by_percent, not top-10k EO -- the
+    # frontend labels it accordingly. eo_top10k / rank_gain_if_haul stay absent
+    # until there is a real source for them.
+    record["xpts_p10"] = safe_int(record.get("p80_low"))
+    record["xpts_p90"] = safe_int(record.get("p80_high"))
+    _own = safe_float(record.get("selected_by_percent"), default=None)
+    record["ownership_pct"] = round(float(_own), 1) if _own is not None else None
+    # Top-10k EO from the sampled file (src/top10k_eo.py). The sample is the
+    # last GW whose deadline passed, so it lags the GW being planned by one;
+    # eo_top10k_event_id says which. A sampled GW where nobody holds the player
+    # is a real 0.0, not unknown.
+    _eo_players = (eo_top10k or {}).get("players") if isinstance(eo_top10k, dict) else None
+    if isinstance(_eo_players, dict):
+        _pid = safe_int(record.get("player_id"))
+        _hit = _eo_players.get(_pid) if _pid is not None else None
+        record["eo_top10k"] = float((_hit or {}).get("eo_pct") or 0.0)
+        record["eo_top10k_event_id"] = safe_int(eo_top10k.get("event_id"))
+    else:
+        record["eo_top10k"] = None
+        record["eo_top10k_event_id"] = None
+    # Rank gain if he hauls (src/rank_model.py): the haul is his p90 (the
+    # likely ceiling), the field's EO is the sample inside the top 10k and
+    # scaled overall ownership outside. Absent without a rank model.
+    record["rank_gain_if_haul"] = None
+    record["rank_gain_basis"] = None
+    if isinstance(rank_model, dict):
+        _pid = safe_int(record.get("player_id"))
+        _sample = _eo_players.get(_pid) if isinstance(_eo_players, dict) and _pid is not None else None
+        _field = rank_model_mod.field_eo_pct(_sample, record.get("ownership_pct"), rank_model.get("overall_rank"))
+        _haul = record.get("xpts_p90") if record.get("xpts_p90") is not None else config.RANK_MODEL_HAUL_POINTS
+        record["rank_gain_if_haul"] = rank_model_mod.rank_gain_if_haul(_haul, _field, rank_model.get("ranks_per_point"), rank_model.get("overall_rank"))
+        record["rank_gain_basis"] = rank_model.get("basis") if record["rank_gain_if_haul"] is not None else None
     record["alerts"] = _build_player_alerts(record, optimize_event_id=optimize_event_id)
     record["score_breakdown"] = _build_score_breakdown(record, chip_strategy=chip_strategy, objective_score_col=objective_score_col)
     return record
@@ -170,6 +205,7 @@ def _lineup_projection_cols(proj_all, gws):
     for c in [
         "xpts_horizon", "status", "chance_of_playing_next_round",
         "event_points", "total_points", "form",
+        "selected_by_percent", "p80_low", "p80_high",
         "wildcard_score", "wildcard_weighted_xpts", "wildcard_future_dgw_bonus",
         "wildcard_captaincy_bonus", "wildcard_form_bonus", "wildcard_ownership_bonus",
         "baseline_long_term_xpts", "baseline_recent_gw_xpts", "baseline_blended_xpts", "baseline_gw1_xpts",
@@ -196,14 +232,30 @@ def pack_lineup_records(
     chip_strategy="none",
     objective_score_col=None,
     optimize_event_id=None,
+    eo_top10k=None,
+    rank_model=None,
 ):
     el_img = elements.copy()
     cols = [c for c in ["id", "team", "code", "photo"] if c in el_img.columns]
     el_img = el_img[cols].rename(columns={"id": "player_id"})
 
     proj_small = proj_all[_lineup_projection_cols(proj_all, gws)].copy().rename(columns={"id": "player_id"})
-    starting = starting_df.merge(el_img, on="player_id", how="left").merge(proj_small, on="player_id", how="left")
-    bench = bench_df.merge(el_img, on="player_id", how="left").merge(proj_small, on="player_id", how="left")
+
+    def _with_projections(df):
+        # The lineup frame may already carry some of the incoming columns (team,
+        # status, selected_by_percent, the distribution band). A plain merge would
+        # suffix both copies _x/_y and record.get("p80_low") would then see
+        # nothing -- prefer the incoming copy and drop the lineup frame's.
+        incoming = set(el_img.columns) | set(proj_small.columns)
+        overlap = [c for c in df.columns if c != "player_id" and c in incoming]
+        return (
+            df.drop(columns=overlap)
+            .merge(el_img, on="player_id", how="left")
+            .merge(proj_small, on="player_id", how="left")
+        )
+
+    starting = _with_projections(starting_df)
+    bench = _with_projections(bench_df)
     starting_records = attach_media(df_records(starting), teams_code)
     bench_records = attach_media(df_records(bench), teams_code)
 
@@ -211,6 +263,7 @@ def pack_lineup_records(
         decorate_projection_record(
             rec, gws=gws, chip_strategy=chip_strategy,
             objective_score_col=objective_score_col, optimize_event_id=optimize_event_id,
+            eo_top10k=eo_top10k, rank_model=rank_model,
         )
 
     return starting_records, bench_records

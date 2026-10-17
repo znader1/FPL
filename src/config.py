@@ -54,6 +54,25 @@ EVENT_LIVE_TTL = 60  # [operational] live GW scores move during matches, so cach
 PROJECTIONS_TTL = 1800  # [operational]
 FIXTURES_TTL  = 300  # [operational]
 
+# Top-10k effective ownership sample (src/top10k_eo.py, POST /admin/refresh-top10k)
+TOP10K_EO_LEAGUE_ID = 314  # [operational] FPL's overall classic league
+TOP10K_EO_PATH = "data/processed/top10k_eo.json"  # [operational] on the Fly volume; one file, rewritten per GW
+TOP10K_EO_POOL_RANKS = 10_000  # [untested] sample from the first N overall ranks
+TOP10K_EO_SAMPLE_ENTRIES = 1_000  # [untested] entries read per GW (one picks call each)
+TOP10K_EO_CONCURRENCY = 8  # [operational] parallel picks calls
+
+# Rank gain if a captain hauls (src/rank_model.py)
+RANK_MODEL_TOP10K_CUTOFF = 10_000  # [operational] inside: the sampled top-10k EO is the field; outside: scaled overall ownership
+RANK_MODEL_SPAN = 0.5  # [untested] second standings page sits at this fraction of your rank (slope is local)
+RANK_MODEL_PAGE_SIZE = 50  # [operational] entries per overall-league standings page
+RANK_MODEL_CACHE_BUCKET = 10_000  # [operational] ranks per cache bucket (one standings pair per bucket per GW)
+RANK_MODEL_TTL = 3600  # [operational] seconds; overall points move only while matches run
+RANK_MODEL_HAUL_POINTS = 10  # [untested] haul size when a player has no p90 band
+
+# Projected field benchmarks (src/field_projection.py): top-10k / overall average projected totals and your percentile
+FIELD_OVERALL_SAMPLE_ENTRIES = 1_000  # [untested] entries read uniformly across the whole league (one picks call each)
+FIELD_PERCENTILE_FLOOR = 1.0  # [untested] "top N%" never reads 0 when nobody sampled projects above you
+
 # Elements features you care about
 ELEMENTS_KEEP = [
     "id","web_name","team","element_type","total_points","form",

@@ -23,7 +23,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, recommender, seed_models, transfer_planner, transforms
+from src import config, explainer, field_projection, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, rank_model as rank_model_mod, recommender, seed_models, top10k_eo, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key, require_user, authenticated_subject
 from src import auth, llm_usage
 from src.ratelimit import (
@@ -1365,6 +1365,25 @@ def build_recommendations(payload):
         chip_profile_gws = [int(wildcard_play_event_id) + i for i in range(int(chip_build_horizon_gws))]
 
     ts = time.perf_counter()
+    # Top-10k EO sample (one file per GW on the volume; None until the job has
+    # run this season). Loaded once per request, shared by every record.
+    eo_top10k = top10k_eo.load_eo(season=season_label_from_bootstrap(ctx["bootstrap"]))
+    # Rank gain if a captain hauls needs the entry's overall rank (from the
+    # picks payload) and the local ranks-per-point slope (two standings pages,
+    # cached per GW and rank bucket). None → records carry no rank gain.
+    _eh = (ctx.get("myteam") or {}).get("entry_history") or {}
+    rank_model = rank_model_mod.build(overall_rank=_eh.get("overall_rank"), event_id=optimize_event_id)
+    # Projected field benchmarks: the sample's entries scored against this
+    # request's plain xPts for the optimised GW (same axis as
+    # projected_points_with_captain, never the chip objective column).
+    field_summary = None
+    _xcol = f"xpts_gw{int(optimize_event_id)}"
+    if eo_top10k and proj_all is not None and not proj_all.empty and _xcol in proj_all.columns and "id" in proj_all.columns:
+        _xpts_by_id = dict(zip(
+            pd.to_numeric(proj_all["id"], errors="coerce").fillna(-1).astype(int),
+            pd.to_numeric(proj_all[_xcol], errors="coerce").fillna(0.0).astype(float),
+        ))
+        field_summary = field_projection.summarize(eo_top10k, _xpts_by_id)
     starting_records, bench_records = pack_lineup_records(
         starting_df=res["starting_xi"],
         bench_df=res["bench"],
@@ -1375,6 +1394,8 @@ def build_recommendations(payload):
         chip_strategy=chip_strategy if chip_info.get("is_active") else "none",
         objective_score_col=chip_info.get("objective_score_col"),
         optimize_event_id=optimize_event_id,
+        eo_top10k=eo_top10k,
+        rank_model=rank_model,
     )
     timings["pack_base_lineup_ms"] = elapsed_ms(ts)
 
@@ -1410,6 +1431,10 @@ def build_recommendations(payload):
         "entry_id": int(entry_id),
         "squad_event_id": int(squad_event_id),
         "event_id": int(optimize_event_id),
+        "rank_model": rank_model,
+        "eo_top10k_event_id": safe_int((eo_top10k or {}).get("event_id")) if isinstance(eo_top10k, dict) else None,
+        "projected_field": field_projection.public(field_summary),
+        **field_projection.fields(field_summary, res["projected_points_with_captain"]),
         "horizon_gws": int(display_horizon_gws),
         "gws": gws,
         "notes": notes,
@@ -1551,12 +1576,19 @@ def build_recommendations(payload):
         base_points=float(res["projected_points_with_captain"]),
         base_starting_records=starting_records,
         base_bench_records=bench_records,
+        eo_top10k=eo_top10k,
+        rank_model=rank_model,
     )
     if moves:
         for idx in range(0, len(moves) + 1):
             transfer_steps.append(build_transfer_step(applied_count=idx, **step_kwargs))
     else:
         transfer_steps.append(build_transfer_step(applied_count=0, **step_kwargs))
+
+    # Every step places its own total in the sampled field (the client reads
+    # the active step's figure when it has no quantile grid to place a total on).
+    for _step in transfer_steps:
+        _step["projected_percentile"] = field_projection.fields(field_summary, _step.get("projected_points_with_captain"))["projected_percentile"]
 
     selected_step = transfer_steps[effective_apply_count] if effective_apply_count < len(transfer_steps) else transfer_steps[0]
 
@@ -1566,6 +1598,7 @@ def build_recommendations(payload):
         "captain_player_id": selected_step.get("captain_player_id"),
         "vice_player_id": selected_step.get("vice_player_id"),
         "projected_points_with_captain": selected_step.get("projected_points_with_captain"),
+        "projected_percentile": selected_step.get("projected_percentile"),
         "starting_xi": selected_step.get("starting_xi"),
         "bench": selected_step.get("bench"),
     }
@@ -1749,6 +1782,70 @@ def admin_refresh(
         "match_history": match_history_info,
         "match_history_error": match_history_error,
         "projections_warmed": warmed,
+    }))
+
+
+@app.post("/admin/refresh-top10k")
+def admin_refresh_top10k(
+    payload=Body(None),
+    api_key=None,
+    x_api_key=Header(None),
+    authorization=Header(None),
+):
+    """Sample the top-10k's picks for the current GW into the EO file.
+
+    Picks are readable only after a GW's deadline, so the current GW
+    (``is_current``) is the newest sample possible. Idempotent per GW: a file
+    already holding this season + GW is left alone unless ``force`` is set,
+    so the 6-hourly refresh workflow can call this every time at no cost.
+    """
+    payload = payload or {}
+    err = check_admin_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key or payload.get("api_key"))
+    if err:
+        return err
+    force = parse_bool(payload.get("force"), default=False)
+
+    bootstrap = get_bootstrap_cached()
+    season = season_label_from_bootstrap(bootstrap)
+    event_id = _event_id(bootstrap, "is_current")
+    if not event_id:
+        return JSONResponse(content={"ok": False, "skipped": True, "reason": "no current gameweek (pre-season)"})
+
+    existing = top10k_eo.read_file()
+    if not force and top10k_eo.is_current(existing, season=season, event_id=event_id):
+        return JSONResponse(content=jsonable_encoder({
+            "ok": True, "skipped": True, "season": season, "event_id": int(event_id),
+            "sample_n": safe_int((existing or {}).get("sample_n")),
+            "sampled_at_utc": (existing or {}).get("sampled_at_utc"),
+        }))
+
+    ts = time.perf_counter()
+    try:
+        sample = top10k_eo.build_sample(event_id=int(event_id), season=season)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("top10k sample failed: %s", exc)
+        return JSONResponse(status_code=502, content={"ok": False, "skipped": False, "error": str(exc)})
+    # Second sample, spread uniformly over the whole league, for the projected
+    # field benchmarks (overall average + percentile). Its failure must not cost
+    # the top-10k sample: write what we have and say so.
+    overall = None
+    total_players = safe_int(bootstrap.get("total_players"))
+    if total_players:
+        try:
+            overall = top10k_eo.build_sample(
+                event_id=int(event_id), season=season,
+                pages=top10k_eo.page_spread(total_players, config.FIELD_OVERALL_SAMPLE_ENTRIES),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("overall field sample failed: %s", exc)
+    sample["overall"] = overall
+    path = top10k_eo.save_sample(sample)
+    return JSONResponse(content=jsonable_encoder({
+        "ok": True, "skipped": False, "season": season, "event_id": int(event_id),
+        "sample_n": sample["sample_n"], "errors": sample["errors"], "players": len(sample["players"]),
+        "overall_n": (overall or {}).get("sample_n") if overall else None,
+        "overall_errors": (overall or {}).get("errors") if overall else None,
+        "path": str(path), "elapsed_ms": elapsed_ms(ts),
     }))
 
 
