@@ -69,6 +69,10 @@ RANK_MODEL_CACHE_BUCKET = 10_000  # [operational] ranks per cache bucket (one st
 RANK_MODEL_TTL = 3600  # [operational] seconds; overall points move only while matches run
 RANK_MODEL_HAUL_POINTS = 10  # [untested] haul size when a player has no p90 band
 
+# Projected field benchmarks (src/field_projection.py): top-10k / overall average projected totals and your percentile
+FIELD_OVERALL_SAMPLE_ENTRIES = 1_000  # [untested] entries read uniformly across the whole league (one picks call each)
+FIELD_PERCENTILE_FLOOR = 1.0  # [untested] "top N%" never reads 0 when nobody sampled projects above you
+
 # Elements features you care about
 ELEMENTS_KEEP = [
     "id","web_name","team","element_type","total_points","form",

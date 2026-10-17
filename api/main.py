@@ -23,7 +23,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src import config, explainer, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, rank_model as rank_model_mod, recommender, seed_models, top10k_eo, transfer_planner, transforms
+from src import config, explainer, field_projection, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, rank_model as rank_model_mod, recommender, seed_models, top10k_eo, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key, require_user, authenticated_subject
 from src import auth, llm_usage
 from src.ratelimit import (
@@ -1373,6 +1373,17 @@ def build_recommendations(payload):
     # cached per GW and rank bucket). None → records carry no rank gain.
     _eh = (ctx.get("myteam") or {}).get("entry_history") or {}
     rank_model = rank_model_mod.build(overall_rank=_eh.get("overall_rank"), event_id=optimize_event_id)
+    # Projected field benchmarks: the sample's entries scored against this
+    # request's plain xPts for the optimised GW (same axis as
+    # projected_points_with_captain, never the chip objective column).
+    field_summary = None
+    _xcol = f"xpts_gw{int(optimize_event_id)}"
+    if eo_top10k and proj_all is not None and not proj_all.empty and _xcol in proj_all.columns and "id" in proj_all.columns:
+        _xpts_by_id = dict(zip(
+            pd.to_numeric(proj_all["id"], errors="coerce").fillna(-1).astype(int),
+            pd.to_numeric(proj_all[_xcol], errors="coerce").fillna(0.0).astype(float),
+        ))
+        field_summary = field_projection.summarize(eo_top10k, _xpts_by_id)
     starting_records, bench_records = pack_lineup_records(
         starting_df=res["starting_xi"],
         bench_df=res["bench"],
@@ -1422,6 +1433,8 @@ def build_recommendations(payload):
         "event_id": int(optimize_event_id),
         "rank_model": rank_model,
         "eo_top10k_event_id": safe_int((eo_top10k or {}).get("event_id")) if isinstance(eo_top10k, dict) else None,
+        "projected_field": field_projection.public(field_summary),
+        **field_projection.fields(field_summary, res["projected_points_with_captain"]),
         "horizon_gws": int(display_horizon_gws),
         "gws": gws,
         "notes": notes,
@@ -1580,6 +1593,7 @@ def build_recommendations(payload):
         "captain_player_id": selected_step.get("captain_player_id"),
         "vice_player_id": selected_step.get("vice_player_id"),
         "projected_points_with_captain": selected_step.get("projected_points_with_captain"),
+        "projected_percentile": field_projection.fields(field_summary, selected_step.get("projected_points_with_captain"))["projected_percentile"],
         "starting_xi": selected_step.get("starting_xi"),
         "bench": selected_step.get("bench"),
     }
@@ -1806,10 +1820,26 @@ def admin_refresh_top10k(
     except Exception as exc:  # noqa: BLE001
         logger.warning("top10k sample failed: %s", exc)
         return JSONResponse(status_code=502, content={"ok": False, "skipped": False, "error": str(exc)})
+    # Second sample, spread uniformly over the whole league, for the projected
+    # field benchmarks (overall average + percentile). Its failure must not cost
+    # the top-10k sample: write what we have and say so.
+    overall = None
+    total_players = safe_int(bootstrap.get("total_players"))
+    if total_players:
+        try:
+            overall = top10k_eo.build_sample(
+                event_id=int(event_id), season=season,
+                pages=top10k_eo.page_spread(total_players, config.FIELD_OVERALL_SAMPLE_ENTRIES),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("overall field sample failed: %s", exc)
+    sample["overall"] = overall
     path = top10k_eo.save_sample(sample)
     return JSONResponse(content=jsonable_encoder({
         "ok": True, "skipped": False, "season": season, "event_id": int(event_id),
         "sample_n": sample["sample_n"], "errors": sample["errors"], "players": len(sample["players"]),
+        "overall_n": (overall or {}).get("sample_n") if overall else None,
+        "overall_errors": (overall or {}).get("errors") if overall else None,
         "path": str(path), "elapsed_ms": elapsed_ms(ts),
     }))
 

@@ -79,6 +79,7 @@ def is_current(data, season, event_id):
 
 
 def _entries_from_pages(pages, league_id, fetch_standings, session):
+    """[(entry_id, rank), ...] across the pages, in standings order."""
     entry_ids = []
     for page in pages:
         try:
@@ -89,7 +90,7 @@ def _entries_from_pages(pages, league_id, fetch_standings, session):
         for row in ((payload or {}).get("standings") or {}).get("results") or []:
             eid = safe_int(row.get("entry"))
             if eid:
-                entry_ids.append(eid)
+                entry_ids.append((eid, safe_int(row.get("rank"))))
     return entry_ids
 
 
@@ -99,6 +100,10 @@ def build_sample(event_id, season, pages=None, league_id=None, fetch_standings=N
     One failed entry is counted and skipped. If the first batch fails entirely
     the network is blocking us and the run aborts rather than writing an empty
     file over a good one.
+
+    Besides the aggregate, every readable entry's picks are kept as compact
+    ``[element, multiplier]`` pairs (``entries``) so a later request can score
+    the whole sample against that request's xPts (``src/field_projection.py``).
     """
     league_id = int(league_id or config.TOP10K_EO_LEAGUE_ID)
     fetch_standings = fetch_standings or fpl_client.get_classic_league_standings
@@ -112,26 +117,39 @@ def build_sample(event_id, season, pages=None, league_id=None, fetch_standings=N
         raise RuntimeError("top10k sample: no entries read from the standings pages")
 
     payloads = []
+    entries = []
     errors = 0
     last_error = None
 
-    def _one(eid):
+    def _one(item):
+        eid, _rank = item
         return fetch_picks(eid, int(event_id), session=session)
+
+    def _keep(item, payload):
+        payloads.append(payload)
+        picks = (payload or {}).get("picks") if isinstance(payload, dict) else None
+        if isinstance(picks, list):
+            pairs = []
+            for pk in picks:
+                pid = safe_int(pk.get("element"))
+                if pid is not None:
+                    pairs.append([pid, safe_int(pk.get("multiplier")) or 0])
+            entries.append({"entry": item[0], "rank": item[1], "picks": pairs})
 
     first_batch = entry_ids[:concurrency]
     rest = entry_ids[concurrency:]
     with ThreadPoolExecutor(max_workers=concurrency) as ex:
-        for res in ex.map(lambda e: _safe(_one, e), first_batch):
+        for item, res in zip(first_batch, ex.map(lambda e: _safe(_one, e), first_batch)):
             if res["ok"]:
-                payloads.append(res["value"])
+                _keep(item, res["value"])
             else:
                 errors += 1
                 last_error = res["error"]
         if first_batch and not payloads:
             raise RuntimeError(f"top10k sample: every entry in the first batch failed ({last_error})")
-        for res in ex.map(lambda e: _safe(_one, e), rest):
+        for item, res in zip(rest, ex.map(lambda e: _safe(_one, e), rest)):
             if res["ok"]:
-                payloads.append(res["value"])
+                _keep(item, res["value"])
             else:
                 errors += 1
 
@@ -143,6 +161,7 @@ def build_sample(event_id, season, pages=None, league_id=None, fetch_standings=N
         "errors": int(errors),
         "sampled_at_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "players": aggregate(payloads),
+        "entries": entries,
     }
 
 
@@ -157,7 +176,10 @@ def save_sample(data, path=None):
     path = Path(path or config.TOP10K_EO_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({**data, "players": {str(k): v for k, v in data["players"].items()}}))
+    out = {**data, "players": {str(k): v for k, v in data["players"].items()}}
+    if isinstance(out.get("overall"), dict) and isinstance(out["overall"].get("players"), dict):
+        out["overall"] = {**out["overall"], "players": {str(k): v for k, v in out["overall"]["players"].items()}}
+    tmp.write_text(json.dumps(out))
     os.replace(tmp, path)
     return path
 

@@ -76,8 +76,8 @@ def test_eo_map_for_reads_the_file_once_and_guards_the_season(tmp_path):
 
 def test_build_sample_fetches_pages_then_picks_and_tolerates_failures(monkeypatch):
     standings = {
-        1: {"standings": {"results": [{"entry": 11}, {"entry": 12}]}},
-        2: {"standings": {"results": [{"entry": 21}]}},
+        1: {"standings": {"results": [{"entry": 11, "rank": 1}, {"entry": 12, "rank": 2}]}},
+        2: {"standings": {"results": [{"entry": 21, "rank": 51}]}},
     }
     picks = {
         11: _picks((1, 2), (2, 1)),
@@ -100,6 +100,12 @@ def test_build_sample_fetches_pages_then_picks_and_tolerates_failures(monkeypatc
     assert out["sample_n"] == 2 and out["errors"] == 1
     assert out["players"][1]["eo_pct"] == 150.0
     assert out["sampled_at_utc"].endswith("Z")
+    # Per-entry picks are kept (compact [element, multiplier] pairs) so the
+    # field's projected totals can be computed later, per request.
+    assert out["entries"] == [
+        {"entry": 11, "rank": 1, "picks": [[1, 2], [2, 1]]},
+        {"entry": 12, "rank": 2, "picks": [[1, 1], [3, 1]]},
+    ]
 
 
 def test_build_sample_aborts_when_every_entry_is_blocked():
