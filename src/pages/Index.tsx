@@ -25,6 +25,8 @@ import {
   autoSubPreview,
   chipOptions,
   chipPick,
+  flowStrategy,
+  recFitsPlan,
   wildcardDraftShown,
   wildcardToggle,
   firstUnfinishedStep,
@@ -209,7 +211,6 @@ const Index = () => {
   const canFetchFixtures = Boolean(fixturesTemplate);
   const canRecommend = Boolean(recommendationTemplate);
   const canChangeGw = true;
-  const effectiveHorizonGws = chipStrategy === "free_hit" ? 1 : horizonGws;
 
   const nextEventQuery = useQuery<FplNextEventSummary>({
     queryKey: ["next-event"],
@@ -278,10 +279,13 @@ const Index = () => {
 
   const buildRecommendationParams = (
     eventId: number,
-    overrides?: { chipPlayEventId?: number }
+    overrides?: { chipPlayEventId?: number; chipStrategy?: FplChipStrategy }
   ): TeamRecommendationParams => {
+    // The plan steps may override the strategy (flowStrategy): a leftover wildcard
+    // preview must not turn the Transfers step's pick into a draft.
+    const strategy = overrides?.chipStrategy ?? chipStrategy;
     const wildcardPlayEventId =
-      chipStrategy === "wildcard"
+      strategy === "wildcard"
         ? overrides?.chipPlayEventId ??
           chipPlayEventId ??
           recommendationMutation.data?.chip_strategy?.play_event_id ??
@@ -291,14 +295,14 @@ const Index = () => {
     return {
       entryId,
       eventId,
-      horizonGws: effectiveHorizonGws,
-      chipStrategy,
-      chipHorizonGws: chipStrategy === "wildcard" ? horizonGws : undefined,
+      horizonGws: strategy === "free_hit" ? 1 : horizonGws,
+      chipStrategy: strategy,
+      chipHorizonGws: strategy === "wildcard" ? horizonGws : undefined,
       chipPlayEventId: wildcardPlayEventId,
       differential:
-        chipStrategy === "wildcard" || chipStrategy === "free_hit" ? differential : undefined,
+        strategy === "wildcard" || strategy === "free_hit" ? differential : undefined,
       prioritizeInjured,
-      strategy: chipStrategy,
+      strategy,
       includeTransfers,
       applyTransferCount: 0,
     };
@@ -433,8 +437,6 @@ const Index = () => {
         localStorage.setItem("fpl_selected_gw", String(selectedGW));
       }
       localStorage.setItem("fpl_horizon_gws", String(horizonGws));
-      localStorage.setItem("fpl_chip_strategy", chipStrategy);
-      localStorage.setItem("fpl_transfer_strategy", chipStrategy);
       if (typeof chipPlayEventId === "number") {
         localStorage.setItem("fpl_chip_play_event_id", String(chipPlayEventId));
       } else {
@@ -511,8 +513,30 @@ const Index = () => {
   const { plan, base: basePlan, setPlan, resetPlan } = planStore;
 
   // The recommendation informs the plan only when it was run for the deadline GW.
+  // ...and fits the plan: a wildcard / free-hit draft has no transfer verdict, so it
+  // only counts when the plan plays that chip (recFitsPlan).
   const planRec =
-    recommendationMutation.data && recommendationMutation.data.event_id === deadlineGw ? recommendationMutation.data : undefined;
+    recommendationMutation.data &&
+    recommendationMutation.data.event_id === deadlineGw &&
+    recFitsPlan(recommendationMutation.data, plan?.chip ?? null)
+      ? recommendationMutation.data
+      : undefined;
+  // The strategy the plan steps run ZN Pick with.
+  const stepStrategy = flowStrategy(chipStrategy, plan?.chip ?? null);
+
+  // Persist only what the plan stands behind: a wildcard preview is for this
+  // visit, so a reload doesn't open on a draft the plan never chose. Waits for
+  // the plan, else a saved wildcard would be overwritten before plan.chip loads.
+  const planLoaded = Boolean(plan);
+  useEffect(() => {
+    if (!planLoaded) return;
+    try {
+      localStorage.setItem("fpl_chip_strategy", stepStrategy);
+      localStorage.setItem("fpl_transfer_strategy", stepStrategy);
+    } catch {
+      // ignore
+    }
+  }, [stepStrategy, planLoaded]);
   const planMoves = useMemo(() => makeMoves(planRec), [planRec]);
   const playerLookup = useMemo(() => buildPlayerLookup(latestSquad ?? squadQuery.data, planRec), [latestSquad, squadQuery.data, planRec]);
   const resolvedPlan = useMemo(() => (plan ? resolvePlan(plan, planMoves) : null), [plan, planMoves]);
@@ -548,6 +572,16 @@ const Index = () => {
   const goStep = (s: PlanStep) => {
     setSwapSelection(null);
     setBenchMessage(null);
+    // Entering the flow ends a wildcard preview: the strategy switch reruns ZN Pick
+    // for the deadline GW, so the steps' own auto-run stands down for this key.
+    // A run still in flight would make the strategy effect drop the switch; then
+    // the auto-run picks it up once that run settles (its draft doesn't fit the plan).
+    if (s !== "squad" && stepStrategy !== chipStrategy) {
+      if (typeof deadlineGw === "number" && !recommendationMutation.isPending) {
+        autoRecommendFired.current = `${entryId}:${deadlineGw}`;
+      }
+      switchStrategyForDeadline(stepStrategy);
+    }
     navigate(s === "squad" ? "/app" : `/app/plan/${s}`);
   };
 
@@ -760,14 +794,15 @@ const Index = () => {
     if (typeof deadlineGw !== "number") return;
     setSelectedGW(deadlineGw);
     setSquadGW(deadlineGw);
-    runRecommendation(deadlineGw);
+    // The squad view honours a wildcard preview; the steps run what the plan plays.
+    runRecommendation(deadlineGw, step === "squad" ? chipStrategy : stepStrategy);
   };
 
-  const runRecommendation = (eventId: number) => {
-    const nextChipPlayEventId = chipStrategy === "wildcard" ? eventId : undefined;
-    if (chipStrategy === "wildcard") setChipPlayEventId(nextChipPlayEventId);
+  const runRecommendation = (eventId: number, strategy: FplChipStrategy = chipStrategy) => {
+    const nextChipPlayEventId = strategy === "wildcard" ? eventId : undefined;
+    if (strategy === "wildcard") setChipPlayEventId(nextChipPlayEventId);
     recommendationMutation.mutate(
-      buildRecommendationParams(eventId, { chipPlayEventId: nextChipPlayEventId })
+      buildRecommendationParams(eventId, { chipPlayEventId: nextChipPlayEventId, chipStrategy: strategy })
     );
   };
 
@@ -854,7 +889,7 @@ const Index = () => {
     autoRecommendFired.current = autoRecommendKey;
     setSelectedGW(deadlineGw);
     setSquadGW(deadlineGw);
-    runRecommendation(deadlineGw);
+    runRecommendation(deadlineGw, stepStrategy);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRecommendKey]);
 

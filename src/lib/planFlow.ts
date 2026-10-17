@@ -385,6 +385,25 @@ export function wildcardToggle(chipStrategy: FplChipStrategy, shown: boolean): "
   return shown ? "stop" : "fetch";
 }
 
+/** Chips that make the backend rebuild the squad and skip the transfer planner. */
+const SQUAD_REBUILD = new Set<FplChipStrategy>(["wildcard", "free_hit"]);
+
+/** The strategy ZN Pick runs with for the plan steps. A wildcard / free hit only
+ *  when the plan plays it: otherwise a leftover preview (or a Parameters choice)
+ *  would ask for a draft, the backend would skip the transfer planner, and the
+ *  Transfers step would offer nothing but Roll. */
+export function flowStrategy(chipStrategy: FplChipStrategy, planChip: PlanChip): FplChipStrategy {
+  return SQUAD_REBUILD.has(chipStrategy) && planChip !== chipStrategy ? "none" : chipStrategy;
+}
+
+/** Whether a recommendation can feed the plan steps: a squad rebuilt by a chip
+ *  carries no transfer verdict, so it only fits a plan that plays that chip. */
+export function recFitsPlan(rec: FplTeamRecommendation, planChip: PlanChip): boolean {
+  const cs = rec.chip_strategy;
+  if (!cs?.is_active || !SQUAD_REBUILD.has(cs.selected)) return true;
+  return planChip === cs.selected;
+}
+
 /* ── bench step ───────────────────────────────────────────────────────────── */
 
 const FLAG_SEVERITY = new Set(["high", "medium"]);

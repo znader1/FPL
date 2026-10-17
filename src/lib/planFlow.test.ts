@@ -3,6 +3,8 @@ import {
   autoSubPreview,
   chipOptions,
   chipPick,
+  flowStrategy,
+  recFitsPlan,
   wildcardDraftShown,
   wildcardToggle,
   firstUnfinishedStep,
@@ -285,6 +287,37 @@ describe("wildcard preview", () => {
     expect(wildcardToggle("none", false)).toBe("start");
     expect(wildcardToggle("wildcard", false)).toBe("fetch");
     expect(wildcardToggle("wildcard", true)).toBe("stop");
+  });
+});
+
+describe("flow strategy (a squad-rebuilding chip only when the plan plays it)", () => {
+  it("a wildcard or free-hit setting the plan hasn't chosen runs the normal pick", () => {
+    expect(flowStrategy("wildcard", null)).toBe("none");
+    expect(flowStrategy("wildcard", "none")).toBe("none");
+    expect(flowStrategy("wildcard", "bench_boost")).toBe("none");
+    expect(flowStrategy("free_hit", null)).toBe("none");
+  });
+  it("keeps the chip the plan plays, and chips that don't rebuild the squad", () => {
+    expect(flowStrategy("wildcard", "wildcard")).toBe("wildcard");
+    expect(flowStrategy("free_hit", "free_hit")).toBe("free_hit");
+    expect(flowStrategy("bench_boost", null)).toBe("bench_boost");
+    expect(flowStrategy("none", "wildcard")).toBe("none");
+  });
+});
+
+describe("recFitsPlan", () => {
+  const withChip = (selected: "wildcard" | "free_hit" | "none", is_active: boolean) =>
+    ({ ...SAMPLE_TEAM_RECOMMENDATION, chip_strategy: { ...SAMPLE_TEAM_RECOMMENDATION.chip_strategy, selected, is_active } }) as FplTeamRecommendation;
+  it("a wildcard draft (no transfer verdict) can't stand in for the plan's transfers", () => {
+    expect(recFitsPlan(withChip("wildcard", true), null)).toBe(false);
+    expect(recFitsPlan(withChip("wildcard", true), "none")).toBe(false);
+    expect(recFitsPlan(withChip("free_hit", true), "bench_boost")).toBe(false);
+  });
+  it("fits when the plan plays that chip, or when no chip rebuilt the squad", () => {
+    expect(recFitsPlan(withChip("wildcard", true), "wildcard")).toBe(true);
+    expect(recFitsPlan(withChip("wildcard", false), null)).toBe(true);
+    expect(recFitsPlan(withChip("none", false), null)).toBe(true);
+    expect(recFitsPlan({ ...SAMPLE_TEAM_RECOMMENDATION, chip_strategy: undefined } as FplTeamRecommendation, null)).toBe(true);
   });
 });
 
