@@ -7,13 +7,15 @@ type Props = {
   row: ChipOutlookRow | undefined;
   /** The pitch is showing the wildcard draft. */
   previewing: boolean;
+  /** ZN Pick is running; the button waits for it. */
+  busy?: boolean;
   onToggle: () => void;
 };
 
 /** The wildcard on the main page: its best week and the engine's guidance, with a
  *  preview of the wildcard draft on the pitch. Quieter than ChipNudgeCard — it is an
  *  option, not a recommendation, until the backend's wildcard timing clears its bar. */
-export const WildcardCard = ({ row, previewing, onToggle }: Props) => {
+export const WildcardCard = ({ row, previewing, busy = false, onToggle }: Props) => {
   if (!row) return null;
   const best = row.event_id !== null && row.ev_gain !== null ? { gw: row.event_id, gain: row.ev_gain } : null;
 
@@ -38,7 +40,8 @@ export const WildcardCard = ({ row, previewing, onToggle }: Props) => {
       </div>
       <button
         onClick={onToggle}
-        className="ml-auto shrink-0 rounded-md border border-primary/50 px-3 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/10"
+        disabled={busy}
+        className="ml-auto shrink-0 rounded-md border border-primary/50 px-3 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
       >
         {previewing ? "Back to my squad" : "See wildcard squad"}
       </button>

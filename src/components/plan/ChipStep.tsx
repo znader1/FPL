@@ -18,7 +18,7 @@ export function ChipStep({ options, value, onPick }: ChipStepProps) {
       {options.map((o) => {
         const checked = value === o.chip;
         return (
-          <RadioCard key={o.chip} checked={checked} disabled={o.used} onPick={() => onPick(o.chip)} label={o.title} className="gap-2 rounded-[14px] p-4">
+          <RadioCard key={o.chip} checked={checked} disabled={o.used || o.disabled} onPick={() => onPick(o.chip)} label={o.title} className="gap-2 rounded-[14px] p-4">
             <div className="flex items-center gap-2">
               <RadioDot checked={checked} size={16} />
               <span className="flex-1 text-sm font-bold text-foreground">{o.title}</span>

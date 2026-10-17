@@ -39,6 +39,11 @@ describe("WildcardCard", () => {
     expect(onToggle).toHaveBeenCalledTimes(1);
   });
 
+  it("waits while ZN Pick is running", () => {
+    render(<WildcardCard row={row} previewing={false} busy onToggle={() => {}} />);
+    expect((screen.getByRole("button", { name: /see wildcard squad/i }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("still offers the draft when no week stands out", () => {
     render(<WildcardCard row={{ ...row, event_id: null, ev_gain: null, guidance: undefined }} previewing={false} onToggle={() => {}} />);
     expect(screen.getByText(/no wildcard week stands out/i)).toBeTruthy();

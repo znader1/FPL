@@ -3,6 +3,8 @@ import {
   autoSubPreview,
   chipOptions,
   chipPick,
+  wildcardDraftShown,
+  wildcardToggle,
   firstUnfinishedStep,
   footerFor,
   reviewSummary,
@@ -242,6 +244,11 @@ describe("chipOptions — wildcard", () => {
       "Rebuilds all 15 for free. The chip plan hasn't answered yet.",
     );
   });
+  it("waits while ZN Pick is running", () => {
+    expect(wc()?.disabled).toBeUndefined();
+    const opts = chipOptions({ resolved: r, lookup, chipPlan: chipPlan(), gw: 29, pickPending: true });
+    expect(opts.find((o) => o.chip === "wildcard")?.disabled).toBe(true);
+  });
   it("is left out when the wildcard drafter isn't in the user's plan", () => {
     const opts = chipOptions({ resolved: r, lookup, chipPlan: chipPlan(), gw: 29, wildcardAllowed: false });
     expect(opts.map((o) => o.chip)).not.toContain("wildcard");
@@ -261,6 +268,23 @@ describe("chipPick", () => {
   });
   it("any other chip only records the choice", () => {
     expect(chipPick("triple_captain", "none")).toEqual({ patch: { chip: "triple_captain" }, chipStrategy: null, goTo: null });
+  });
+});
+
+describe("wildcard preview", () => {
+  const wcRec = (selected: "wildcard" | "none", is_active: boolean) =>
+    ({ ...SAMPLE_TEAM_RECOMMENDATION, chip_strategy: { ...SAMPLE_TEAM_RECOMMENDATION.chip_strategy, selected, is_active } }) as FplTeamRecommendation;
+  it("the draft shows only when the recommendation on the pitch is an active wildcard", () => {
+    expect(wildcardDraftShown({ pitchMode: "recommendation", rec: wcRec("wildcard", true) })).toBe(true);
+    expect(wildcardDraftShown({ pitchMode: "squad", rec: wcRec("wildcard", true) })).toBe(false);
+    expect(wildcardDraftShown({ pitchMode: "recommendation", rec: wcRec("wildcard", false) })).toBe(false);
+    expect(wildcardDraftShown({ pitchMode: "recommendation", rec: wcRec("none", false) })).toBe(false);
+    expect(wildcardDraftShown({ pitchMode: "recommendation", rec: undefined })).toBe(false);
+  });
+  it("the card starts a preview, fetches a draft the persisted strategy never ran, or goes back", () => {
+    expect(wildcardToggle("none", false)).toBe("start");
+    expect(wildcardToggle("wildcard", false)).toBe("fetch");
+    expect(wildcardToggle("wildcard", true)).toBe("stop");
   });
 });
 

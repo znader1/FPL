@@ -260,6 +260,8 @@ export interface ChipOption {
   why: string;
   /** Already played this season. */
   used: boolean;
+  /** Can't be picked right now (ZN Pick is still answering). */
+  disabled?: boolean;
 }
 
 const bestWeek = (plan: ChipPlanResponse | null | undefined, chip: ChipName) => {
@@ -284,8 +286,10 @@ export function chipOptions(args: {
   gw: number;
   /** Entitlement `canUseWildcardDrafter`; false leaves the wildcard out. */
   wildcardAllowed?: boolean;
+  /** ZN Pick is running: a wildcard pick now would be dropped, so it waits. */
+  pickPending?: boolean;
 }): ChipOption[] {
-  const { resolved: r, lookup, chipPlan, gw, wildcardAllowed = true } = args;
+  const { resolved: r, lookup, chipPlan, gw, wildcardAllowed = true, pickPending = false } = args;
   const nudge = chipPlan?.nudge && chipPlan.nudge.event_id === gw ? chipPlan.nudge.chip : null;
   const used = (chip: ChipName) => chipPlan?.chips_remaining.some((c) => c.name === chip && !c.available) ?? false;
   const capIn = r.xi.includes(r.cap);
@@ -329,6 +333,7 @@ export function chipOptions(args: {
     ...(wcGain !== null && { gainNote: "over the wildcard window" }),
     why: wcWhy,
     used: used("wildcard"),
+    ...(pickPending && { disabled: true }),
   };
 
   return [
@@ -363,6 +368,21 @@ export function chipPick(chip: Exclude<PlanChip, null>, current: FplChipStrategy
   if (chip === "wildcard") return { patch: { chip }, chipStrategy: current === "wildcard" ? null : "wildcard", goTo: "squad" };
   if (current === "wildcard") return { patch: { chip }, chipStrategy: "none", goTo: null };
   return { patch: { chip }, chipStrategy: null, goTo: null };
+}
+
+/** The pitch shows the wildcard draft only when the recommendation on screen was
+ *  run as an active wildcard — the persisted chip strategy alone isn't enough
+ *  (after a reload it says "wildcard" before anything has been fetched). */
+export function wildcardDraftShown(args: { pitchMode: "squad" | "recommendation"; rec: FplTeamRecommendation | undefined }): boolean {
+  const cs = args.rec?.chip_strategy;
+  return args.pitchMode === "recommendation" && cs?.selected === "wildcard" && cs.is_active === true;
+}
+
+/** The main-page wildcard card's button: start the preview, fetch the draft the
+ *  strategy already asks for, or go back to the user's squad. */
+export function wildcardToggle(chipStrategy: FplChipStrategy, shown: boolean): "start" | "fetch" | "stop" {
+  if (chipStrategy !== "wildcard") return "start";
+  return shown ? "stop" : "fetch";
 }
 
 /* ── bench step ───────────────────────────────────────────────────────────── */

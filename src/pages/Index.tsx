@@ -25,6 +25,8 @@ import {
   autoSubPreview,
   chipOptions,
   chipPick,
+  wildcardDraftShown,
+  wildcardToggle,
   firstUnfinishedStep,
   footerFor,
   nextStep,
@@ -520,9 +522,16 @@ const Index = () => {
   const chipOpts = useMemo(
     () =>
       resolvedPlan && typeof deadlineGw === "number"
-        ? chipOptions({ resolved: resolvedPlan, lookup: playerLookup, chipPlan: chipPlanQuery.data, gw: deadlineGw, wildcardAllowed: canUseWildcardDrafter })
+        ? chipOptions({
+            resolved: resolvedPlan,
+            lookup: playerLookup,
+            chipPlan: chipPlanQuery.data,
+            gw: deadlineGw,
+            wildcardAllowed: canUseWildcardDrafter,
+            pickPending: recommendationMutation.isPending,
+          })
         : [],
-    [resolvedPlan, playerLookup, chipPlanQuery.data, deadlineGw, canUseWildcardDrafter],
+    [resolvedPlan, playerLookup, chipPlanQuery.data, deadlineGw, canUseWildcardDrafter, recommendationMutation.isPending],
   );
   const freeHitGain = chipOpts.find((o) => o.chip === "free_hit")?.gain ?? null;
   const planProjected = resolvedPlan && plan ? projectPlan(resolvedPlan, playerLookup, plan.chip, freeHitGain) : null;
@@ -812,8 +821,15 @@ const Index = () => {
     wildcardRow !== undefined &&
     plan?.chip !== "wildcard" &&
     chipPlanQuery.data?.nudge?.chip !== "wildcard";
+  const wildcardShown = wildcardDraftShown({ pitchMode, rec: recommendationMutation.data });
   const toggleWildcardPreview = () => {
-    switchStrategyForDeadline(chipStrategy === "wildcard" ? "none" : "wildcard");
+    const action = wildcardToggle(chipStrategy, wildcardShown);
+    if (action === "fetch") {
+      // The strategy was persisted from an earlier visit but nothing has run yet.
+      if (typeof deadlineGw === "number") rerunPick();
+    } else {
+      switchStrategyForDeadline(action === "start" ? "wildcard" : "none");
+    }
     goStep("squad");
   };
 
@@ -1164,7 +1180,7 @@ const Index = () => {
         )}
         {showWildcardCard && (
           <div className="mx-auto w-full max-w-5xl px-4 pt-4">
-            <WildcardCard row={wildcardRow} previewing={chipStrategy === "wildcard"} onToggle={toggleWildcardPreview} />
+            <WildcardCard row={wildcardRow} previewing={wildcardShown} busy={recommendationMutation.isPending} onToggle={toggleWildcardPreview} />
           </div>
         )}
         <PitchVisualization
