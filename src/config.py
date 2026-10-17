@@ -357,6 +357,28 @@ CHIP_PLAN_SEASON_PRIORS = {
     "triple_captain": "a double gameweek for your captain, usually GW24–26 or GW34–37",
     "wildcard": "a fixture swing or an injury pile-up; re-check after each international break",
 }  # [operational]
+# First-half chips expire at the GW{CHIP_PLAN_PHASE_SPLIT_GW} deadline — before the
+# FA Cup blanks and most doubles the priors above point at. Telling a GW5 manager
+# to "save the Free Hit for GW29-33" names a week their chip never reaches.
+CHIP_PLAN_SEASON_PRIORS_FIRST_HALF = {
+    "free_hit": (
+        "a week when several of your starters blank or face tough fixtures, before the "
+        f"GW{CHIP_PLAN_PHASE_SPLIT_GW} deadline — first-half blanks are rare and the chip "
+        "is lost if unused"
+    ),
+    "bench_boost": (
+        f"a double gameweek if one lands before GW{CHIP_PLAN_PHASE_SPLIT_GW}, otherwise the "
+        "week your whole bench starts with good fixtures"
+    ),
+    "triple_captain": (
+        f"your captain's best fixture before GW{CHIP_PLAN_PHASE_SPLIT_GW}, or a double "
+        "gameweek if one lands"
+    ),
+    "wildcard": (
+        f"a fixture swing or an injury pile-up before GW{CHIP_PLAN_PHASE_SPLIT_GW}; "
+        "re-check after each international break"
+    ),
+}  # [operational]
 
 # European midweek congestion (src/european.py). The FPL API knows nothing
 # about the Champions League / Europa / Conference calendar, so the team list

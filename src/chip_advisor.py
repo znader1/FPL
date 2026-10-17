@@ -764,12 +764,19 @@ def _fh_structural_guidance(gw):
     return f"Hold for GW{gw}: likely blank gameweek (FA Cup weekend), FPL confirms nearer the time."
 
 
-def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon,
+def _season_prior(chip, half):
+    """Where the chip usually pays off, for the half it belongs to — a first-half
+    chip expires at the phase split, so the season-wide windows don't apply."""
+    priors = config.CHIP_PLAN_SEASON_PRIORS_FIRST_HALF if half == 1 else config.CHIP_PLAN_SEASON_PRIORS
+    return priors[chip]
+
+
+def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon, half,
                     transfer_plan_net_gain=0.0, structural_gw=None):
     """Plain-language "why is this chip on hold" sentence for one outlook or
     recommendation row. Raises on a missing/unexpected field — callers use
     `_safe_chip_guidance` so a gap never breaks the payload."""
-    prior = config.CHIP_PLAN_SEASON_PRIORS[chip]
+    prior = _season_prior(chip, half)
 
     if status == "play":
         text = f"Play it in GW{event_id}: +{ev_gain:.1f} pts over the bar of {bar:.0f}."
@@ -797,8 +804,9 @@ def _safe_chip_guidance(chip, **kwargs):
         return _chip_guidance(chip, **kwargs)
     except Exception:
         logger.warning("chip guidance builder failed for %s", chip, exc_info=True)
-        prior = config.CHIP_PLAN_SEASON_PRIORS.get(
-            chip, "the right structural window for this chip")
+        priors = (config.CHIP_PLAN_SEASON_PRIORS_FIRST_HALF if kwargs.get("half") == 1
+                  else config.CHIP_PLAN_SEASON_PRIORS)
+        prior = priors.get(chip, "the right structural window for this chip")
         return f"Hold. Best use: {prior}."
 
 
@@ -903,7 +911,7 @@ def build_chip_plan(
                 "reasons": [no_window_reason],
                 "guidance": _safe_chip_guidance(
                     chip, status="hold", event_id=None, ev_gain=None, bar=base_bar,
-                    distribution=None, horizon=horizon,
+                    distribution=None, horizon=horizon, half=windows[chip]["half"],
                     transfer_plan_net_gain=plan_net_gain,
                     structural_gw=fh_structural_gw if chip == "free_hit" else None),
             })
@@ -941,7 +949,7 @@ def build_chip_plan(
         outlook_row["guidance"] = _safe_chip_guidance(
             chip, status="hold", event_id=outlook_row["event_id"],
             ev_gain=outlook_row["ev_gain"], bar=outlook_row["bar"],
-            distribution=distribution, horizon=horizon,
+            distribution=distribution, horizon=horizon, half=windows[chip]["half"],
             transfer_plan_net_gain=plan_net_gain)
         outlook.append(outlook_row)
         if best.expected_value < bar:
@@ -950,7 +958,7 @@ def build_chip_plan(
         outlook_row["guidance"] = _safe_chip_guidance(
             chip, status="play", event_id=outlook_row["event_id"],
             ev_gain=outlook_row["ev_gain"], bar=outlook_row["bar"],
-            distribution=distribution, horizon=horizon)
+            distribution=distribution, horizon=horizon, half=windows[chip]["half"])
         rec = {
             "chip": chip,
             "event_id": int(best.gw),

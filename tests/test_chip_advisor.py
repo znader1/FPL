@@ -891,12 +891,42 @@ def test_outlook_guidance_hold_no_window():
     assert wc["event_id"] is None and fh["event_id"] is None
     assert wc["guidance"] == (
         f"Hold. Nothing in the next {plan['horizon_model_gws']} GWs beats keeping it. "
-        f"Best use: {config.CHIP_PLAN_SEASON_PRIORS['wildcard']}."
+        f"Best use: {config.CHIP_PLAN_SEASON_PRIORS_FIRST_HALF['wildcard']}."
     )
     assert fh["guidance"] == (
         f"Hold. Nothing in the next {plan['horizon_model_gws']} GWs beats keeping it. "
-        f"Best use: {config.CHIP_PLAN_SEASON_PRIORS['free_hit']}."
+        f"Best use: {config.CHIP_PLAN_SEASON_PRIORS_FIRST_HALF['free_hit']}."
     )
+
+
+def test_first_half_guidance_never_points_past_the_phase_split():
+    """A first-half chip expires at GW19: its hold advice must not send the
+    manager to the GW29-33 FA Cup blanks or the late doubles."""
+    squad = _squad_15_single_team()
+    market = _market_for(squad, gw_xpts=6.0)
+    plan = build_chip_plan(squad, 5, {5: market}, chips_played=[])
+    holds = [o for o in plan["outlook"] if o["status"] == "hold"]
+    assert {o["chip"] for o in holds} >= {"free_hit", "wildcard"}
+    for o in plan["outlook"]:
+        if o["status"] == "hold":
+            assert f"GW{config.CHIP_PLAN_PHASE_SPLIT_GW}" in o["guidance"], o
+        for late in ("GW29", "GW24", "GW34"):
+            assert late not in o["guidance"], (o["chip"], o["guidance"])
+
+
+def test_second_half_guidance_keeps_the_season_priors():
+    squad = _squad_15_single_team()
+    market = _market_for(squad, gw_xpts=6.0)
+    plan = build_chip_plan(squad, 25, {25: market}, chips_played=[])
+    fh = next(o for o in plan["outlook"] if o["chip"] == "free_hit")
+    assert fh["guidance"].endswith(f"Best use: {config.CHIP_PLAN_SEASON_PRIORS['free_hit']}.")
+
+
+def test_guidance_fallback_is_half_aware():
+    from src.chip_advisor import _safe_chip_guidance
+    # A missing field makes the builder raise; the fallback still names the right half.
+    text = _safe_chip_guidance("free_hit", status="hold", half=1)
+    assert text == f"Hold. Best use: {config.CHIP_PLAN_SEASON_PRIORS_FIRST_HALF['free_hit']}."
 
 
 def test_outlook_guidance_hold_no_window_wildcard_names_transfer_plan():
@@ -910,7 +940,7 @@ def test_outlook_guidance_hold_no_window_wildcard_names_transfer_plan():
     assert wc["event_id"] is None
     assert wc["guidance"] == (
         f"Hold. Nothing in the next {plan['horizon_model_gws']} GWs beats keeping it. "
-        f"Best use: {config.CHIP_PLAN_SEASON_PRIORS['wildcard']}. "
+        f"Best use: {config.CHIP_PLAN_SEASON_PRIORS_FIRST_HALF['wildcard']}. "
         "Your squad plus free transfers already covers this stretch."
     )
     # free_hit gets no such addendum even with the same transfer plan
@@ -927,7 +957,7 @@ def test_outlook_guidance_hold_below_bar_without_distribution():
     assert "distribution" not in tc
     assert tc["guidance"] == (
         f"Hold for now. GW{tc['event_id']} is the best week so far (+{tc['ev_gain']:.1f} pts). "
-        f"Best use: {config.CHIP_PLAN_SEASON_PRIORS['triple_captain']}."
+        f"Best use: {config.CHIP_PLAN_SEASON_PRIORS_FIRST_HALF['triple_captain']}."
     )
 
 
@@ -946,7 +976,7 @@ def test_outlook_guidance_hold_below_bar_with_distribution_p_beats_bar():
     assert tc["guidance"] == (
         f"Hold for now. GW{tc['event_id']} is the best week so far "
         f"(+{tc['ev_gain']:.1f} pts, {p}% chance to beat the {tc['bar']:.0f}-pt bar). "
-        f"Best use: {config.CHIP_PLAN_SEASON_PRIORS['triple_captain']}."
+        f"Best use: {config.CHIP_PLAN_SEASON_PRIORS_FIRST_HALF['triple_captain']}."
     )
 
 
