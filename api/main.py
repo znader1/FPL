@@ -640,12 +640,19 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
         raise HTTPException(status_code=502, detail=f"Failed to fetch entry picks. Last error: {last_err}")
 
     # Free hit picks are temporary — the real permanent squad is from the GW before.
-    # If no explicit event was requested and the fetched GW used free hit, step back one GW.
-    if not explicit_squad_event and myteam.get("active_chip") == "freehit" and used_event_id > 1:
+    # Step back one GW unless the caller asked for the free hit GW itself: a request
+    # for a later GW (the frontend always sends one when planning) fell back here
+    # because that GW's picks aren't published yet.
+    planning_past_fh = not explicit_squad_event or (
+        requested_squad_event_id is not None and int(requested_squad_event_id) > int(used_event_id)
+    )
+    free_hit_reverted_from = None
+    if planning_past_fh and myteam.get("active_chip") == "freehit" and used_event_id > 1:
         try:
             prev_team = fpl_client.get_entry_picks(entry_id, used_event_id - 1)
             notes.append(f"Free hit active in GW{used_event_id}; using permanent squad from GW{used_event_id - 1}.")
             myteam = prev_team
+            free_hit_reverted_from = int(used_event_id)
             used_event_id = used_event_id - 1
         except Exception:
             notes.append(f"Free hit active in GW{used_event_id}; could not fetch GW{used_event_id - 1}, using free hit squad.")
@@ -685,6 +692,7 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
     return {
         "entry_id": int(entry_id),
         "squad_event_id": int(used_event_id),
+        "free_hit_reverted_from": free_hit_reverted_from,
         "max_event_id": int(max_event_id),
         "bootstrap": bootstrap,
         "fixtures": fixtures,
@@ -799,6 +807,9 @@ def build_squad(payload):
     return {
         "entry_id": ctx["entry_id"],
         "event_id": ctx["squad_event_id"],
+        # The GW whose Free Hit was undone to give this squad: the squad is the
+        # current one as of that GW, though its picks are from the GW before.
+        "free_hit_reverted_from": ctx.get("free_hit_reverted_from"),
         "entry": entry_identity,
         "notes": ctx.get("notes") or [],
         "captain_player_id": captain_id,
