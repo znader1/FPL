@@ -418,9 +418,12 @@ const Index = () => {
     selectedGW !== null &&
     selectedGW <= currentLiveGw;
 
-  const substitutionNotice = squadSubstituted
-    ? `Showing your latest squad (GW ${returnedSquadGw}) — your GW ${squadGW} picks aren't available yet.`
-    : undefined;
+  const freeHitRevertedFrom = squadQuery.data?.free_hit_reverted_from;
+  const substitutionNotice = !squadSubstituted
+    ? undefined
+    : typeof freeHitRevertedFrom === "number"
+      ? `Your GW ${freeHitRevertedFrom} Free Hit squad lasted one week — showing your permanent squad (GW ${returnedSquadGw}).`
+      : `Showing your latest squad (GW ${returnedSquadGw}) — your GW ${squadGW} picks aren't available yet.`;
 
   useEffect(() => {
     if (chipStrategy !== "wildcard" && chipPlayEventId !== undefined) {
@@ -500,6 +503,7 @@ const Index = () => {
     squadEventId: squadQuery.data?.event_id,
     deadlineGw,
     placeholder: squadQuery.isPlaceholderData,
+    freeHitRevertedFrom: squadQuery.data?.free_hit_reverted_from,
   });
   const [latestSquad, setLatestSquad] = useState<FplSquad | undefined>(undefined);
   useEffect(() => {
