@@ -1180,7 +1180,13 @@ const Index = () => {
         )}
         {showWildcardCard && (
           <div className="mx-auto w-full max-w-5xl px-4 pt-4">
-            <WildcardCard row={wildcardRow} previewing={wildcardShown} busy={recommendationMutation.isPending} onToggle={toggleWildcardPreview} />
+            <WildcardCard
+              row={wildcardRow}
+              draftGw={deadlineGw}
+              previewing={wildcardShown}
+              busy={recommendationMutation.isPending}
+              onToggle={toggleWildcardPreview}
+            />
           </div>
         )}
         <PitchVisualization
@@ -1225,7 +1231,7 @@ const Index = () => {
                   aria-label="Re-run ZN Pick"
                 >
                   <Zap className="h-3.5 w-3.5" />
-                  {recommendationMutation.isPending ? "Working…" : "ZN Pick"}
+                  {recommendationMutation.isPending ? "Working…" : "Re-run"}
                 </Button>
               )}
               {plan && entryId > 0 ? (

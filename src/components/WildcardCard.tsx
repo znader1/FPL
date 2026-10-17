@@ -5,6 +5,8 @@ import { fmtGain } from "@/lib/format";
 type Props = {
   /** The chip plan's wildcard outlook row; absent once the wildcard is played. */
   row: ChipOutlookRow | undefined;
+  /** The GW the preview drafts for (the deadline GW) — not necessarily the best week. */
+  draftGw?: number;
   /** The pitch is showing the wildcard draft. */
   previewing: boolean;
   /** ZN Pick is running; the button waits for it. */
@@ -15,7 +17,7 @@ type Props = {
 /** The wildcard on the main page: its best week and the engine's guidance, with a
  *  preview of the wildcard draft on the pitch. Quieter than ChipNudgeCard — it is an
  *  option, not a recommendation, until the backend's wildcard timing clears its bar. */
-export const WildcardCard = ({ row, previewing, busy = false, onToggle }: Props) => {
+export const WildcardCard = ({ row, draftGw, previewing, busy = false, onToggle }: Props) => {
   if (!row) return null;
   const best = row.event_id !== null && row.ev_gain !== null ? { gw: row.event_id, gain: row.ev_gain } : null;
 
@@ -28,14 +30,19 @@ export const WildcardCard = ({ row, previewing, busy = false, onToggle }: Props)
           {best ? (
             <>
               {" "}
-              · best week GW{best.gw}, <span className="font-semibold text-primary">{fmtGain(best.gain)} xPts</span> over your squad
+              · best week GW{best.gw}: <span className="font-semibold text-primary">{fmtGain(best.gain)} xPts</span> over the weeks
+              from there, beyond what your planned transfers already gain
             </>
           ) : (
             " · no wildcard week stands out yet"
           )}
         </p>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {previewing ? "The pitch shows the wildcard draft. Play it from the Chip step." : row.guidance}
+          {previewing
+            ? `The pitch shows a wildcard${draftGw ? ` for GW${draftGw}` : ""}, drafted on your horizon setting${
+                best && draftGw && best.gw !== draftGw ? ` — not the GW${best.gw} window above` : ""
+              }. Play it from the Chip step.`
+            : row.guidance}
         </p>
       </div>
       <button
@@ -43,7 +50,7 @@ export const WildcardCard = ({ row, previewing, busy = false, onToggle }: Props)
         disabled={busy}
         className="ml-auto shrink-0 rounded-md border border-primary/50 px-3 py-1.5 text-xs font-semibold text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
       >
-        {previewing ? "Back to my squad" : "See wildcard squad"}
+        {previewing ? "Back to my squad" : `See ${draftGw ? `GW${draftGw} ` : ""}wildcard draft`}
       </button>
     </div>
   );
