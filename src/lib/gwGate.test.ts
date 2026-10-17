@@ -78,6 +78,18 @@ describe("isLatestSquad (the squad the GW plan may seed from)", () => {
   });
 });
 
+describe("isLatestSquad after a Free Hit", () => {
+  // GW7 played with Free Hit, deadline GW8: /squad reverts to the GW6 picks.
+  const base = { squadEventId: 6, deadlineGw: 8, placeholder: false };
+  it("accepts the permanent squad the Free Hit was undone to", () => {
+    expect(isLatestSquad({ ...base, freeHitRevertedFrom: 7 })).toBe(true);
+  });
+  it("still rejects an old squad with no Free Hit behind it", () => {
+    expect(isLatestSquad(base)).toBe(false);
+    expect(isLatestSquad({ ...base, freeHitRevertedFrom: null })).toBe(false);
+  });
+});
+
 describe("shouldAutoRecommend (entering a flow step without ZN Pick's answer)", () => {
   const ok = { step: "transfers" as const, hasPlanRec: false, pending: false, canRecommend: true, entryId: 7, deadlineGw: 29, firedKey: null };
   it("fires once per entry + deadline GW, never on the squad step or while pending", () => {
