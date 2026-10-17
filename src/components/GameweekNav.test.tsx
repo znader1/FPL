@@ -38,10 +38,18 @@ describe("live-gameweek indicator", () => {
 });
 
 describe("control-bar slots", () => {
-  it("offers a compact rank for phones beside the full one", () => {
+  it("shows the compact rank until the widest screens, so it never runs under the action", () => {
     render(<GameweekNav {...base} rank="1,896,801" />);
-    expect(screen.getByText("1,896,801").className).toContain("sm:inline");
-    expect(screen.getByText("1.9M").className).toContain("sm:hidden");
+    expect(screen.getByText("1,896,801").className).toContain("2xl:inline");
+    const compact = screen.getByText("1.9M");
+    expect(compact.className).toContain("2xl:hidden");
+    expect(compact.getAttribute("title")).toBe("1,896,801");
+  });
+
+  it("the stats clip instead of overflowing, and the numbers keep their width", () => {
+    render(<GameweekNav {...base} rank="1,896,801" />);
+    expect(screen.getByText("1.9M").className).toContain("shrink-0");
+    expect(screen.getByText("1.9M").closest(".overflow-hidden")).toBeTruthy();
   });
 
   it("renders the squad toggle inside the gameweek bar", () => {
