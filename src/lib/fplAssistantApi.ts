@@ -350,6 +350,8 @@ export interface FplSquad {
   bench: FplTeamRecommendationBenchPlayer[];
   entry_history?: FplEntryHistory;
   active_chip?: string | null;
+  /** Set when this GW was played with Free Hit and the squad was undone to the GW before. */
+  free_hit_reverted_from?: number | null;
 }
 
 export interface FplTransferApplicationSummary {

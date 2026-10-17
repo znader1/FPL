@@ -41,12 +41,20 @@ export const resolveGwGateState = ({
  * than the GW before the deadline (the finished or live one), and `/squad` for
  * a future GW substitutes those same picks under a higher event_id — so
  * `event_id >= deadlineGw − 1` is the invariant. Placeholder data (the previous
- * GW's squad shown while a new one loads) never counts.
+ * GW's squad shown while a new one loads) never counts. After a Free Hit the
+ * backend undoes it to the GW before (`free_hit_reverted_from`): that squad is
+ * current as of the Free Hit GW, so it counts from there.
  */
-export const isLatestSquad = (args: { squadEventId: number | undefined; deadlineGw: number | undefined; placeholder: boolean }): boolean => {
-  const { squadEventId, deadlineGw, placeholder } = args;
+export const isLatestSquad = (args: {
+  squadEventId: number | undefined;
+  deadlineGw: number | undefined;
+  placeholder: boolean;
+  freeHitRevertedFrom?: number | null;
+}): boolean => {
+  const { squadEventId, deadlineGw, placeholder, freeHitRevertedFrom } = args;
   if (placeholder || typeof deadlineGw !== "number" || typeof squadEventId !== "number") return false;
-  return squadEventId >= deadlineGw - 1;
+  const currentAsOf = typeof freeHitRevertedFrom === "number" ? Math.max(squadEventId, freeHitRevertedFrom) : squadEventId;
+  return currentAsOf >= deadlineGw - 1;
 };
 
 /**
