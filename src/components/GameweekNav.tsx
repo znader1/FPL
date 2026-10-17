@@ -124,13 +124,15 @@ export const GameweekNav = ({
       </div>
 
       {/* Stats */}
-      <div className="flex items-center gap-2 min-w-0 sm:gap-4">
-        <div className="flex items-center gap-1 sm:gap-1.5">
+      {/* Clips rather than overflowing: in a crowded row the label truncates and
+          the number keeps its width, so nothing slides under the action. */}
+      <div className="flex items-center gap-2 min-w-0 overflow-hidden sm:gap-4">
+        <div className="flex items-center gap-1 min-w-0 sm:gap-1.5">
           <Star className="h-3.5 w-3.5 text-primary shrink-0" />
-          <span className="hidden xl:inline text-xs text-muted-foreground shrink-0">
+          <span className="hidden xl:block min-w-0 truncate text-xs text-muted-foreground">
             {isRecommendation ? "Proj. xPts" : "GW Pts"}
           </span>
-          <span className="text-sm font-bold text-primary tabular-nums">{points}</span>
+          <span className="shrink-0 text-sm font-bold text-primary tabular-nums">{points}</span>
         </div>
 
         {!isRecommendation && rank !== "—" && (
@@ -138,9 +140,13 @@ export const GameweekNav = ({
             <div className="hidden xl:block h-4 w-px bg-border shrink-0" />
             <div className="flex items-center gap-1 min-w-0 sm:gap-1.5">
               <Trophy className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-              <span className="hidden xl:inline text-xs text-muted-foreground shrink-0">Rank</span>
-              <span className="hidden text-sm font-bold text-foreground tabular-nums sm:inline">{rank}</span>
-              <span className="text-sm font-bold text-foreground tabular-nums sm:hidden">{compactRank(rank)}</span>
+              <span className="hidden xl:block min-w-0 truncate text-xs text-muted-foreground">Rank</span>
+              {/* Full rank only where the row has room for it; the compact form
+                  (1.8M) keeps the action button clear everywhere else. */}
+              <span className="hidden shrink-0 text-sm font-bold text-foreground tabular-nums 2xl:inline">{rank}</span>
+              <span className="shrink-0 text-sm font-bold text-foreground tabular-nums 2xl:hidden" title={rank}>
+                {compactRank(rank)}
+              </span>
             </div>
           </>
         )}
