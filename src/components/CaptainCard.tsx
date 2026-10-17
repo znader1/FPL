@@ -2,7 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { JerseyIcon } from "@/components/JerseyIcon";
 import { FixtureChip } from "@/components/FixtureChip";
-import type { CaptainCandidate } from "@/lib/captainLab";
+import { fmtRankSwing, type CaptainCandidate } from "@/lib/captainLab";
 
 interface CaptainCardProps {
   c: CaptainCandidate;
@@ -21,7 +21,6 @@ interface CaptainCardProps {
 const RANGE_MAX = 20;
 const pct = (v: number) => Math.max(0, Math.min(100, (v / RANGE_MAX) * 100));
 
-const fmtRank = (n: number) => `${n >= 0 ? "+" : "−"}${Math.round(Math.abs(n) / 1000)}k`;
 
 /** One captain candidate: xPts hero, likely range, EO and rank-if-haul tiles, note,
  *  and separate Make captain / Make vice buttons (v2 flow — no whole-card click). */
@@ -111,7 +110,7 @@ export function CaptainCard({ c, role, znPick, onMakeCaptain, onMakeVice, owners
         <div className="rounded-[10px] bg-background/60 px-2.5 py-2">
           <div className="text-[10px] font-semibold uppercase tracking-[.06em] text-muted-foreground">Rank if he hauls</div>
           <div className={`mt-0.5 text-base font-extrabold tabular-nums ${c.bigGain ? "text-accent" : "text-foreground"}`}>
-            {typeof c.rankGainIfHaul === "number" ? fmtRank(c.rankGainIfHaul) : "—"}
+            {typeof c.rankGainIfHaul === "number" ? fmtRankSwing(c.rankGainIfHaul) : "—"}
           </div>
         </div>
       </div>

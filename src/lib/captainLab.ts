@@ -52,6 +52,9 @@ const CANDIDATES = 3;
 const BIG_GAIN_RANKS = 20_000;
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
+/** "+711k" / "−3k" — the Captain step's rank-swing figure. */
+export const fmtRankSwing = (n: number) => `${n >= 0 ? "+" : "−"}${Math.round(Math.abs(n) / 1000)}k`;
+
 /** The pitch's parser (`src/lib/fixtureLabel.ts`), narrowed to the captain card's shape. */
 export function parseFixtureLabel(label?: string | null): CaptainFixture | undefined {
   const f = parseSharedFixtureLabel(label);
@@ -171,8 +174,14 @@ export function buildCaptainLab(rec: FplTeamRecommendation, goal: CaptainGoal, m
     } else {
       headline = `Captain ${zn.name} to climb the ranks.`;
       const topOwn = topXpts ? ownText(topXpts) : null;
-      if (topXpts && topXpts.id !== zn.id && topOwn) {
+      const swings = typeof zn.rankGainIfHaul === "number" && (!topXpts || typeof topXpts.rankGainIfHaul === "number");
+      if (topXpts && topXpts.id !== zn.id && swings) {
+        // The tiles show real swings; copy must quote them, not claim the EO makes a haul worthless.
+        subcopy = `${topXpts.name} projects higher, but his haul moves you about ${fmtRankSwing(topXpts.rankGainIfHaul!)}. ${zn.name}'s moves you ${fmtRankSwing(zn.rankGainIfHaul!)}, the biggest climb on offer.`;
+      } else if (topXpts && topXpts.id !== zn.id && topOwn) {
         subcopy = `${topXpts.name} projects higher, but ${topOwn} means a haul gains you little on the field. ${zn.name} offers the best upside for the risk.`;
+      } else if (swings) {
+        subcopy = `${zn.name} is the biggest rank swing if he hauls (${fmtRankSwing(zn.rankGainIfHaul!)}), and the highest projected besides.`;
       } else if (rankAware) {
         subcopy = `${zn.name} is the biggest rank swing if he hauls, and the field's favourite besides.`;
       } else {

@@ -74,7 +74,21 @@ describe("buildCaptainLab", () => {
     expect(run("chase").znPickId).toBe(2);
     expect(run("safe").headline).toBe("Protect your rank with Haaland.");
     expect(run("chase").headline).toBe("Captain Saka to climb the ranks.");
-    expect(run("chase").subcopy).toContain("142% EO in the top 10k");
+    expect(run("chase").subcopy).toBe("Haaland projects higher, but his haul moves you about +3k. Saka's moves you +41k, the biggest climb on offer.");
+  });
+
+  it("chase copy quotes the rank swings, not the EO, once the rank model answers", () => {
+    // Groß 94% EO yet +711k vs De Cuyper 85% +738k: "gains you little" would contradict the tiles.
+    const close = [
+      p(1, "Groß", "BHA", 8.0, { eo_top10k: 94, rank_gain_if_haul: 711_000, xpts_p90: 9 }),
+      p(2, "Haaland", "MCI", 7.5, { eo_top10k: 130, rank_gain_if_haul: 502_000, xpts_p90: 10 }),
+      p(3, "De Cuyper", "BHA", 7.45, { eo_top10k: 85, rank_gain_if_haul: 738_000, xpts_p90: 9 }),
+    ];
+    const lab = run("chase", undefined, rec(close));
+    expect(lab.znPickId).toBe(3);
+    expect(lab.subcopy).toBe("Groß projects higher, but his haul moves you about +711k. De Cuyper's moves you +738k, the biggest climb on offer.");
+    const top = run("chase", undefined, rec([{ ...close[2], xpts: 8.1 }, close[0]]));
+    expect(top.subcopy).toBe("De Cuyper is the biggest rank swing if he hauls (+738k), and the highest projected besides.");
   });
 
   it("a manual pick overrides the ZN Pick and the vice is the best remaining by xPts", () => {
