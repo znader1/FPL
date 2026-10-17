@@ -1,5 +1,6 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { parseEntryIdInput } from "../entryId";
+import { getInitialEntryId, parseEntryIdInput } from "../entryId";
 
 describe("parseEntryIdInput", () => {
   it("parses plain digits", () => {
@@ -28,5 +29,17 @@ describe("parseEntryIdInput", () => {
   });
   it("rejects decimals", () => {
     expect(parseEntryIdInput("58.4")).toBeNull();
+  });
+});
+
+describe("getInitialEntryId", () => {
+  it("prefers ?entry_id, then localStorage, else 0 (shared by Index, Fixtures, League)", () => {
+    localStorage.removeItem("fpl_entry_id");
+    expect(getInitialEntryId("?entry_id=588004")).toBe(588004);
+    localStorage.setItem("fpl_entry_id", "12");
+    expect(getInitialEntryId("?entry_id=0")).toBe(12);
+    expect(getInitialEntryId("")).toBe(12);
+    localStorage.setItem("fpl_entry_id", "junk");
+    expect(getInitialEntryId("")).toBe(0);
   });
 });

@@ -80,7 +80,8 @@ describe("DecisionCard spend", () => {
   it("applies the plan's moves via onApplyTransferAtIndex(k-1)", () => {
     const onApply = vi.fn();
     render(<DecisionCard plan={plan(detail({ moves: [mv(1, 2), mv(3, 4)] }))} onApplyTransferAtIndex={onApply} appliedTransferCount={0} />);
-    fireEvent.click(screen.getByRole("button", { name: /apply 2 moves/i }));
+    // Card 2's button applies the plan through that move: index k-1.
+    fireEvent.click(screen.getByRole("button", { name: /apply moves 1–2/i }));
     expect(onApply).toHaveBeenCalledWith(1);
   });
 
@@ -284,5 +285,130 @@ describe("DecisionCard single-week horizon", () => {
     expect(screen.getByTestId("decision-gains").textContent).toBe("+3.0 this GW");
     expect(screen.getByTestId("runner-ups").textContent).toContain("+2.2 this GW");
     expect(screen.getByTestId("runner-ups").textContent).not.toContain("+3.8");
+  });
+});
+
+describe("DecisionCard move cards (2026-10 Command Center)", () => {
+  it("renders one card per move with both jerseys and the in-player's name leading", () => {
+    render(<DecisionCard plan={plan(detail({}))} />);
+    const cards = screen.getAllByTestId("move-card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].querySelectorAll("svg.drop-shadow-md")).toHaveLength(2);
+    expect(cards[0].textContent).toMatch(/B2.*for S1/);
+  });
+
+  it("labels each move free or hit by position against the free transfers, and nets the hit", () => {
+    render(<DecisionCard plan={plan(detail({ moves: [mv(1, 2, 0.9, 2.8), mv(3, 4, 1.0, 5.2)], ft_before: 1, hit_cost: 4, horizon_gain: 8.0 }))} />);
+    const cards = screen.getAllByTestId("move-card");
+    expect(cards[0].textContent).toContain("Free transfer");
+    expect(cards[0].querySelector('[data-testid="move-net"]')?.textContent).toBe("+2.8");
+    expect(cards[1].textContent).toContain("−4 hit");
+    expect(cards[1].querySelector('[data-testid="move-net"]')?.textContent).toBe("+1.2");
+  });
+
+  it("colours a negative net rose", () => {
+    render(<DecisionCard plan={plan(detail({ moves: [mv(1, 2, 0.5, 2.0), mv(3, 4, 0.2, 1.0)], ft_before: 1, hit_cost: 4 }))} />);
+    const nets = screen.getAllByTestId("move-net");
+    expect(nets[1].textContent).toBe("−3.0");
+    expect(nets[1].className).toContain("fdr-4");
+    expect(nets[0].className).toContain("accent");
+  });
+
+  it("draws the out/in comparison bars only when the seller's horizon xPts is known", () => {
+    const { rerender } = render(<DecisionCard plan={plan(detail({}))} />);
+    expect(screen.queryByTestId("xpts-bars")).toBeNull();
+    rerender(<DecisionCard plan={plan(detail({}))} horizonXptsById={{ 1: 14.2 }} />);
+    const bars = screen.getByTestId("xpts-bars");
+    expect(bars.textContent).toContain("14.2");
+    expect(bars.textContent).toContain("17.0");
+    const fills = bars.querySelectorAll('[data-testid="xpts-bar-fill"]');
+    expect((fills[0] as HTMLElement).style.width).toBe("79%");
+    expect((fills[1] as HTMLElement).style.width).toBe("94%");
+  });
+
+  it("names the next fixtures in the reason line when the backend sends them", () => {
+    const m = { ...mv(1, 2), sell: { ...mv(1, 2).sell, next_fixture: "LIV (A)" }, buy: { ...mv(1, 2).buy, next_fixture: "WHU (H)" } };
+    render(<DecisionCard plan={plan(detail({ moves: [m] }))} />);
+    expect(screen.getByTestId("move-card").textContent).toContain("S1 has LIV (A); B2 gets WHU (H)");
+  });
+
+  it("marks the applied card and offers Undo on it", () => {
+    render(<DecisionCard plan={plan(detail({}))} onApplyTransferAtIndex={() => {}} onResetAppliedTransfers={() => {}} appliedTransferCount={1} />);
+    const card = screen.getByTestId("move-card");
+    expect(card.getAttribute("data-applied")).toBe("true");
+    expect(within(card).getByRole("button", { name: /undo/i })).toBeTruthy();
+  });
+
+  it("offers 'Apply this move' on the next move in sequence", () => {
+    const onApply = vi.fn();
+    render(<DecisionCard plan={plan(detail({}))} onApplyTransferAtIndex={onApply} appliedTransferCount={0} />);
+    fireEvent.click(screen.getByRole("button", { name: /apply this move/i }));
+    expect(onApply).toHaveBeenCalledWith(0);
+  });
+});
+
+describe("DecisionCard roll alternative card", () => {
+  const rollDetail = (ft_before: number) => detail({
+    action: "roll", moves: [], this_gw_gain: 0, horizon_gain: 0, ft_before, ft_after: ft_before + 1,
+    plan_net: 14, roll_alternative: { net: 13, gw: 5, moves: [mv(1, 3, 2.0, 6.0)] },
+    next_move: { gw: 6, moves: [mv(1, 3), mv(2, 4)], horizon_gain: 14 },
+  });
+
+  it("shows the rejected move as a card netting what it earns on its own, and no button without a beam match", () => {
+    render(<DecisionCard plan={plan(rollDetail(1))} onApplyTransferAtIndex={() => {}} />);
+    const card = screen.getByTestId("move-card");
+    expect(card.textContent).toContain("B3");
+    expect(card.textContent).toContain("Free transfer");
+    expect(within(card).getByTestId("move-net").textContent).toBe("+6.0");
+    expect(within(card).queryByRole("button")).toBeNull();
+  });
+
+  it("labels alternative moves free or hit by position and bills the hit the alternative actually carries", () => {
+    // Two moves on one FT: gains 6 + 5 = 11, alt.net 7 → the alternative's own hit is 4.
+    const d = detail({
+      action: "roll", moves: [], this_gw_gain: 0, horizon_gain: 0, ft_before: 1, ft_after: 2, plan_net: 14,
+      roll_alternative: { net: 7, gw: 5, moves: [mv(1, 3, 2.0, 6.0), mv(2, 4, 1.0, 5.0)] },
+    });
+    render(<DecisionCard plan={plan(d)} />);
+    const cards = screen.getAllByTestId("move-card");
+    expect(cards[0].textContent).toContain("Free transfer");
+    expect(within(cards[0]).getByTestId("move-net").textContent).toBe("+6.0");
+    expect(cards[1].textContent).toContain("−4 hit");
+    expect(within(cards[1]).getByTestId("move-net").textContent).toBe("+1.0");
+  });
+
+  it("bills an 8-point hit as −8, not a hard-coded −4", () => {
+    render(<DecisionCard plan={plan(detail({ moves: [mv(1, 2, 0.9, 2.8), mv(3, 4, 1.0, 5.2)], ft_before: 0, hit_cost: 8, horizon_gain: 8.0 }))} />);
+    const cards = screen.getAllByTestId("move-card");
+    expect(cards[0].textContent).toContain("−4 hit"); // 8 split over two hit moves
+    expect(cards[1].textContent).toContain("−4 hit");
+    render(<DecisionCard plan={plan(detail({ moves: [mv(1, 2, 0.9, 2.8)], ft_before: 0, hit_cost: 8, horizon_gain: 2.8 }))} />);
+    expect(screen.getAllByTestId("move-card")[2].textContent).toContain("−8 hit");
+  });
+
+  it("calls a move free when the plan carries no hit cost, however many free transfers it says (wildcard / free hit)", () => {
+    render(<DecisionCard plan={plan(detail({ moves: [mv(1, 2), mv(3, 4)], ft_before: 0, hit_cost: 0 }))} />);
+    for (const c of screen.getAllByTestId("move-card")) expect(c.textContent).toContain("Free transfer");
+  });
+
+  it("wires 'Make the move anyway' to the matching beam index when the FT is free", () => {
+    const onApply = vi.fn();
+    const beam = [{ sell: { id: 9, name: "X", team: "AAA", price: 5 }, buy: { id: 8, name: "Y", team: "BBB", price: 5 }, score_gain: 1 },
+                  { sell: { id: 1, name: "S1", team: "LIV", price: 7 }, buy: { id: 3, name: "B3", team: "BOU", price: 6.1 }, score_gain: 6 }];
+    render(<DecisionCard plan={plan(rollDetail(1))} onApplyTransferAtIndex={onApply} beamMoves={beam} />);
+    fireEvent.click(screen.getByRole("button", { name: /make the move anyway/i }));
+    expect(onApply).toHaveBeenCalledWith(1);
+  });
+
+  it("says 'Take the hit anyway' when there is no free transfer to spend", () => {
+    const beam = [{ sell: { id: 1, name: "S1", team: "LIV", price: 7 }, buy: { id: 3, name: "B3", team: "BOU", price: 6.1 }, score_gain: 6 }];
+    render(<DecisionCard plan={plan(rollDetail(0))} onApplyTransferAtIndex={() => {}} beamMoves={beam} />);
+    expect(screen.getByRole("button", { name: /take the hit anyway/i })).toBeTruthy();
+    expect(screen.getByTestId("move-card").textContent).toContain("−4 hit");
+  });
+
+  it("puts the roll reasoning in the tip box", () => {
+    render(<DecisionCard plan={plan(rollDetail(1))} />);
+    expect(screen.getByTestId("plan-tip").textContent).toMatch(/rolling nets \+14\.0/);
   });
 });

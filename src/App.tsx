@@ -3,7 +3,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Navigate, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { isUnauthorized } from "@/lib/authFetch";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
@@ -59,6 +59,11 @@ const App = () => (
               <Route path="/login" element={<Auth />} />
               <Route path="/signup" element={<Auth />} />
               <Route path="/app" element={<ProtectedRoute><Index /></ProtectedRoute>} />
+              {/* The GW flow's steps (v2 handoff) render inside Index so the squad,
+                  recommendation and plan state survive every step change. */}
+              <Route path="/app/plan/:step" element={<ProtectedRoute><Index /></ProtectedRoute>} />
+              {/* The standalone Captain Lab became the flow's captain step. */}
+              <Route path="/app/captain" element={<Navigate to="/app/plan/captain" replace />} />
               <Route path="/app/league" element={<ProtectedRoute><League /></ProtectedRoute>} />
               <Route path="/app/fixtures" element={<ProtectedRoute><Fixtures /></ProtectedRoute>} />
               {import.meta.env.DEV && import.meta.env.VITE_REPLAY_MODE === "1" && (

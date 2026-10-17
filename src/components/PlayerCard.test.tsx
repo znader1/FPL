@@ -40,6 +40,15 @@ describe("points under the player", () => {
     expect(screen.getByTitle("Projected points").textContent).toBe("6.4");
   });
 
+  it("keeps the team abbreviation off the points row so a finished GW fits a 58px card", () => {
+    // GW6 on a phone: "BRE 1 · 3.01" in one flex row overflowed the card and
+    // the five midfielders' labels ran into each other.
+    renderCard({ team: "BRE", livePoints: 1, points: 3.01 });
+    const row = screen.getByTitle("Projected points").parentElement!;
+    expect(row.textContent).not.toContain("BRE");
+    expect(screen.getByText("BRE")).toBeTruthy();
+  });
+
   it("hides a real score that belongs to a different gameweek", () => {
     // Planning a future GW renders the substituted latest squad. Painting its
     // points under a "GW3" heading claims a score that does not exist yet —
@@ -86,5 +95,40 @@ describe("hover card information order", () => {
     const details = container.querySelector("details");
     // Rendered but closed: available on demand, not competing with the answer.
     expect(details === null || (details as HTMLDetailsElement).open === false).toBe(true);
+  });
+});
+
+describe("xPts aura (Command Center)", () => {
+  it("renders no aura by default", () => {
+    renderCard();
+    expect(screen.queryByTestId("xpts-aura")).toBeNull();
+  });
+
+  it("sizes the aura to 30 + xPts × 11 px, centred on the jersey", () => {
+    renderCard({ aura: true, points: 6.4 });
+    const aura = screen.getByTestId("xpts-aura") as HTMLElement;
+    expect(aura.style.width).toBe("100px");
+    expect(aura.style.height).toBe("100px");
+    expect(aura.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("uses the projection, not the live score, for the aura", () => {
+    renderCard({ aura: true, points: 2, livePoints: 13 });
+    expect((screen.getByTestId("xpts-aura") as HTMLElement).style.width).toBe("52px");
+  });
+});
+
+describe("incoming-transfer pill", () => {
+  it("shows IN +gain above a newly applied player", () => {
+    renderCard({ inGain: 2.4 });
+    expect(screen.getByText("IN +2.4")).toBeTruthy();
+  });
+  it("shows a bare IN when the player is new but the gain is unknown", () => {
+    renderCard({ inGain: null });
+    expect(screen.getByText("IN")).toBeTruthy();
+  });
+  it("shows nothing when the player was already in the squad", () => {
+    renderCard();
+    expect(screen.queryByText(/^IN /)).toBeNull();
   });
 });

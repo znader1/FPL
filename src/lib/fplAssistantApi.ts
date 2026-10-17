@@ -27,6 +27,19 @@ export interface FplTeamRecommendationPlayer {
   photo_url?: string;
   alerts?: FplPlayerAlert[];
   score_breakdown?: FplPlayerScoreBreakdown;
+  /** Captain Lab (2026-10 handoff). None are emitted by today's backend; the
+   *  page falls back to `score_breakdown.distribution` for the range and to the
+   *  suggested captain for both goals when ownership data is absent. */
+  xpts_p10?: number | null;
+  xpts_p90?: number | null;
+  /** Effective ownership in the top 10k, percent (can exceed 100 with captaincy). No source yet. */
+  eo_top10k?: number | null;
+  /** The GW the top-10k sample was taken in (picks are readable only after a deadline, so it lags the planned GW by one). */
+  eo_top10k_event_id?: number | null;
+  /** FPL's overall selected_by_percent — the honest ownership figure the backend does send. */
+  ownership_pct?: number | null;
+  /** Estimated ranks gained if the player hauls. */
+  rank_gain_if_haul?: number | null;
 }
 
 export interface FplFixturesHorizonItem {
@@ -300,6 +313,8 @@ export interface FplEntryHistory {
   event_transfers?: number;
   event_transfers_cost?: number;
   points_on_bench?: number;
+  /** In the bank, £m. Not emitted by today's backend; the navbar shows it only when present. */
+  bank?: number | null;
 }
 
 /**
@@ -367,6 +382,8 @@ export interface FplOptimizedSquad extends FplSquad {
   captain_player_id: number;
   vice_player_id: number;
   projected_points_with_captain: number;
+  /** "Top N%" of the sampled field for this squad's total (transfer steps carry their own). */
+  projected_percentile?: number | null;
 }
 
 export interface FplTransferAppliedStep extends FplOptimizedSquad {
@@ -428,6 +445,16 @@ export interface FplHistoryContext {
   season?: string | null;
 }
 
+/** The sampled field behind the benchmarks: `overall_quantiles` is q0…q100 of
+ *  the uniformly sampled league's projected totals, so a client-side total can
+ *  be placed without another request (`percentileFromQuantiles`). */
+export interface FplProjectedField {
+  event_id?: number | null;
+  top10k_n?: number | null;
+  overall_n?: number | null;
+  overall_quantiles?: number[] | null;
+}
+
 export interface FplTeamRecommendation extends FplSquad {
   entry_id: number;
   event_id: number;
@@ -438,6 +465,14 @@ export interface FplTeamRecommendation extends FplSquad {
   captain_player_id: number;
   vice_player_id: number;
   projected_points_with_captain: number;
+  /** Command Center benchmarks (2026-10 handoff), from the backend's sampled
+   *  picks scored against this request's xPts (branch `feature/top10k-eo`);
+   *  null until the sample job has run. The card renders its ring and bars
+   *  only when present. */
+  projected_percentile?: number | null;
+  projected_top10k_avg?: number | null;
+  projected_overall_avg?: number | null;
+  projected_field?: FplProjectedField | null;
   chip_strategy?: FplChipStrategySummary;
   transfers?: FplTransfersRecommendation;
   transfer_plan_horizon?: FplTransferPlanHorizon;

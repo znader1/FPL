@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Search } from "lucide-react";
+import { findIncomingPlayers } from "@/lib/incomingPlayers";
+import { parseFixtureLabel } from "@/lib/fixtureLabel";
 import {
   CHIP_LABELS,
   type ChipName,
@@ -41,6 +43,16 @@ interface PitchVisualizationProps {
   showActualPoints?: boolean;
   /** Optional action rendered next to the Squad / ZN Pick tabs (e.g. Optimize my squad). */
   headerAction?: ReactNode;
+  /** v2 flow: incoming players by id (gain, or null when unknown). Overrides the
+   *  payload-derived map, which a plan-built squad can't carry. */
+  incoming?: Record<number, number | null>;
+  /** v2 flow bench step: outline valid swap targets, dim invalid ones. */
+  starterState?: (playerId: number) => "valid" | "invalid" | undefined;
+  onStarterClick?: (playerId: number) => void;
+  /** Bench step: no GW bar, heading or legend — just the turf. */
+  compact?: boolean;
+  /** Bench step lists the bench itself; don't draw the strip under the pitch. */
+  hideBench?: boolean;
 }
 
 export const getRowGapClass = (count: number) => {
@@ -58,25 +70,7 @@ const chipLabel = (value?: string | null) => {
   return Object.prototype.hasOwnProperty.call(CHIP_LABELS, value) ? CHIP_LABELS[value as ChipName] : value;
 };
 
-const parseNextFixturesLabel = (label?: string): Player["fixture"] | undefined => {
-  if (typeof label !== "string") return undefined;
-  const trimmed = label.trim();
-  if (!trimmed) return undefined;
-
-  const difficultyMatch = trimmed.match(/\(D([1-5])\)/i);
-  const difficulty = difficultyMatch ? Number(difficultyMatch[1]) : undefined;
-
-  const isHome = trimmed.startsWith("H-") ? true : trimmed.startsWith("A-") ? false : undefined;
-  const opponentMatch = trimmed.match(/^[HA]-([A-Z]{2,4})/);
-  const opponent = opponentMatch?.[1] ?? "";
-
-  return {
-    label: trimmed,
-    opponent,
-    isHome,
-    difficulty,
-  };
-};
+const parseNextFixturesLabel = (label?: string): Player["fixture"] | undefined => parseFixtureLabel(label);
 
 const getCaptainIds = (team: PitchTeam) => {
   const captainFromId = typeof team.captain_player_id === "number" ? team.captain_player_id : undefined;
@@ -107,8 +101,12 @@ const toPitchPlayer = (
   fixture?: Player["fixture"],
   isLiveGw = false,
   showActualPoints = false,
+  inGain?: number,
 ): Player => ({
   id: player.player_id,
+  // The glow reads xPts this GW; it's only legible on the pitch, so the bench
+  // never gets one. Starters pass `aura` where they're rendered below.
+  inGain,
   name: player.web_name,
   team: player.team_short,
   teamName: player.team_name,
@@ -186,6 +184,11 @@ export const PitchVisualization = ({
   updatedAt = null,
   showActualPoints = false,
   headerAction,
+  incoming: incomingProp,
+  starterState,
+  onStarterClick,
+  compact = false,
+  hideBench = false,
 }: PitchVisualizationProps) => {
   const [draftId, setDraftId] = useState("");
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -231,6 +234,37 @@ export const PitchVisualization = ({
   const bench = useMemo(() => {
     return [...(displayedTeam?.bench ?? [])].sort((a, b) => a.bench_order - b.bench_order);
   }, [displayedTeam]);
+  const incomingFromTeam = useMemo(() => (team ? findIncomingPlayers(team) : {}), [team]);
+  const incoming = incomingProp ?? incomingFromTeam;
+  const teamName = team?.entry?.team_name ?? undefined;
+
+  const starter = (player: FplTeamRecommendationPlayer): Player => ({
+    ...toPitchPlayer(player, captainId, viceId, getFixtureForPlayer(player), isLiveGw, showActualPoints, incoming[player.player_id]),
+    aura: true,
+  });
+
+  // Bench step: a bench row is selected, so every starter is either a valid
+  // swap target (teal outline, tappable) or not (dimmed; a tap explains why).
+  const Starter = ({ player }: { player: FplTeamRecommendationPlayer }) => {
+    const state = starterState?.(player.player_id);
+    const swapping = Boolean(starterState);
+    return (
+      <div
+        data-testid={`starter-${player.player_id}`}
+        data-swap={state}
+        onClick={swapping && onStarterClick ? () => onStarterClick(player.player_id) : undefined}
+        className={`rounded-xl transition-[opacity,box-shadow] duration-200 ${
+          state === "valid"
+            ? "cursor-pointer shadow-[0_0_0_2px_hsl(var(--accent))]"
+            : state === "invalid"
+              ? "cursor-not-allowed opacity-[.35]"
+              : ""
+        } ${swapping ? "[&_*]:pointer-events-none" : ""}`}
+      >
+        <PlayerCard player={starter(player)} />
+      </div>
+    );
+  };
 
   const getFixtureForTeam = (teamShort: string): Player["fixture"] | undefined => {
     const fixtures = fixturesByTeam?.[teamShort];
@@ -279,13 +313,14 @@ export const PitchVisualization = ({
           </div>
         )}
 
+        {!compact && (
         <GameweekNav
           leading={
             onPitchModeChange ? (
               <div className="flex items-center gap-1 shrink-0">
                 <button
                   onClick={() => onPitchModeChange("squad")}
-                  className={`px-3 py-1 rounded-lg text-sm font-semibold transition-all ${
+                  className={`px-2 py-1 rounded-lg text-xs font-semibold transition-all sm:px-3 sm:text-sm ${
                     pitchMode === "squad"
                       ? "bg-primary text-white shadow-sm"
                       : "text-muted-foreground hover:text-foreground"
@@ -296,7 +331,7 @@ export const PitchVisualization = ({
                 <button
                   onClick={() => hasRecommendation && onPitchModeChange("recommendation")}
                   disabled={!hasRecommendation}
-                  className={`px-3 py-1 rounded-lg text-sm font-semibold transition-all ${
+                  className={`px-2 py-1 rounded-lg text-xs font-semibold transition-all sm:px-3 sm:text-sm ${
                     pitchMode === "recommendation"
                       ? "bg-primary text-white shadow-sm"
                       : hasRecommendation
@@ -327,6 +362,25 @@ export const PitchVisualization = ({
           isLiveGw={isLiveGw}
           updatedAt={updatedAt}
         />
+        )}
+
+        {hasTeam && !compact && (
+          <div className="mb-1.5 flex items-end justify-between gap-3 px-1">
+            {teamName ? (
+              <h2 className="truncate text-sm font-semibold tracking-tight text-muted-foreground">{teamName}</h2>
+            ) : (
+              <span />
+            )}
+            <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+              <span
+                aria-hidden
+                className="h-2.5 w-2.5 rounded-full"
+                style={{ background: "radial-gradient(circle, hsl(var(--primary)) 0, transparent 70%)" }}
+              />
+              Glow = xPts this GW
+            </div>
+          </div>
+        )}
 
         {/* Pitch height follows the viewport instead of a fixed 600px. On a 14"
             laptop the fixed height pushed the bench below the fold; on a large
@@ -444,40 +498,28 @@ export const PitchVisualization = ({
               {/* Goalkeeper */}
               <div className="flex justify-center relative z-10">
                 {goalkeeper.map((player) => (
-                  <PlayerCard
-                    key={player.player_id}
-                    player={toPitchPlayer(player, captainId, viceId, getFixtureForPlayer(player), isLiveGw, showActualPoints)}
-                  />
+                  <Starter key={player.player_id} player={player} />
                 ))}
               </div>
 
               {/* Defenders */}
               <div className={`flex justify-center ${getRowGapClass(defenders.length)} relative z-10`}>
                 {defenders.map((player) => (
-                  <PlayerCard
-                    key={player.player_id}
-                    player={toPitchPlayer(player, captainId, viceId, getFixtureForPlayer(player), isLiveGw, showActualPoints)}
-                  />
+                  <Starter key={player.player_id} player={player} />
                 ))}
               </div>
 
               {/* Midfielders */}
               <div className={`flex justify-center ${getRowGapClass(midfielders.length)} relative z-10`}>
                 {midfielders.map((player) => (
-                  <PlayerCard
-                    key={player.player_id}
-                    player={toPitchPlayer(player, captainId, viceId, getFixtureForPlayer(player), isLiveGw, showActualPoints)}
-                  />
+                  <Starter key={player.player_id} player={player} />
                 ))}
               </div>
 
               {/* Forwards */}
               <div className={`flex justify-center ${getRowGapClass(forwards.length)} relative z-10`}>
                 {forwards.map((player) => (
-                  <PlayerCard
-                    key={player.player_id}
-                    player={toPitchPlayer(player, captainId, viceId, getFixtureForPlayer(player), isLiveGw, showActualPoints)}
-                  />
+                  <Starter key={player.player_id} player={player} />
                 ))}
               </div>
             </>
@@ -485,17 +527,20 @@ export const PitchVisualization = ({
         </div>
 
         {/* Bench */}
-        {hasTeam && (
+        {hasTeam && !hideBench && (
           <div className="mx-auto mt-3 w-full max-w-[700px] px-3 py-2 rounded-xl bg-card border border-border">
             <div className="flex items-center justify-between mb-1.5">
-              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Substitutes</p>
+              <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-[.08em]">Bench</p>
               {isLoading && <p className="text-[10px] text-muted-foreground">Updating…</p>}
             </div>
             <div className="flex flex-wrap justify-center gap-2 sm:gap-4">
               {bench.map((player) => (
                 <PlayerCard
                   key={player.player_id}
-                  player={toBenchPlayer(player, captainId, viceId, getFixtureForPlayer(player), isLiveGw, showActualPoints)}
+                  player={{
+                    ...toBenchPlayer(player, captainId, viceId, getFixtureForPlayer(player), isLiveGw, showActualPoints),
+                    inGain: incoming[player.player_id],
+                  }}
                 />
               ))}
             </div>

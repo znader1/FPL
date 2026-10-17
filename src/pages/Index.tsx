@@ -1,19 +1,70 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ParameterSidebar } from "@/components/ParameterSidebar";
+import { useNavigate, useParams } from "react-router-dom";
+import { percentileFromQuantiles } from "@/lib/fieldPercentile";
+import { CommandRail } from "@/components/CommandRail";
+import { deriveWeekDecisions } from "@/lib/weekDecisions";
+import { GwPlanValueProvider, useGwPlanStore } from "@/contexts/GwPlanContext";
+import {
+  buildPlayerLookup,
+  buildTodo,
+  countChanges,
+  isPlanStep,
+  makeMoves,
+  moveBench,
+  projectPlan,
+  resolvePlan,
+  swapCheck,
+  swapPlayers,
+  toPlanId,
+  type PlanChip,
+  type PlanStep,
+} from "@/lib/gwPlan";
+import { planToTeam } from "@/lib/planTeam";
+import {
+  autoSubPreview,
+  chipOptions,
+  chipPick,
+  wildcardDraftShown,
+  wildcardToggle,
+  firstUnfinishedStep,
+  footerFor,
+  nextStep,
+  prevStep,
+  reviewSummary,
+  reviewWarnings,
+  stepCopy,
+  transferOptions,
+} from "@/lib/planFlow";
+import { buildCaptainLab, type CaptainGoal } from "@/lib/captainLab";
+import { useCountdown } from "@/hooks/useCountdown";
+import { formatCountdown } from "@/lib/deadline";
+import { StepChips } from "@/components/plan/StepChips";
+import { StepHeader } from "@/components/plan/StepHeader";
+import { RunPickCard } from "@/components/plan/RunPickCard";
+import { SavedStrip } from "@/components/plan/SavedStrip";
+import { PlanFooter } from "@/components/plan/PlanFooter";
+import { TransfersStep } from "@/components/plan/TransfersStep";
+import { CaptainStep } from "@/components/plan/CaptainStep";
+import { BenchStep, type BenchMessage } from "@/components/plan/BenchStep";
+import { ChipStep } from "@/components/plan/ChipStep";
+import { ReviewStep } from "@/components/plan/ReviewStep";
 import { MobileParameterDrawer } from "@/components/MobileParameterDrawer";
 import { PitchVisualization } from "@/components/PitchVisualization";
 import { RecommendationsPanel } from "@/components/RecommendationsPanel";
 import { ChipNudgeCard } from "@/components/ChipNudgeCard";
+import { WildcardCard } from "@/components/WildcardCard";
 import { OptimizeSquadDialog } from "@/components/OptimizeSquadDialog";
 import { Navbar } from "@/components/layout/Navbar";
 import { QueryErrorCard } from "@/components/QueryErrorCard";
-import { resolveGwGateState } from "@/lib/gwGate";
+import { isLatestSquad, resolveGwGateState, shouldAutoRecommend } from "@/lib/gwGate";
 import { Button } from "@/components/ui/button";
 import { Zap } from "lucide-react";
-import { parseEntryIdInput } from "@/lib/entryId";
+import { parseEntryIdInput, getInitialEntryId } from "@/lib/entryId";
 import { checkEntryIdentity, rolloverMessage } from "@/lib/entryIdentity";
 import { useProfile } from "@/hooks/useProfile";
+import { useEntitlement } from "@/hooks/useEntitlement";
+import { useAuth } from "@/contexts/AuthContext";
 import { useIsDesktop } from "@/hooks/use-desktop";
 import {
   fetchFixtures,
@@ -61,16 +112,6 @@ const getInitialGw = () => {
   return null;
 };
 
-const getInitialEntryId = () => {
-  const fromQuery = Number(new URLSearchParams(window.location.search).get("entry_id"));
-  if (Number.isFinite(fromQuery) && fromQuery > 0) return fromQuery;
-
-  const fromStorage = Number(localStorage.getItem("fpl_entry_id"));
-  if (Number.isFinite(fromStorage) && fromStorage > 0) return fromStorage;
-
-  // No stored ID — 0 triggers the onboarding overlay in PitchVisualization.
-  return 0;
-};
 
 const getInitialHorizon = () => {
   const fromQuery = Number(new URLSearchParams(window.location.search).get("horizon_gws"));
@@ -120,18 +161,13 @@ const getInitialIncludeTransfers = () => {
   return true;
 };
 
-const getInitialApplyTransferCount = () => {
-  const fromQuery = Number(new URLSearchParams(window.location.search).get("apply_transfer_count"));
-  if (Number.isFinite(fromQuery) && fromQuery >= 0) return Math.max(0, Math.floor(fromQuery));
-
-  const fromStorage = Number(localStorage.getItem("fpl_apply_transfer_count"));
-  if (Number.isFinite(fromStorage) && fromStorage >= 0) return Math.max(0, Math.floor(fromStorage));
-
-  return 0;
-};
+const getInitialCaptainGoal = (): CaptainGoal => (localStorage.getItem("fpl_captain_goal") === "safe" ? "safe" : "chase");
 
 const Index = () => {
   const [entryId, setEntryId] = useState(getInitialEntryId);
+  const [captainGoal, setCaptainGoal] = useState<CaptainGoal>(getInitialCaptainGoal);
+  const [swapSelection, setSwapSelection] = useState<number | null>(null);
+  const [benchMessage, setBenchMessage] = useState<BenchMessage | null>(null);
   const [selectedGW, setSelectedGW] = useState<number | null>(getInitialGw);
   // Invariant: squadGW always initializes equal to selectedGW and is only ever
   // written in lockstep with it (setGwAndReset / setEntryAndReset / next-event default).
@@ -148,7 +184,6 @@ const Index = () => {
   );
   const [chipPlayEventId, setChipPlayEventId] = useState<number | undefined>(getInitialChipPlayEventId);
   const [includeTransfers, setIncludeTransfers] = useState(getInitialIncludeTransfers);
-  const [appliedTransferCount, setAppliedTransferCount] = useState(getInitialApplyTransferCount);
   const [pitchMode, setPitchMode] = useState<PitchMode>("squad");
   const [didApplyNextGwDefault, setDidApplyNextGwDefault] = useState(hasExplicitGwQuery);
 
@@ -269,6 +304,7 @@ const Index = () => {
     };
   };
 
+  const autoRecommendFired = useRef<string | null>(null);
   const recommendationMutation = useMutation<FplTeamRecommendation, unknown, TeamRecommendationParams>({
     mutationFn: async (params) => fetchTeamRecommendation(params),
     onSuccess: (data) => {
@@ -278,6 +314,10 @@ const Index = () => {
       setPitchMode("recommendation");
     },
   });
+  const resetRecommendation = () => {
+    recommendationMutation.reset();
+    autoRecommendFired.current = null;
+  };
 
   useEffect(() => {
     if (didApplyNextGwDefault) return;
@@ -309,9 +349,9 @@ const Index = () => {
       setSquadGW(38);
     }
 
-    setAppliedTransferCount(0);
     setPitchMode("squad");
     recommendationMutation.reset();
+    autoRecommendFired.current = null;
     setDidApplyNextGwDefault(true);
   }, [
     didApplyNextGwDefault,
@@ -403,27 +443,30 @@ const Index = () => {
       localStorage.setItem("fpl_include_transfers", String(includeTransfers));
       localStorage.setItem("fpl_differential", String(differential));
       localStorage.setItem("fpl_prioritize_injured", String(prioritizeInjured));
-      localStorage.setItem("fpl_apply_transfer_count", String(appliedTransferCount));
     } catch {
       // ignore
     }
   }, [entryId, selectedGW, horizonGws, chipStrategy, chipPlayEventId, includeTransfers,
-      appliedTransferCount, nextEventQuery.isSuccess, prioritizeInjured]);
+      nextEventQuery.isSuccess, prioritizeInjured]);
 
+  // Set by a chip pick that changes the strategy: the wildcard draft has to be
+  // fetched even when ZN Pick hasn't run yet this session.
+  const runOnStrategyChange = useRef(false);
   useEffect(() => {
-    if (!recommendationMutation.data) return;
+    const forced = runOnStrategyChange.current;
+    runOnStrategyChange.current = false;
+    if (!recommendationMutation.data && !forced) return;
     if (recommendationMutation.isPending) return;
 
     const nextChipPlayEventId =
       chipStrategy === "wildcard"
-        ? recommendationMutation.data.chip_strategy?.play_event_id ?? chipPlayEventId ?? selectedGW
+        ? recommendationMutation.data?.chip_strategy?.play_event_id ?? chipPlayEventId ?? selectedGW
         : undefined;
 
     if (chipStrategy === "wildcard" && nextChipPlayEventId !== chipPlayEventId) {
       setChipPlayEventId(nextChipPlayEventId);
     }
 
-    setAppliedTransferCount(0);
     recommendationMutation.mutate(
       buildRecommendationParams(selectedGW, {
         chipPlayEventId: nextChipPlayEventId,
@@ -444,15 +487,140 @@ const Index = () => {
   // not a false "off-season" card.
   const isOffSeason = nextEventQuery.isSuccess && !Number.isFinite(nextEventQuery.data?.event_id);
 
-  const applyTransferAtIndex = (index: number) => {
-    if (!recommendationMutation.data) return;
-    const normalized = Number.isFinite(index) ? Math.max(0, Math.floor(index)) : 0;
-    const moveCount = recommendationMutation.data?.transfers?.moves?.length ?? 0;
-    setAppliedTransferCount(Math.min(normalized + 1, moveCount));
+  // ---- The GW plan (v2 flow) --------------------------------------------------
+  // One client-side plan for the deadline GW. The pitch, the rail, the panel and
+  // every step read it; only resetPlan() rebuilds the squad. It is keyed by the
+  // deadline GW (not the GW on screen) and seeded from the latest picks — the
+  // squad on screen counts as "latest" only when it is the live GW's or later,
+  // so browsing back to GW20 never reseeds the plan from GW20's team.
+  const deadlineGw = typeof nextEventId === "number" ? nextEventId : undefined;
+  const squadIsLatest = isLatestSquad({
+    squadEventId: squadQuery.data?.event_id,
+    deadlineGw,
+    placeholder: squadQuery.isPlaceholderData,
+  });
+  const [latestSquad, setLatestSquad] = useState<FplSquad | undefined>(undefined);
+  useEffect(() => {
+    if (squadIsLatest && squadQuery.data) setLatestSquad(squadQuery.data);
+  }, [squadIsLatest, squadQuery.data]);
+  useEffect(() => {
+    setLatestSquad(undefined);
+  }, [entryId]);
+  const { user } = useAuth();
+  const planStore = useGwPlanStore({ entryId, gw: deadlineGw ?? 0, squad: squadIsLatest ? squadQuery.data : undefined, userId: user?.id ?? null });
+  const { plan, base: basePlan, setPlan, resetPlan } = planStore;
+
+  // The recommendation informs the plan only when it was run for the deadline GW.
+  const planRec =
+    recommendationMutation.data && recommendationMutation.data.event_id === deadlineGw ? recommendationMutation.data : undefined;
+  const planMoves = useMemo(() => makeMoves(planRec), [planRec]);
+  const playerLookup = useMemo(() => buildPlayerLookup(latestSquad ?? squadQuery.data, planRec), [latestSquad, squadQuery.data, planRec]);
+  const resolvedPlan = useMemo(() => (plan ? resolvePlan(plan, planMoves) : null), [plan, planMoves]);
+  // Derived, never stored: "make" applies the verdict's moves, nothing else does.
+  const appliedTransferCount = plan?.transfer === "make" ? planMoves.length : 0;
+  const { canUseWildcardDrafter } = useEntitlement();
+  const chipOpts = useMemo(
+    () =>
+      resolvedPlan && typeof deadlineGw === "number"
+        ? chipOptions({
+            resolved: resolvedPlan,
+            lookup: playerLookup,
+            chipPlan: chipPlanQuery.data,
+            gw: deadlineGw,
+            wildcardAllowed: canUseWildcardDrafter,
+            pickPending: recommendationMutation.isPending,
+          })
+        : [],
+    [resolvedPlan, playerLookup, chipPlanQuery.data, deadlineGw, canUseWildcardDrafter, recommendationMutation.isPending],
+  );
+  const freeHitGain = chipOpts.find((o) => o.chip === "free_hit")?.gain ?? null;
+  const planProjected = resolvedPlan && plan ? projectPlan(resolvedPlan, playerLookup, plan.chip, freeHitGain) : null;
+  const baseProjected = basePlan ? projectPlan(resolvePlan(basePlan, []), playerLookup, null) : null;
+  const planDelta =
+    typeof planProjected === "number" && typeof baseProjected === "number" ? Math.round((planProjected - baseProjected) * 10) / 10 : undefined;
+  const planChanges = plan && basePlan ? countChanges(plan, basePlan, planMoves) : 0;
+  const planDirty = Boolean(plan && (planChanges > 0 || plan.transfer !== null || plan.chip !== null || Object.keys(plan.reviewed).length > 0));
+
+  // Steps route as /app/plan/:step; /app is the squad overview.
+  const { step: stepParam } = useParams();
+  const step: PlanStep = isPlanStep(stepParam) ? stepParam : "squad";
+  const navigate = useNavigate();
+  const goStep = (s: PlanStep) => {
+    setSwapSelection(null);
+    setBenchMessage(null);
+    navigate(s === "squad" ? "/app" : `/app/plan/${s}`);
+  };
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("fpl_captain_goal", captainGoal);
+    } catch {
+      // ignore
+    }
+  }, [captainGoal]);
+
+  // The step views (flow handoff §3). Everything here reads the plan; nothing
+  // refetches the squad.
+  const transferOpts = useMemo(() => (planRec ? transferOptions(planRec) : null), [planRec]);
+  const planPosOf = (id: number) => playerLookup[id]?.pos ?? "MID";
+  const captainLab = useMemo(() => {
+    if (!planRec || !resolvedPlan) return null;
+    const pool = [...resolvedPlan.xi, ...resolvedPlan.bench].map((id) => playerLookup[id]).filter(Boolean);
+    return buildCaptainLab(planRec, captainGoal, resolvedPlan.cap, { pool, benchedIds: new Set(resolvedPlan.bench), viceId: resolvedPlan.vice });
+  }, [planRec, resolvedPlan, playerLookup, captainGoal]);
+  const planWarnings = resolvedPlan ? reviewWarnings(resolvedPlan) : [];
+  const deadlineRemaining = useCountdown(nextEventQuery.data?.deadline_time_utc);
+  const countdownText = deadlineRemaining !== null && deadlineRemaining > 0 ? formatCountdown(deadlineRemaining) : "";
+
+  const makeCaptain = (id: number) => {
+    const pid = toPlanId(id, planMoves);
+    setPlan((p) => ({ cap: pid, vice: p.vice === pid ? p.cap : p.vice }));
+  };
+  const makeVice = (id: number) => setPlan({ vice: toPlanId(id, planMoves) });
+  const changeGoal = (g: CaptainGoal) => setCaptainGoal(g);
+
+  const armSwap = (id: number | null) => {
+    setSwapSelection(id);
+    setBenchMessage(id === null ? null : { text: `Tap a highlighted starter to bring ${playerLookup[id]?.web_name ?? "him"} on.`, tone: "primary" });
+  };
+  const starterState = swapSelection !== null && resolvedPlan
+    ? (id: number) => (swapCheck(resolvedPlan.xi, swapSelection, id, planPosOf) ? ("invalid" as const) : ("valid" as const))
+    : undefined;
+  const onStarterClick = (starterId: number) => {
+    if (swapSelection === null || !resolvedPlan || !plan) return;
+    const rule = swapCheck(resolvedPlan.xi, swapSelection, starterId, planPosOf);
+    if (rule) {
+      setBenchMessage({ text: rule, tone: "warning" });
+      return;
+    }
+    const next = swapPlayers(plan, toPlanId(swapSelection, planMoves), toPlanId(starterId, planMoves));
+    setPlan({ xi: next.xi, bench: next.bench });
+    const inName = playerLookup[swapSelection]?.web_name ?? "He";
+    const outName = playerLookup[starterId]?.web_name ?? "the starter";
+    const capOut = starterId === resolvedPlan.cap;
+    setBenchMessage(
+      capOut
+        ? { text: `${inName} is in for ${outName}. Your captain is now on the bench, so pick a new one.`, tone: "danger" }
+        : { text: `${inName} is in for ${outName}.`, tone: "accent" },
+    );
+    setSwapSelection(null);
+  };
+  const onMoveBench = (index: number, dir: -1 | 1) => {
+    if (!plan) return;
+    const next = moveBench(plan, index, dir);
+    if (next !== plan) setPlan({ bench: next.bench });
+  };
+
+
+  // DecisionCard's Apply/Undo write the plan's transfer decision; the per-move
+  // index no longer matters — the plan applies the verdict's moves as one.
+  const applyTransferAtIndex = () => {
+    if (planMoves.length === 0) return;
+    setPlan({ transfer: "make" });
   };
 
   const resetAppliedTransfers = () => {
-    setAppliedTransferCount(0);
+    setPlan({ transfer: null });
   };
 
   const activeRecommendation = useMemo(() => {
@@ -476,10 +644,22 @@ const Index = () => {
     };
   }, [appliedTransferCount, recommendationMutation.data]);
 
+  // On the deadline GW the squad view is the plan: the user's XI, bench order
+  // and armbands with the transfer decision applied. Other GWs render their
+  // own picks as before.
+  const planTeam = useMemo(
+    () => (plan && resolvedPlan && latestSquad && selectedGW === deadlineGw ? planToTeam(latestSquad, resolvedPlan, playerLookup) : undefined),
+    [plan, resolvedPlan, latestSquad, selectedGW, deadlineGw, playerLookup],
+  );
+  // The bench step always shows the plan, whatever GW the squad view is on.
+  const benchTeam = useMemo(
+    () => (plan && resolvedPlan && latestSquad ? planToTeam(latestSquad, resolvedPlan, playerLookup) : undefined),
+    [plan, resolvedPlan, latestSquad, playerLookup],
+  );
   const activeTeam = useMemo(() => {
     if (pitchMode === "recommendation" && activeRecommendation) return activeRecommendation;
-    return squadQuery.data;
-  }, [pitchMode, activeRecommendation, squadQuery.data]);
+    return planTeam ?? squadQuery.data;
+  }, [pitchMode, activeRecommendation, planTeam, squadQuery.data]);
 
   const activeError =
     pitchMode === "recommendation"
@@ -507,7 +687,6 @@ const Index = () => {
   const setGwAndReset = (gw: number) => {
     setSelectedGW(gw);
     setSquadGW(gw);
-    setAppliedTransferCount(0);
     const shouldRefreshRecommendation =
       Boolean(recommendationMutation.data) &&
       (pitchMode === "recommendation" || chipStrategy !== "none");
@@ -525,16 +704,15 @@ const Index = () => {
     }
 
     setPitchMode("squad");
-    recommendationMutation.reset();
+    resetRecommendation();
   };
 
   const setEntryAndReset = (value: number, identity?: FplEntryIdentity | null) => {
     setEntryId(value);
     setSquadGW(selectedGW);
     setChipPlayEventId(undefined);
-    setAppliedTransferCount(0);
     setPitchMode("squad");
-    recommendationMutation.reset();
+    resetRecommendation();
     // The identity snapshot rides along with the id: without it a season
     // rollover is undetectable and the app renders a stranger's squad.
     if (value > 0) {
@@ -566,7 +744,6 @@ const Index = () => {
     if (chipStrategy === "wildcard") {
       setChipPlayEventId(nextChipPlayEventId);
     }
-    setAppliedTransferCount(0);
     setPitchMode("recommendation");
     recommendationMutation.mutate(
       buildRecommendationParams(resolvedGW, { chipPlayEventId: nextChipPlayEventId })
@@ -578,10 +755,17 @@ const Index = () => {
   // Do it for them: the same constraint, expressed as the next step.
   const planGw = isLiveGw ? clampGw((currentLiveGw ?? resolvedGW) + 1) : resolvedGW;
 
+  /** Ask ZN Pick again for the deadline GW — the steps' and the GW bar's rerun. */
+  const rerunPick = () => {
+    if (typeof deadlineGw !== "number") return;
+    setSelectedGW(deadlineGw);
+    setSquadGW(deadlineGw);
+    runRecommendation(deadlineGw);
+  };
+
   const runRecommendation = (eventId: number) => {
     const nextChipPlayEventId = chipStrategy === "wildcard" ? eventId : undefined;
     if (chipStrategy === "wildcard") setChipPlayEventId(nextChipPlayEventId);
-    setAppliedTransferCount(0);
     recommendationMutation.mutate(
       buildRecommendationParams(eventId, { chipPlayEventId: nextChipPlayEventId })
     );
@@ -604,8 +788,75 @@ const Index = () => {
   // onChipStrategyChange does. Persistence to localStorage is handled by the
   // existing effect that reacts to chipStrategy changes; no separate write needed.
   const handleApplyChipNudge = (chip: ChipName) => {
+    if (chip === "wildcard") return handlePickChip(chip);
     setChipStrategy(chip);
+    setPlan({ chip });
   };
+
+  // The Chip step's pick. A wildcard (in or out) changes ZN Pick's strategy for the
+  // deadline GW; the strategy effect reruns the recommendation, whose pitch is the
+  // wildcard draft.
+  const switchStrategyForDeadline = (next: FplChipStrategy) => {
+    runOnStrategyChange.current = true;
+    if (typeof deadlineGw === "number") {
+      setSelectedGW(deadlineGw);
+      setSquadGW(deadlineGw);
+    }
+    setChipStrategy(next);
+  };
+  const handlePickChip = (chip: Exclude<PlanChip, null>) => {
+    const pick = chipPick(chip, chipStrategy);
+    if (pick.chipStrategy !== null) switchStrategyForDeadline(pick.chipStrategy);
+    setPlan(pick.patch);
+    if (pick.goTo) goStep(pick.goTo);
+  };
+
+  // Main-page wildcard card: a preview — it switches the pitch to the wildcard
+  // draft without recording the chip; the Chip step is where it's committed.
+  // Shown while the wildcard is still in hand and in the user's plan, unless the
+  // nudge above already names it or the plan has already played it.
+  const wildcardRow = chipPlanQuery.data?.outlook?.find((row) => row.chip === "wildcard");
+  const showWildcardCard =
+    canUseWildcardDrafter &&
+    wildcardRow !== undefined &&
+    plan?.chip !== "wildcard" &&
+    chipPlanQuery.data?.nudge?.chip !== "wildcard";
+  const wildcardShown = wildcardDraftShown({ pitchMode, rec: recommendationMutation.data });
+  const toggleWildcardPreview = () => {
+    const action = wildcardToggle(chipStrategy, wildcardShown);
+    if (action === "fetch") {
+      // The strategy was persisted from an earlier visit but nothing has run yet.
+      if (typeof deadlineGw === "number") rerunPick();
+    } else {
+      switchStrategyForDeadline(action === "start" ? "wildcard" : "none");
+    }
+    goStep("squad");
+  };
+
+  // Entering a step needs ZN Pick's answer for the deadline GW; run it once per
+  // entry + deadline GW if the user hasn't, asking for that GW explicitly (the
+  // Recommend button's planGw follows the GW on screen, which may be another).
+  // The squad itself is never refetched — handoff §1.
+  // Cleared by resetRecommendation(): a reset after the auto-run (GW or entry
+  // change, the default-GW effect) dropped the answer and left the step empty
+  // with no way to ask again, since the latch still held the key.
+  const autoRecommendKey = shouldAutoRecommend({
+    step,
+    hasPlanRec: Boolean(planRec),
+    pending: recommendationMutation.isPending,
+    canRecommend,
+    entryId,
+    deadlineGw,
+    firedKey: autoRecommendFired.current,
+  });
+  useEffect(() => {
+    if (!autoRecommendKey || typeof deadlineGw !== "number") return;
+    autoRecommendFired.current = autoRecommendKey;
+    setSelectedGW(deadlineGw);
+    setSquadGW(deadlineGw);
+    runRecommendation(deadlineGw);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRecommendKey]);
 
   const parameterProps = {
     entryId,
@@ -628,6 +879,76 @@ const Index = () => {
     onRecommend: handlePrimaryRecommend,
     recommendErrorMessage,
   };
+
+  // The Command Center's four weekly decisions, derived — never stored — from
+  // the plan, with the recommendation and the chip plan as context.
+  const weekDecisions = useMemo(
+    () =>
+      deriveWeekDecisions({
+        plan,
+        base: basePlan,
+        lookup: playerLookup,
+        recommendation: planRec,
+        chipPlan: chipPlanQuery.data ?? null,
+        chipPlanError: chipPlanQuery.isError,
+      }),
+    [plan, basePlan, playerLookup, planRec, chipPlanQuery.data, chipPlanQuery.isError],
+  );
+  const reviewRows = plan && basePlan ? reviewSummary(plan, basePlan, planMoves, playerLookup, weekDecisions) : [];
+  const planTodo =
+    plan && basePlan ? buildTodo(plan, basePlan, planMoves, playerLookup, planRec?.transfer_plan_horizon?.verdict_detail?.hit_cost ?? 0) : [];
+  const footer = footerFor({ step, plan, decisions: weekDecisions, warnings: planWarnings, gw: deadlineGw ?? planGw });
+  const onFooterNext = () => {
+    if (!plan) return;
+    if (step === "confirm") {
+      if (plan.locked) goStep("squad");
+      else setPlan({ locked: true });
+      return;
+    }
+    if (step === "squad") {
+      goStep(firstUnfinishedStep(weekDecisions));
+      return;
+    }
+    setPlan((p) => ({ reviewed: { ...p.reviewed, [step]: true } }));
+    const next = nextStep(step);
+    if (next) goStep(next);
+  };
+  const onFooterBack = () => {
+    const prev = prevStep(step);
+    if (prev) goStep(prev);
+  };
+  const header = stepCopy(step, deadlineGw ?? planGw, { locked: Boolean(plan?.locked), desktop: isDesktop });
+  const stepHeader =
+    step === "captain" && captainLab ? { ...header, title: captainLab.headline, sub: captainLab.subcopy } : header;
+  const verdictDetail = activeRecommendation?.transfer_plan_horizon?.verdict_detail;
+  const freeTransfers =
+    verdictDetail?.ft_before ??
+    activeRecommendation?.transfer_plan_horizon?.start_free_transfers ??
+    activeRecommendation?.transfers?.transfer_plan?.free_transfers;
+  const bank = squadQuery.data?.entry_history?.bank;
+  // Projected = the plan's own total (client-side, plan-GW xPts); until the
+  // recommendation brings those, fall back to the engine's number.
+  const projected = planProjected ?? activeRecommendation?.projected_points_with_captain;
+  const projectedDelta = planProjected !== null ? planDelta : undefined;
+  // "Top N%": place our (client-side) total on the backend's field quantiles so
+  // the ring follows a captain swap or bench edit; without the grid, the
+  // backend's own figure for the active step, then the base squad.
+  const projectedPercentile =
+    percentileFromQuantiles(activeRecommendation?.projected_field?.overall_quantiles, projected) ??
+    activeRecommendation?.squad_with_transfers?.projected_percentile ??
+    activeRecommendation?.projected_percentile ??
+    undefined;
+  const navbarStats =
+    typeof bank === "number" || typeof freeTransfers === "number" ? (
+      <>
+        {typeof bank === "number" && (
+          <span className="whitespace-nowrap">Bank <b className="font-semibold text-foreground">£{bank.toFixed(1)}m</b></span>
+        )}
+        {typeof freeTransfers === "number" && (
+          <span className="whitespace-nowrap">FT <b className="font-semibold text-foreground">{freeTransfers}</b></span>
+        )}
+      </>
+    ) : undefined;
 
   const handleEntryIdSubmit = async (raw: string): Promise<string | null> => {
     const id = parseEntryIdInput(raw);
@@ -654,9 +975,15 @@ const Index = () => {
   };
 
   return (
+    <GwPlanValueProvider value={planStore}>
     <div className="flex flex-col h-screen bg-background">
-      <Navbar />
-      <div className="flex flex-1 min-h-0 pt-14 flex-col lg:flex-row overflow-y-auto lg:overflow-hidden">
+      <Navbar extras={navbarStats} planStatus={plan ? { changes: planChanges, locked: plan.locked } : undefined} />
+      {entryId > 0 && gwGateState === "ready" && (
+        <div className="fixed inset-x-0 top-14 z-40 border-b border-border bg-background/95 backdrop-blur lg:hidden">
+          <StepChips decisions={weekDecisions} step={step} onSelect={goStep} />
+        </div>
+      )}
+      <div className={`flex flex-1 min-h-0 flex-col lg:flex-row overflow-y-auto lg:overflow-hidden ${entryId > 0 && gwGateState === "ready" ? "pt-[106px] lg:pt-14" : "pt-14"}`}>
       {gwGateState === "error" ? (
         // A failed /events/next used to fall through to the "Loading…" branch
         // below and stay there forever (audit U1). Give the user a way out.
@@ -679,11 +1006,25 @@ const Index = () => {
         <>
       {isDesktop ? (
         <div className="hidden lg:flex shrink-0">
-          <ParameterSidebar {...parameterProps} />
+          <CommandRail
+            decisions={weekDecisions}
+            onSelectStep={goStep}
+            activeStep={step}
+            onReset={resetPlan}
+            dirty={planDirty}
+            gw={deadlineGw ?? planGw}
+            projected={projected}
+            delta={projectedDelta}
+            percentile={projectedPercentile}
+            top10kAvg={activeRecommendation?.projected_top10k_avg ?? undefined}
+            overallAvg={activeRecommendation?.projected_overall_avg ?? undefined}
+            parameters={parameterProps}
+          />
         </div>
       ) : (
         <>
-          <MobileParameterDrawer {...parameterProps} />
+          {/* The drawer's floating button would sit on the flow footer's Next. */}
+          {step === "squad" && <MobileParameterDrawer {...parameterProps} />}
           {/* The drawer closes before the request resolves, and the only other
               place this renders is inside it — so on a phone a failed
               recommendation produced no feedback at all. */}
@@ -700,7 +1041,85 @@ const Index = () => {
       {/* entryId <= 0 falls through to the pitch so the onboarding overlay stays
           reachable during pre-season — otherwise first-run signups in the launch
           window would only ever see the off-season card. */}
-      {isOffSeason && entryId > 0 ? (
+      {step !== "squad" && entryId > 0 ? (
+        <div className="flex flex-1 flex-col lg:min-h-0 lg:min-w-0">
+          <div className="flex-1 px-4 py-5 lg:overflow-y-auto lg:px-8 lg:py-6">
+            <div className="mx-auto flex max-w-[880px] flex-col gap-4">
+              <StepHeader copy={stepHeader} savedBanner={false} />
+              {step === "transfers" && (
+                <TransfersStep
+                  options={transferOpts}
+                  value={plan?.transfer ?? null}
+                  onPick={(choice) => setPlan({ transfer: choice })}
+                  loading={recommendationMutation.isPending}
+                  error={recommendErrorMessage}
+                  onRun={rerunPick}
+                />
+              )}
+              {step === "captain" &&
+                (captainLab ? (
+                  <CaptainStep lab={captainLab} goal={captainGoal} onGoal={changeGoal} onMakeCaptain={makeCaptain} onMakeVice={makeVice} />
+                ) : (
+                  <RunPickCard
+                    idle="Run ZN Pick to see your captain options."
+                    working="Projecting your captain options…"
+                    loading={recommendationMutation.isPending}
+                    error={recommendErrorMessage}
+                    onRun={rerunPick}
+                  />
+                ))}
+              {step === "bench" && resolvedPlan && plan && (
+                <>
+                  {benchTeam && (
+                    <PitchVisualization
+                      team={benchTeam}
+                      requestedGw={deadlineGw ?? planGw}
+                      onRequestedGwChange={() => {}}
+                      gwSelectable={false}
+                      compact
+                      hideBench
+                      fixturesByTeam={fixturesByTeam}
+                      incoming={resolvedPlan.incoming}
+                      starterState={starterState}
+                      onStarterClick={onStarterClick}
+                    />
+                  )}
+                  <BenchStep
+                    resolved={resolvedPlan}
+                    lookup={playerLookup}
+                    swapSelection={swapSelection}
+                    onSwapSelect={armSwap}
+                    onMoveBench={onMoveBench}
+                    autoSub={autoSubPreview(resolvedPlan, playerLookup)}
+                    message={benchMessage}
+                  />
+                </>
+              )}
+              {step === "chip" && plan && <ChipStep options={chipOpts} value={plan.chip} onPick={handlePickChip} />}
+              {step === "confirm" && plan && (
+                <ReviewStep
+                  rows={reviewRows}
+                  onRow={goStep}
+                  warnings={planWarnings}
+                  onFix={goStep}
+                  projected={planProjected}
+                  delta={planDelta}
+                  locked={plan.locked}
+                  todo={planTodo}
+                  gw={deadlineGw ?? planGw}
+                  countdown={countdownText}
+                />
+              )}
+              {recommendErrorMessage && step !== "bench" && step !== "transfers" && (step !== "captain" || captainLab) && (
+                <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  {recommendErrorMessage}
+                </div>
+              )}
+            </div>
+          </div>
+          <PlanFooter spec={footer} onBack={onFooterBack} onNext={onFooterNext} />
+        </div>
+      ) : isOffSeason && entryId > 0 ? (
         <div className="flex-1 flex items-center justify-center p-6">
           <div className="max-w-sm text-center rounded-2xl border border-border bg-card p-8">
             <h3 className="font-bold text-foreground mb-2">Season hasn't started</h3>
@@ -731,6 +1150,15 @@ const Index = () => {
         // stacks vertically and a collapsed-height column makes the pitch
         // overlap its siblings.
         <div className="flex flex-col lg:flex-1 lg:min-w-0 lg:min-h-0">
+        {/* Desktop only, one line: the navbar pill already says "Saved", and the
+            old eyebrow/title/paragraph/banner stack pushed the squad down. */}
+        {plan?.locked && typeof deadlineGw === "number" && (
+          <div className="mx-auto hidden w-full max-w-5xl px-4 pt-4 lg:block">
+            <SavedStrip gw={deadlineGw} />
+          </div>
+        )}
+        {/* No checklist strip on phones: the step chips under the navbar already
+            carry the ✓ per decision, and the squad has to show in the first screen. */}
         {identityCheck.status === "rolled-over" && (
           <div className="mx-auto w-full max-w-5xl px-4 pt-4">
             <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
@@ -750,6 +1178,11 @@ const Index = () => {
             />
           </div>
         )}
+        {showWildcardCard && (
+          <div className="mx-auto w-full max-w-5xl px-4 pt-4">
+            <WildcardCard row={wildcardRow} previewing={wildcardShown} busy={recommendationMutation.isPending} onToggle={toggleWildcardPreview} />
+          </div>
+        )}
         <PitchVisualization
           entryId={entryId}
           onEntryIdSubmit={handleEntryIdSubmit}
@@ -763,6 +1196,7 @@ const Index = () => {
           fixturesByTeam={fixturesByTeam}
           pitchMode={pitchMode}
           onPitchModeChange={setPitchMode}
+          incoming={activeTeam === planTeam && resolvedPlan ? resolvedPlan.incoming : undefined}
           hasRecommendation={Boolean(recommendationMutation.data)}
           isLiveGw={isLiveGw}
           updatedAt={squadUpdatedAt}
@@ -776,31 +1210,58 @@ const Index = () => {
                   onApplied={handleOptimizeApplied}
                 />
               )}
-              {/* The single recommend entry point on desktop. The sidebar keeps
-                  its own button for narrow viewports, where this bar has no room. */}
-              <Button
-                size="sm"
-                className="hidden lg:inline-flex"
-                onClick={handlePrimaryRecommend}
-                disabled={!canRecommend || !(entryId > 0) || recommendationMutation.isPending}
-                title={
-                  planGw !== resolvedGW
-                    ? `GW${resolvedGW} is in progress — plan GW${planGw} instead`
-                    : undefined
-                }
-              >
-                <Zap className="h-3.5 w-3.5" />
-                {recommendationMutation.isPending
-                  ? "Working…"
-                  : planGw !== resolvedGW
-                    ? `Plan GW${planGw}`
-                    : "Recommend"}
-              </Button>
+              {/* Desktop: the flow's own action lives here (Start / Continue /
+                  review), so the squad step needs no bottom bar and the pitch
+                  gets the height back. Re-running ZN Pick stays in the rail's
+                  Parameters form. Without a plan yet, this is the recommend button. */}
+              {plan && entryId > 0 && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="hidden lg:inline-flex"
+                  onClick={rerunPick}
+                  disabled={!canRecommend || recommendationMutation.isPending}
+                  title={`Re-run ZN Pick for GW${deadlineGw ?? planGw}`}
+                  aria-label="Re-run ZN Pick"
+                >
+                  <Zap className="h-3.5 w-3.5" />
+                  {recommendationMutation.isPending ? "Working…" : "ZN Pick"}
+                </Button>
+              )}
+              {plan && entryId > 0 ? (
+                <Button
+                  size="sm"
+                  className={`hidden lg:inline-flex ${footer.variant === "accent" ? "bg-accent text-white hover:bg-accent/90" : ""}`}
+                  onClick={onFooterNext}
+                  disabled={footer.disabled}
+                  title={footer.hint || undefined}
+                >
+                  {footer.short}
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  className="hidden lg:inline-flex"
+                  onClick={handlePrimaryRecommend}
+                  disabled={!canRecommend || !(entryId > 0) || recommendationMutation.isPending}
+                  title={planGw !== resolvedGW ? `GW${resolvedGW} is in progress — plan GW${planGw} instead` : undefined}
+                >
+                  <Zap className="h-3.5 w-3.5" />
+                  {recommendationMutation.isPending ? "Working…" : planGw !== resolvedGW ? `Plan GW${planGw}` : "Recommend"}
+                </Button>
+              )}
             </>
           }
         />
+        {/* Phones only: on desktop the same action sits in the GW bar above. */}
+        {entryId > 0 && plan && (
+          <div className="lg:hidden">
+            <PlanFooter spec={footer} onBack={onFooterBack} onNext={onFooterNext} />
+          </div>
+        )}
         </div>
       )}
+      {step === "squad" && (
       <RecommendationsPanel
         squad={squadQuery.data}
         recommendation={activeRecommendation}
@@ -816,10 +1277,12 @@ const Index = () => {
         isChipPlanLoading={chipPlanQuery.isLoading}
         isChipPlanError={chipPlanQuery.isError}
       />
+      )}
         </>
       )}
       </div>
     </div>
+    </GwPlanValueProvider>
   );
 };
 

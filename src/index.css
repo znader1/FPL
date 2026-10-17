@@ -43,6 +43,9 @@ input:-webkit-autofill:active {
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
 
+    /* Unsaved-changes amber (v2 flow handoff): the status pill and swap-rule hints. */
+    --warning: 38 92% 50%;
+
     --border: 248 12% 89%;
     --input: 248 12% 87%;
     --ring: 328 80% 48%;
@@ -58,6 +61,15 @@ input:-webkit-autofill:active {
     --shadow-medium: 0 4px 20px rgba(0, 0, 0, 0.10);
 
     --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* Fixture difficulty 1 (easiest) → 5 (hardest); the handoff's rose for
+       negatives is --fdr-4. Same values in both themes — they sit on tinted
+       backgrounds, not on the page. */
+    --fdr-1: 152 60% 45%;
+    --fdr-2: 152 50% 50%;
+    --fdr-3: 38 92% 55%;
+    --fdr-4: 348 80% 60%;
+    --fdr-5: 348 85% 52%;
 
     --sidebar-background: 248 18% 94%;
     --sidebar-foreground: 248 25% 15%;
@@ -95,6 +107,7 @@ input:-webkit-autofill:active {
        renders error text at ~1.8:1 contrast, which is effectively invisible. */
     --destructive: 0 72% 62%;
     --destructive-foreground: 0 0% 100%;
+    --warning: 38 92% 55%;
 
     --border: 248 15% 18%;
     --input: 248 15% 18%;
@@ -104,6 +117,15 @@ input:-webkit-autofill:active {
     --pitch-dark: 152 44% 18%;
     --pitch-lines: 152 10% 45%;
     --player-card: 248 15% 13%;
+
+    /* Fixture difficulty 1 (easiest) → 5 (hardest); the handoff's rose for
+       negatives is --fdr-4. Same values in both themes — they sit on tinted
+       backgrounds, not on the page. */
+    --fdr-1: 152 60% 45%;
+    --fdr-2: 152 50% 50%;
+    --fdr-3: 38 92% 55%;
+    --fdr-4: 348 80% 60%;
+    --fdr-5: 348 85% 52%;
 
     --sidebar-background: 248 20% 10%;
     --sidebar-foreground: 248 10% 85%;

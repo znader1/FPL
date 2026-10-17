@@ -1,11 +1,17 @@
+import { ArrowRight, Lightbulb } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { JerseyIcon } from "@/components/JerseyIcon";
+import { fmtGain, gwRange } from "@/lib/format";
 import type {
+  FplTransferMove,
   FplTransferPlanHorizon,
   FplTransferRunnerUp,
   FplTransferVerdictDetail,
   FplTransferVerdictMove,
 } from "@/lib/fplAssistantApi";
+
+export { fmtGain, gwRange };
 
 type Verdict = NonNullable<FplTransferPlanHorizon["verdict"]>;
 
@@ -22,15 +28,10 @@ const TONE: Record<Verdict, string> = {
   spend_forced_injury: "border-destructive/30 bg-destructive/[0.08] text-destructive",
 };
 
-/** `+0.9` / `−1.3`; one decimal, typographic minus. */
-export const fmtGain = (n: number) => `${n < 0 ? "−" : "+"}${Math.abs(n).toFixed(1)}`;
-
-/** `GW5–7`, `GW5`, or `the horizon` when unknown. */
-export const gwRange = (h: { start_gw: number | null; end_gw: number | null }) => {
-  if (h.start_gw == null) return "the horizon";
-  if (h.end_gw == null || h.end_gw === h.start_gw) return `GW${h.start_gw}`;
-  return `GW${h.start_gw}–${h.end_gw}`;
-};
+/** The comparison bars share one axis so a 14 → 17 move reads as a nudge, not a leap. */
+const BAR_SCALE_XPTS = 18;
+const HIT_COST = 4;
+const fmtHit = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
 
 /** `gwRange`, wrapped so it never wraps mid-string at phone width. */
 function GwRange({ h }: { h: { start_gw: number | null; end_gw: number | null } }) {
@@ -39,23 +40,6 @@ function GwRange({ h }: { h: { start_gw: number | null; end_gw: number | null } 
 
 const movesText = (moves: FplTransferVerdictMove[]) =>
   moves.map((m) => `${m.sell.name} → ${m.buy.name}`).join(" + ");
-
-function MoveLine({ m }: { m: FplTransferVerdictMove }) {
-  return (
-    <span className="flex flex-wrap items-center gap-x-1">
-      <span className="text-red-600 dark:text-red-400">{m.sell.name}</span>
-      <span className="text-muted-foreground">({m.sell.team} £{m.sell.price.toFixed(1)})</span>
-      <FitnessChip availability={m.sell_availability} />
-      {m.forced_injury && (
-        <Badge variant="outline" className="border-destructive/50 text-[10px] text-destructive">flagged</Badge>
-      )}
-      <span>→</span>
-      <span className="font-semibold text-emerald-700 dark:text-emerald-300">{m.buy.name}</span>
-      <span className="text-muted-foreground">({m.buy.team} £{m.buy.price.toFixed(1)})</span>
-      <ConflictChip names={m.h2h_conflicts} />
-    </span>
-  );
-}
 
 /** Amber flag when the buy plays against your own keeper/defence (or vice versa) this GW. */
 function ConflictChip({ names }: { names?: string[] }) {
@@ -93,6 +77,138 @@ function FitnessChip({ availability }: { availability?: { status: string; chance
     </span>
   );
 }
+
+/* ── Move card ─────────────────────────────────────────────────────────────── */
+
+type MoveAction =
+  | { kind: "none" }
+  | { kind: "apply"; label: string; variant: "accent" | "outline"; index: number }
+  | { kind: "applied"; undo: boolean };
+
+interface TransferMoveCardProps {
+  m: FplTransferVerdictMove;
+  /** "Free transfer" / "−4 hit". */
+  cost: "free" | "hit";
+  /** This move's share of the hit bill (label only; default 4). */
+  hitCost?: number;
+  /** xPts after the hit share (or versus rolling, on a rejected move). */
+  net: number;
+  horizon: FplTransferVerdictDetail["horizon"];
+  sellerHorizonXpts?: number;
+  action: MoveAction;
+  isApplying: boolean;
+  onApply?: (index: number) => void;
+  onUndo?: () => void;
+}
+
+function TransferMoveCard({ m, cost, hitCost, net, horizon, sellerHorizonXpts, action, isApplying, onApply, onUndo }: TransferMoveCardProps) {
+  const applied = action.kind === "applied";
+  const positive = net >= 0;
+  const hasBars = typeof sellerHorizonXpts === "number" && Number.isFinite(sellerHorizonXpts);
+  const outX = hasBars ? (sellerHorizonXpts as number) : 0;
+  const inX = outX + m.horizon_gain;
+  const pct = (v: number) => `${Math.max(0, Math.min(100, Math.round((v / BAR_SCALE_XPTS) * 100)))}%`;
+  const fixtures =
+    m.sell.next_fixture || m.buy.next_fixture
+      ? `${m.sell.name} has ${m.sell.next_fixture ?? "no fixture"}; ${m.buy.name} gets ${m.buy.next_fixture ?? "no fixture"}. `
+      : "";
+
+  return (
+    <div
+      data-testid="move-card"
+      data-applied={applied}
+      className={`flex flex-col gap-3 rounded-xl border p-3.5 text-foreground transition-[border-color,background-color] duration-200 ${
+        applied ? "border-accent/45 bg-accent/[0.08]" : "border-border bg-card"
+      }`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <JerseyIcon team={m.sell.team} size="sm" />
+          <ArrowRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          <JerseyIcon team={m.buy.team} size="sm" />
+          <div className="ml-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-x-1 text-[13px] font-bold leading-tight">
+              <span>{m.buy.name}</span>
+              <span className="font-normal text-muted-foreground">({m.buy.team} £{m.buy.price.toFixed(1)})</span>
+              <ConflictChip names={m.h2h_conflicts} />
+            </div>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-1 text-[11px] text-muted-foreground">
+              <span>for {m.sell.name}</span>
+              <span>({m.sell.team} £{m.sell.price.toFixed(1)})</span>
+              <FitnessChip availability={m.sell_availability} />
+              {m.forced_injury && (
+                <Badge variant="outline" className="border-destructive/50 px-1 py-0 text-[10px] text-destructive">flagged</Badge>
+              )}
+              <span>· {cost === "free" ? "Free transfer" : `−${fmtHit(hitCost ?? HIT_COST)} hit`}</span>
+            </div>
+          </div>
+        </div>
+        <div className="shrink-0 text-right">
+          <div
+            data-testid="move-net"
+            className={`text-lg font-black leading-none tabular-nums ${positive ? "text-accent" : "text-fdr-4"}`}
+          >
+            {fmtGain(net)}
+          </div>
+          <div className="mt-0.5 text-[10px] text-muted-foreground">net xPts</div>
+        </div>
+      </div>
+
+      {hasBars && (
+        <div data-testid="xpts-bars" className="flex flex-col gap-1.5">
+          {[
+            { name: m.sell.name, v: outX, fill: "bg-muted-foreground/60", tone: "text-muted-foreground" },
+            { name: m.buy.name, v: inX, fill: "bg-accent", tone: "font-semibold text-foreground" },
+          ].map((row) => (
+            <div key={row.name} className="grid grid-cols-[56px_minmax(0,1fr)_32px] items-center gap-2 text-[11px]">
+              <span className={`truncate ${row.tone}`}>{row.name}</span>
+              <div className="h-1.5 rounded-full bg-muted">
+                <div data-testid="xpts-bar-fill" className={`h-full rounded-full ${row.fill}`} style={{ width: pct(row.v) }} />
+              </div>
+              <span className={`text-right tabular-nums ${row.tone}`}>{row.v.toFixed(1)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <p className="text-xs leading-relaxed text-foreground/80">
+        {fixtures}
+        {horizon.n === 1 ? (
+          <>{fmtGain(m.horizon_gain)} this GW.</>
+        ) : (
+          <>{fmtGain(m.this_gw_gain)} this GW · {fmtGain(m.horizon_gain)} over <GwRange h={horizon} />.</>
+        )}
+      </p>
+
+      {action.kind === "apply" && onApply && (
+        <Button
+          type="button"
+          size="sm"
+          variant={action.variant === "accent" ? "default" : "outline"}
+          className={`h-8 w-full text-xs ${action.variant === "accent" ? "bg-accent text-white hover:bg-accent/90" : ""}`}
+          disabled={isApplying}
+          onClick={() => onApply(action.index)}
+        >
+          {action.label}
+        </Button>
+      )}
+      {action.kind === "applied" && (
+        <div className="flex gap-2">
+          <Button type="button" size="sm" variant="secondary" className="h-8 flex-1 text-xs" disabled>
+            Applied
+          </Button>
+          {action.undo && onUndo && (
+            <Button type="button" size="sm" variant="ghost" className="h-8 text-xs" disabled={isApplying} onClick={onUndo}>
+              Undo
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Runner-ups ────────────────────────────────────────────────────────────── */
 
 const RUNNER_UPS_VISIBLE = 3;
 
@@ -145,6 +261,16 @@ function RunnerUps({ d }: { d: FplTransferVerdictDetail }) {
   );
 }
 
+/** The bottom tip box: why rolling (or spending) is the call, in one breath. */
+function Tip({ children }: { children: React.ReactNode }) {
+  return (
+    <div data-testid="plan-tip" className="flex gap-2.5 rounded-xl bg-muted/50 p-3">
+      <Lightbulb className="mt-0.5 h-4 w-4 shrink-0 text-accent" aria-hidden />
+      <div className="flex flex-col gap-1 text-xs leading-relaxed text-foreground/85">{children}</div>
+    </div>
+  );
+}
+
 /** Pre-verdict_detail backends: the prose banner, unchanged. */
 function LegacyVerdictBanner({ plan }: { plan: FplTransferPlanHorizon }) {
   if (!plan.verdict) return null;
@@ -167,6 +293,10 @@ function LegacyVerdictBanner({ plan }: { plan: FplTransferPlanHorizon }) {
   );
 }
 
+/** Index into the beam's `transfers.moves` for a verdict move, by player ids. */
+const findBeamIndex = (beam: FplTransferMove[] | undefined, m: FplTransferVerdictMove) =>
+  beam ? beam.findIndex((b) => b.sell.id === m.sell.id && b.buy.id === m.buy.id) : -1;
+
 interface DecisionCardProps {
   plan: FplTransferPlanHorizon;
   appliedTransferCount?: number;
@@ -174,6 +304,10 @@ interface DecisionCardProps {
   /** Plan moves lead `transfers.moves`, so applying k plan moves = index k-1. */
   onApplyTransferAtIndex?: (index: number) => void;
   onResetAppliedTransfers?: () => void;
+  /** Squad players' horizon xPts by player id — drives the out/in comparison bars. */
+  horizonXptsById?: Record<number, number>;
+  /** The beam's `transfers.moves`; lets a rejected (roll) move still be applied by index. */
+  beamMoves?: FplTransferMove[];
 }
 
 export function DecisionCard({
@@ -182,6 +316,8 @@ export function DecisionCard({
   isApplying = false,
   onApplyTransferAtIndex,
   onResetAppliedTransfers,
+  horizonXptsById,
+  beamMoves,
 }: DecisionCardProps) {
   const d: FplTransferVerdictDetail | undefined = plan.verdict_detail;
   if (!d) return <LegacyVerdictBanner plan={plan} />;
@@ -191,77 +327,122 @@ export function DecisionCard({
   // to carry, now attached to the thing that actually spends the money.
   const bankAfter = plan.plan?.[0]?.bank_after;
   const hasBank = typeof bankAfter === "number" && Number.isFinite(bankAfter);
+  const canApply = Boolean(onApplyTransferAtIndex);
 
-  return (
-    <div data-testid="plan-verdict-banner" className={`rounded-lg border p-3 flex flex-col gap-1.5 ${TONE[d.action]}`}>
-      <div className="flex items-center gap-2">
-        <Badge variant="outline" className="text-[10px] font-bold uppercase tracking-wider">{LABEL[d.action]}</Badge>
-        <span className="ml-auto text-xs text-muted-foreground">FT {d.ft_before}→{d.ft_after}</span>
-      </div>
+  // Each move past the free transfers is a hit; the plan's hit_cost is the bill
+  // for all of them, so split it evenly to show what each one nets on its own.
+  const hitMoves = Math.max(0, k - d.ft_before);
+  const hitEach = hitMoves > 0 ? d.hit_cost / hitMoves : 0;
 
-      {d.action === "roll" ? (
-        <>
-          <p className="text-sm text-foreground">
-            {d.roll_alternative ? (
-              <>Moving now ({movesText(d.roll_alternative.moves) || "no move"}) would net {fmtGain(d.roll_alternative.net)} over <GwRange h={d.horizon} />; rolling nets {fmtGain(d.plan_net)}.</>
+  const actionFor = (i: number): MoveAction => {
+    if (!canApply) return { kind: "none" };
+    if (i < appliedTransferCount) return { kind: "applied", undo: i === appliedTransferCount - 1 && Boolean(onResetAppliedTransfers) };
+    if (i === appliedTransferCount) return { kind: "apply", label: "Apply this move", variant: "accent", index: i };
+    return { kind: "apply", label: `Apply moves 1–${i + 1}`, variant: "outline", index: i };
+  };
+
+  const header = (
+    <div className="flex items-center gap-2">
+      <Badge variant="outline" className="text-[10px] font-bold uppercase tracking-wider">{LABEL[d.action]}</Badge>
+      <span className="ml-auto text-xs text-muted-foreground">FT {d.ft_before}→{d.ft_after}</span>
+    </div>
+  );
+
+  if (d.action === "roll") {
+    const alt = d.roll_alternative;
+    return (
+      <div data-testid="plan-verdict-banner" className={`rounded-lg border p-3 flex flex-col gap-3 ${TONE[d.action]}`}>
+        {header}
+        {alt && alt.moves.length > 0 && alt.moves.map((m, i) => {
+          const beamIndex = findBeamIndex(beamMoves, m);
+          // Same positional rule as the spend branch; the alternative's own hit
+          // bill is what its gains add up to beyond its net (default 4 a move).
+          const altHitMoves = Math.max(0, alt.moves.length - d.ft_before);
+          const altGains = alt.moves.reduce((s, x) => s + x.horizon_gain, 0);
+          const altHitTotal = altHitMoves > 0 ? (altGains - alt.net > 0.05 ? altGains - alt.net : HIT_COST * altHitMoves) : 0;
+          const altHitEach = altHitMoves > 0 ? altHitTotal / altHitMoves : 0;
+          const hit = i >= d.ft_before && altHitEach > 0;
+          const free = !hit;
+          const action: MoveAction =
+            !canApply || beamIndex < 0
+              ? { kind: "none" }
+              : appliedTransferCount > beamIndex
+                ? { kind: "applied", undo: Boolean(onResetAppliedTransfers) }
+                : { kind: "apply", label: free ? "Make the move anyway" : "Take the hit anyway", variant: "outline", index: beamIndex };
+          return (
+            <TransferMoveCard
+              key={i}
+              m={m}
+              cost={free ? "free" : "hit"}
+              hitCost={altHitEach}
+              net={m.horizon_gain - (hit ? altHitEach : 0)}
+              horizon={d.horizon}
+              sellerHorizonXpts={horizonXptsById?.[m.sell.id]}
+              action={action}
+              isApplying={isApplying}
+              onApply={onApplyTransferAtIndex}
+              onUndo={onResetAppliedTransfers}
+            />
+          );
+        })}
+        <Tip>
+          <p>
+            {alt ? (
+              <>Moving now ({movesText(alt.moves) || "no move"}) would net {fmtGain(alt.net)} over <GwRange h={d.horizon} />; rolling nets {fmtGain(d.plan_net)}.</>
             ) : (
               <>Bank the free transfer. No move clears {fmtGain(d.threshold)} over <GwRange h={d.horizon} />.</>
             )}
           </p>
           {d.next_move && (
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-muted-foreground">
               Next planned move: {movesText(d.next_move.moves)} in GW{d.next_move.gw} (
               {fmtGain(d.next_move.horizon_gain)} over <GwRange h={{ start_gw: d.next_move.gw, end_gw: d.horizon.end_gw }} />)
             </p>
           )}
-        </>
-      ) : (
-        <>
-          <ul className="text-sm space-y-0.5">
-            {d.moves.map((m, i) => <li key={i}><MoveLine m={m} /></li>)}
-          </ul>
-          <p className="text-sm text-foreground" data-testid="decision-gains">
-            {d.horizon.n === 1 ? (
-              <><b>{fmtGain(d.horizon_gain)}</b> this GW</>
-            ) : (
-              <><b>{fmtGain(d.this_gw_gain)}</b> this GW · <b>{fmtGain(d.horizon_gain)}</b> over <GwRange h={d.horizon} /></>
-            )}
-            {d.hit_cost > 0 && <> · <b className="text-red-600 dark:text-red-400">{fmtGain(-d.hit_cost)} hit</b></>}
-          </p>
-          <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-            <span>
-              Plan <GwRange h={d.horizon} /> nets {fmtGain(d.plan_net)}
-              {d.roll_alternative ? ` · rolling instead nets ${fmtGain(d.roll_alternative.net)}` : ""}
-              {hasBank ? ` · ITB after £${bankAfter.toFixed(1)}m` : ""}
-            </span>
-            {onApplyTransferAtIndex && k > 0 && (
-              <Button
-                type="button"
-                size="sm"
-                variant={applied ? "secondary" : "default"}
-                className="ml-auto h-8 text-xs"
-                disabled={isApplying || applied}
-                onClick={() => onApplyTransferAtIndex(k - 1)}
-              >
-                {applied ? "Applied" : k > 1 ? `Apply ${k} moves` : "Apply"}
-              </Button>
-            )}
-            {applied && onResetAppliedTransfers && (
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                className="h-8 text-xs"
-                disabled={isApplying}
-                onClick={onResetAppliedTransfers}
-              >
-                Undo
-              </Button>
-            )}
-          </div>
-        </>
-      )}
+        </Tip>
+        <RunnerUps d={d} />
+      </div>
+    );
+  }
 
+  return (
+    <div data-testid="plan-verdict-banner" className={`rounded-lg border p-3 flex flex-col gap-3 ${TONE[d.action]}`}>
+      {header}
+      {d.moves.map((m, i) => {
+        // No hit bill (wildcard / free hit) means every move is free whatever ft_before says.
+        const hit = i >= d.ft_before && hitEach > 0;
+        return (
+          <TransferMoveCard
+            key={i}
+            m={m}
+            cost={hit ? "hit" : "free"}
+            hitCost={hitEach}
+            net={m.horizon_gain - (hit ? hitEach : 0)}
+            horizon={d.horizon}
+            sellerHorizonXpts={horizonXptsById?.[m.sell.id]}
+            action={actionFor(i)}
+            isApplying={isApplying}
+            onApply={onApplyTransferAtIndex}
+            onUndo={onResetAppliedTransfers}
+          />
+        );
+      })}
+      <p className="text-sm text-foreground" data-testid="decision-gains">
+        {d.horizon.n === 1 ? (
+          <><b>{fmtGain(d.horizon_gain)}</b> this GW</>
+        ) : (
+          <><b>{fmtGain(d.this_gw_gain)}</b> this GW · <b>{fmtGain(d.horizon_gain)}</b> over <GwRange h={d.horizon} /></>
+        )}
+        {d.hit_cost > 0 && <> · <b className="text-red-600 dark:text-red-400">{fmtGain(-d.hit_cost)} hit</b></>}
+      </p>
+      <Tip>
+        <p>
+          Plan <GwRange h={d.horizon} /> nets {fmtGain(d.plan_net)}
+          {d.roll_alternative ? ` · rolling instead nets ${fmtGain(d.roll_alternative.net)}` : ""}
+          {hasBank ? ` · ITB after £${bankAfter.toFixed(1)}m` : ""}
+          {applied ? " · applied to the pitch" : ""}
+        </p>
+      </Tip>
       <RunnerUps d={d} />
     </div>
   );

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { JerseyIcon } from "./JerseyIcon";
+import { FixtureChip } from "./FixtureChip";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import type { FplPlayerAlert, FplPlayerScoreBreakdown } from "@/lib/fplAssistantApi";
 
@@ -26,11 +27,20 @@ export interface Player {
   fixture?: PlayerFixture;
   alerts?: FplPlayerAlert[];
   scoreBreakdown?: FplPlayerScoreBreakdown;
+  /** Command Center: radial xPts glow behind the jersey, sized from `points`. */
+  aura?: boolean;
+  /** Command Center: this-GW gain of the move that brought the player in ("IN +2.4");
+   *  null when the player is new but the gain is unknown (bare "IN"). */
+  inGain?: number | null;
 }
 
 interface PlayerCardProps {
   player: Player;
 }
+
+/** Aura diameter in px: 30 + xPts × 11 (handoff spec), so a 2-pointer barely glows
+ *  and an 8-pointer floods the row. */
+const auraSizePx = (xpts: number) => Math.round(30 + Math.max(0, xpts) * 11);
 
 const formatPoints = (points: number) => {
   if (!Number.isFinite(points)) return "—";
@@ -40,23 +50,6 @@ const formatPoints = (points: number) => {
 
 const formatPercent = (value?: number | null) =>
   typeof value === "number" && Number.isFinite(value) ? `${Math.round(value * 100)}%` : "—";
-
-const getDifficultyClass = (difficulty?: number) => {
-  switch (difficulty) {
-    case 1:
-      return "bg-emerald-500/15 text-emerald-800 dark:text-emerald-200";
-    case 2:
-      return "bg-emerald-500/10 text-emerald-800 dark:text-emerald-200";
-    case 3:
-      return "bg-amber-500/15 text-amber-900 dark:text-amber-200";
-    case 4:
-      return "bg-rose-500/15 text-rose-900 dark:text-rose-200";
-    case 5:
-      return "bg-rose-500/25 text-rose-900 dark:text-rose-200";
-    default:
-      return "bg-muted/60 text-muted-foreground";
-  }
-};
 
 const formatMetric = (value?: number | null, digits = 1) => {
   if (typeof value !== "number" || !Number.isFinite(value)) return "—";
@@ -109,17 +102,7 @@ export const PlayerCard = ({ player }: PlayerCardProps) => {
     fixture && typeof fixture.difficulty === "number" && Number.isFinite(fixture.difficulty)
       ? fixture.difficulty
       : undefined;
-  const fixtureMeta =
-    fixture && typeof fixture.extraCount === "number" && fixture.extraCount > 0
-      ? `+${fixture.extraCount}`
-      : "";
-
-  const fixtureShort = fixture
-    ? fixture.label ??
-      `${fixture.isHome === false ? "A-" : fixture.isHome === true ? "H-" : ""}${fixture.opponent ?? ""}${
-        fixtureDifficulty ? `(D${fixtureDifficulty})` : ""
-      }`
-    : undefined;
+  const fixtureShort = fixture ? fixture.label ?? `${fixture.opponent ?? ""}` : undefined;
 
   return (
     // Controlled so a tap can open it: HoverCard only responds to pointer
@@ -142,6 +125,23 @@ export const PlayerCard = ({ player }: PlayerCardProps) => {
           }}
         >
           <div className="relative transition-transform group-hover:scale-110">
+            {player.aura && hasProjectedPoints && (
+              <div
+                data-testid="xpts-aura"
+                aria-hidden="true"
+                className="pointer-events-none absolute left-1/2 top-[22px] -z-10 -translate-x-1/2 -translate-y-1/2 rounded-full"
+                style={{
+                  width: `${auraSizePx(player.points)}px`,
+                  height: `${auraSizePx(player.points)}px`,
+                  background: "radial-gradient(circle, hsl(var(--primary) / 0.55) 0%, hsl(var(--primary) / 0) 68%)",
+                }}
+              />
+            )}
+            {player.inGain !== undefined && (
+              <div className="absolute -top-3.5 left-1/2 z-10 -translate-x-1/2 whitespace-nowrap rounded-full bg-accent px-1.5 py-px text-[10px] font-bold text-white shadow-sm">
+                {typeof player.inGain === "number" ? `IN ${player.inGain < 0 ? "−" : "+"}${Math.abs(player.inGain).toFixed(1)}` : "IN"}
+              </div>
+            )}
             <JerseyIcon
               team={player.team}
               number={player.number}
@@ -162,21 +162,24 @@ export const PlayerCard = ({ player }: PlayerCardProps) => {
           {/* Width is responsive because the pitch clips: a five-defender row
               needs 5 cards plus 4 gaps to fit ~343px of usable width on a
               375px viewport, so 80px cards cut the outermost players in half. */}
-          <div className="bg-card/95 backdrop-blur-sm rounded-md px-1 sm:px-2 py-0.5 text-center shadow-sm border border-border w-[58px] sm:w-auto sm:min-w-[80px] max-w-full">
+          <div className="bg-card/95 backdrop-blur-sm rounded-md px-1 sm:px-2 py-0.5 text-center shadow-sm border border-border w-[58px] sm:w-auto sm:min-w-[80px] max-w-full overflow-hidden">
             <p className="text-[10px] sm:text-xs font-bold text-foreground truncate">{player.name}</p>
-            {fixtureShort && (
-              <span
-                className={`inline-block px-1 sm:px-1.5 py-0.5 rounded-full text-[9px] font-medium max-w-full truncate ${getDifficultyClass(fixtureDifficulty)}`}
-                title={fixtureDifficulty ? `FDR ${fixtureDifficulty}` : undefined}
-              >
-                {fixtureShort}
-                {fixtureMeta ? ` ${fixtureMeta}` : ""}
-              </span>
+            {/* The fixture chip — or, with no fixture (a finished GW), the team
+                abbreviation — takes its own line. Putting the team on the points
+                row made "BRE 1 · 3.01" wider than the 58px phone card, so a
+                five-midfielder row's labels ran into each other. */}
+            {fixture && fixtureShort ? (
+              <FixtureChip
+                label={fixture.label}
+                opponent={fixture.opponent}
+                isHome={fixture.isHome}
+                difficulty={fixtureDifficulty}
+                extraCount={fixture.extraCount}
+              />
+            ) : (
+              <p className="text-[9px] leading-tight text-muted-foreground">{player.team}</p>
             )}
-            <div className="flex justify-center gap-1 text-[10px] mt-0.5">
-              {!fixtureShort && (
-                <span className="text-muted-foreground">{player.team}</span>
-              )}
+            <div className="flex justify-center gap-1 whitespace-nowrap text-[10px] mt-0.5">
               {hasActualPoints ? (
                 <>
                   <span
