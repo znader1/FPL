@@ -6,7 +6,7 @@ interface ProjectedCardProps {
   projected?: number;
   /** Plan minus the no-change squad; undefined until both project. */
   delta?: number;
-  /** Top-N percentile (8 = top 8%). Backend field `projected_percentile`; absent today. */
+  /** Top-N percentile (8 = top 8%), placed client-side on the backend's field quantiles (see Index). */
   percentile?: number;
   top10kAvg?: number;
   overallAvg?: number;
