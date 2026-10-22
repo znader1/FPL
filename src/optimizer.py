@@ -2,7 +2,7 @@ import re
 
 import pandas as pd
 
-from . import config
+from . import chip_bench, config
 
 
 VALID_FORMATIONS = [
@@ -414,24 +414,8 @@ def _ensure_min_premium_attackers(
 _H2H_DEFENSIVE_POS = {"GKP", "DEF"}
 
 
-def _bench_sort(pool):
-    """Bench-fodder ordering: players with at least CHIP_BENCH_MIN_MINUTES
-    season minutes come first (cheap is fine, ghosts are not), then price
-    ascending, then WORST scorer so a price tie never eats an XI candidate.
-    Preference, not a filter — a thin market falls through to the ghosts."""
-    pool = pool.copy()
-    floor = float(config.CHIP_BENCH_MIN_MINUTES)
-    if "minutes" in pool.columns:
-        pool["_bench_pref"] = (
-            pd.to_numeric(pool["minutes"], errors="coerce").fillna(0.0) >= floor
-        )
-    else:
-        pool["_bench_pref"] = True
-    return pool.sort_values(
-        ["_bench_pref", "price_m", "chip_score"],
-        ascending=[False, True, True],
-        kind="mergesort",
-    )
+# Bench ordering lives in chip_bench; alias kept for callers and tests.
+_bench_sort = chip_bench.bench_sort
 
 
 def _h2h_conflict_count(row, picked_rows, opponents):
