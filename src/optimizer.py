@@ -3,6 +3,7 @@ import re
 import pandas as pd
 
 from . import chip_bench, config
+from .chip_draft import shrink_small_sample_scores  # noqa: F401 (re-exported for tests/callers)
 
 
 VALID_FORMATIONS = [
@@ -701,9 +702,18 @@ def build_chip_squad(
     premium_floor=0.0,
     premium_positions=None,
     differential=False,
+    preset=None,
+    pinned_ids=None,
+    excluded_ids=None,
 ):
     """
     Build a legal 15-man draft for wildcard/free-hit under budget and team caps.
+
+    With `preset` (a CHIP_WILDCARD_PRESETS entry) the two-stage preset build in
+    chip_draft runs instead: XI by greedy under caps, bench by role rules,
+    pins/excludes honoured, result carrying xi_ids / bench_roles /
+    pins_conflict / notes. Without it, the legacy single-stage build below is
+    untouched (chip_advisor, the squad picker and free hit rely on that).
 
     The draft squad objective is `score_col` (for example `xpts_horizon` for wildcard,
     or `xpts_gwXX` for free hit), while the final XI can still be optimized separately.
@@ -717,6 +727,20 @@ def build_chip_squad(
         return {"ok": False, "reason": f"Market missing columns or score `{score_col}`.", "squad_df": None}
     if differential:
         market = _apply_differential(market)
+
+    if preset is not None:
+        from . import chip_draft
+        preset_name = next(
+            (k for k, v in (config.CHIP_WILDCARD_PRESETS or {}).items() if v is preset), None
+        )
+        built = chip_draft.build_preset_squad(
+            market, dict(preset, name=preset_name), budget_m,
+            pinned_ids=pinned_ids, excluded_ids=excluded_ids,
+        )
+        built["objective_score_col"] = score_col
+        if built.get("ok") and built.get("squad_df") is not None:
+            built["squad_df"] = built["squad_df"].rename(columns={"chip_score": "chip_score"})
+        return built
 
     for pos, need in shape_map.items():
         have = int((market["pos"] == pos).sum())

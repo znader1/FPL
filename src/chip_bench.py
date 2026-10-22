@@ -119,13 +119,29 @@ def fill_bench(market, xi_df, mode, budget_left_m, max_per_team, team_counts, ge
             out = out[out["pos"] == pos]
         return out
 
+    def headroom(pos_taking):
+        """Budget this pick may use: what is left minus the cheapest legal
+        fill of every slot still needed after it, so one role never starves
+        the rest of the bench."""
+        rest = dict(need)
+        rest[pos_taking] -= 1
+        floor = 0.0
+        for pos, n in rest.items():
+            if n <= 0:
+                continue
+            prices = remaining(pos)["price_m"].nsmallest(n)
+            floor += float(prices.sum()) if len(prices) == n else 0.0
+        return budget - floor
+
     def cheapest(pos):
         return _pick(remaining(pos).sort_values(["price_m", "chip_score"], ascending=[True, False], kind="mergesort"),
-                     counts, max_per_team, budget)
+                     counts, max_per_team, headroom(pos))
 
     def best(pos_list, prefer=None):
         out = remaining()
         out = out[out["pos"].isin(pos_list)]
+        for pos in pos_list:
+            out = out[(out["pos"] != pos) | (out["price_m"] <= headroom(pos) + 1e-9)]
         if prefer is not None:
             pref = out[prefer.reindex(out.index).fillna(False).astype(bool)]
             cand = _pick(pref.sort_values(["chip_score", "price_m"], ascending=[False, True], kind="mergesort"),
@@ -155,7 +171,7 @@ def fill_bench(market, xi_df, mode, budget_left_m, max_per_team, team_counts, ge
                     q |= cs >= float(cs.median())
                 qual = q
             row = _pick(defs[qual].sort_values(["price_m", "chip_score"], ascending=[True, False], kind="mergesort"),
-                        counts, max_per_team, budget)
+                        counts, max_per_team, headroom("DEF"))
             if row is None:
                 row = cheapest("DEF")
             if row is not None:
@@ -169,12 +185,12 @@ def fill_bench(market, xi_df, mode, budget_left_m, max_per_team, team_counts, ge
                 mids = remaining("MID")
                 mids = mids[pd.to_numeric(mids["p_dc"], errors="coerce").fillna(0.0) >= dc_floor]
                 row = _pick(mids.sort_values(["price_m", "chip_score"], ascending=[True, False], kind="mergesort"),
-                            counts, max_per_team, budget)
+                            counts, max_per_team, headroom("MID"))
             if row is None and need["DEF"] > 0 and "p_dc" in pool.columns:
                 defs = remaining("DEF")
                 defs = defs[pd.to_numeric(defs["p_dc"], errors="coerce").fillna(0.0) >= dc_floor]
                 row = _pick(defs.sort_values(["price_m", "chip_score"], ascending=[True, False], kind="mergesort"),
-                            counts, max_per_team, budget)
+                            counts, max_per_team, headroom("DEF"))
                 if row is not None:
                     notes.append("dc_mid fallback: DEF (no midfielder reaches the DC floor under budget)")
             if row is None:
