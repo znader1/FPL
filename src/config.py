@@ -512,6 +512,68 @@ CHIP_WILDCARD_MIN_PREMIUM_CAPTAINS = 1  # [untested]
 CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR = 10.5  # [untested]
 CHIP_WILDCARD_PREMIUM_CAPTAIN_POSITIONS = ["MID", "FWD"]  # [operational]
 
+# --- wildcard v2 (docs/superpowers/specs/2026-10-22-wildcard-v2-design.md) ---
+# Objective split (spec 4.4): bench score counts at this weight next to the XI.
+CHIP_WILDCARD_BENCH_WEIGHT = 0.15  # [untested]
+CHIP_WILDCARD_BENCH_BUDGET_MAX_M = 17.5  # [untested] cap on the four bench slots (roles mode)
+# Availability gate (spec 4.4): share of team games started this season.
+CHIP_BENCH_START_SHARE = 0.85  # [untested]
+CHIP_XI_START_SHARE = 0.70  # [untested] default when a preset gives no xi_start_share
+# DC-midfielder bench role: P(reaching rules.OUTPUT_DC_THRESHOLD) per game.
+CHIP_BENCH_MID_DC_PROB = 0.5  # [untested]
+# Same-team defensive correlation (spec 4.5). GK counts as DEF for the cap;
+# the cap lifts for teams whose xG defence rating ranks <= ELITE_DEF_RANK.
+CHIP_WILDCARD_MAX_DEF_PER_TEAM = 2  # [untested]
+CHIP_WILDCARD_ELITE_DEF_RANK = 4  # [untested]
+# Index = defenders/GKs already drafted from that team; last entry repeats.
+CHIP_WILDCARD_SAME_TEAM_DEF_PENALTY = [0.0, 0.15, 0.30]  # [untested]
+# Small-sample guard: teams with fewer rated matches shrink toward the price prior.
+CHIP_WILDCARD_MIN_TEAM_MATCHES = 8  # [untested]
+# Trend (spec 4.3): slope of per-90 xGI (attackers) / xGC + DC rate (defence).
+CHIP_WILDCARD_TREND_WINDOW = 6  # [untested]
+CHIP_WILDCARD_TREND_CLIP = 0.5  # [untested]
+CHIP_WILDCARD_TREND_WEIGHT = 1.0  # [untested]
+CHIP_WILDCARD_TREND_SHRINK_GAMES = 6.0  # [untested]
+# Injury prior (spec 4.6) from the status-history CSV the refresh appends.
+CHIP_WILDCARD_INJURY_PRIOR_WEIGHT = 1.0  # [untested]
+CHIP_WILDCARD_INJURY_PRIOR_SHRINK_GWS = 6.0  # [untested]
+CHIP_WILDCARD_STATUS_HISTORY_PATH = "data/processed/fpl/status_history.csv"  # [operational]
+# Position-aware upside (spec 4.7): ep_goals + ep_assists + ep_dc + ep_saves.
+CHIP_WILDCARD_UPSIDE_WEIGHT = 0.3  # [untested]
+# Gems preset ownership constraint (spec 4.8).
+CHIP_WILDCARD_GEM_OWNERSHIP_MAX = 10.0  # [untested] selected_by_percent
+CHIP_WILDCARD_GEM_MIN_XI = 6  # [untested]
+# Presets are hard structural constraints, not weights (spec 4.8). `formation`
+# is the DEF/MID/FWD shape of the XI pick (plus one GK); the bench completes
+# the 15 to 2/5/5/3.
+CHIP_WILDCARD_PRESET_ORDER = ["aggressive", "balanced", "gems"]  # [operational]
+CHIP_WILDCARD_PRESETS = {
+    "aggressive": {
+        "label": "Aggressive",
+        "premiums_exact": 3, "premiums_max": None,
+        "bench_mode": "enablers", "bench_budget_max_m": 17.0, "gem_min_xi": 0,
+        "max_def_per_team": 2, "max_per_team": 3,
+        "captaincy_mult": 1.5, "trend_mult": 1.0, "xi_start_share": 0.70,
+        "formation": (3, 5, 2),
+    },
+    "balanced": {
+        "label": "Balanced",
+        "premiums_exact": 2, "premiums_max": None,
+        "bench_mode": "roles", "bench_budget_max_m": 17.5, "gem_min_xi": 0,
+        "max_def_per_team": 2, "max_per_team": 3,
+        "captaincy_mult": 1.0, "trend_mult": 1.0, "xi_start_share": 0.80,
+        "formation": (3, 4, 3),
+    },
+    "gems": {
+        "label": "Gems",
+        "premiums_exact": None, "premiums_max": 1,
+        "bench_mode": "enablers_gem", "bench_budget_max_m": 17.0, "gem_min_xi": 6,
+        "max_def_per_team": 2, "max_per_team": 2,
+        "captaincy_mult": 0.0, "trend_mult": 2.0, "xi_start_share": 0.85,
+        "formation": (4, 4, 2),
+    },
+}  # [operational]
+
 # ---------------------------------------------------------------------------
 # xG expected-points model (fixture_difficulty / minutes_model / output_model)
 # These feed src/expected_points.py, which produces a parallel `xpts_model_*`
