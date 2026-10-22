@@ -83,6 +83,9 @@ if os.environ.get("SQUAD_PICKER_MODE") == "1":
     from api.squad_router import router as squad_picker_router
     app.include_router(squad_picker_router)
 
+from api.wildcard_router import router as wildcard_router  # noqa: E402
+app.include_router(wildcard_router)
+
 # Mount /chat endpoint (orchestrator agent over HTTP) — LLM calls, login required.
 try:
     from api.chat import router as chat_router
@@ -970,6 +973,18 @@ def optimize_squad(payload, owner=None):
     }
 
 
+def resolve_wildcard_preset(payload):
+    """(name, preset) for a wildcard request; (None, None) when the chip is not
+    the wildcard. Unknown names are a 422 — the three presets are the contract."""
+    if normalize_chip_strategy((payload or {}).get("chip_strategy")) != "wildcard":
+        return None, None
+    name = str((payload or {}).get("wildcard_preset") or "balanced").lower()
+    preset = (config.CHIP_WILDCARD_PRESETS or {}).get(name)
+    if preset is None:
+        raise HTTPException(status_code=422, detail=f"Unknown wildcard_preset `{name}`; use one of {list(config.CHIP_WILDCARD_PRESET_ORDER)}.")
+    return name, preset
+
+
 def build_recommendations(payload):
     total_start = time.perf_counter()
     timings = {}
@@ -983,6 +998,7 @@ def build_recommendations(payload):
     chip_strategy_raw = payload.get("chip_strategy")
     chip_strategy = normalize_chip_strategy(chip_strategy_raw)
     chip_differential = parse_bool(payload.get("differential"), default=False)
+    wildcard_preset_name, wildcard_preset = resolve_wildcard_preset(payload)
     prioritize_injured = parse_bool(payload.get("prioritize_injured"), default=True)
     latest_n_matches_raw = payload.get("latest_n_matches", config.PROJ_DEFAULT_LATEST_N_MATCHES)
     apply_transfer_count_raw = payload.get("apply_transfer_count")
@@ -1176,11 +1192,21 @@ def build_recommendations(payload):
         )
         notes.extend(pk_notes)
         if wildcard_is_active:
-            proj_all = projections.add_wildcard_scores(
-                projections_df=proj_all,
+            # Score on a copy: the European haircut must not change the xPts
+            # the client sees; only the wildcard_* columns come back.
+            from api import wildcard as _wildcard
+            _wc_gws = list(range(int(wildcard_play_event_id), int(wildcard_play_event_id) + int(chip_build_horizon_gws)))
+            _scoring = _wildcard.european_haircut(proj_all, _wc_gws, ctx["bootstrap"])
+            _scoring = projections.attach_wildcard_signals(_scoring, gw_start=wildcard_play_event_id)
+            _scoring = projections.add_wildcard_scores(
+                projections_df=_scoring,
                 gw_start=wildcard_play_event_id,
                 horizon_gws=chip_build_horizon_gws,
+                preset=wildcard_preset,
             )
+            _wc_cols = ["id"] + [c for c in _scoring.columns if c.startswith("wildcard_")]
+            proj_all = proj_all.drop(columns=[c for c in proj_all.columns if c.startswith("wildcard_")], errors="ignore")
+            proj_all = proj_all.merge(_scoring[_wc_cols], on="id", how="left")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Projection failed: {e}")
     timings["projections_ms"] = elapsed_ms(ts)
@@ -1265,11 +1291,14 @@ def build_recommendations(payload):
                 elements_all=proj_all,
                 score_col=chip_objective_col,
                 budget_m=budget_m,
-                max_per_team=int(config.CHIP_MAX_PER_TEAM or 3),
+                max_per_team=int((wildcard_preset or {}).get("max_per_team") or config.CHIP_MAX_PER_TEAM or 3),
                 min_premium_attackers=min_premium_attackers,
                 premium_floor=premium_floor,
                 premium_positions=premium_positions,
                 differential=chip_differential,
+                preset=wildcard_preset,
+                pinned_ids=payload.get("pinned_ids") or None,
+                excluded_ids=payload.get("excluded_ids") or None,
             )
         timings["chip_draft_ms"] = elapsed_ms(ts)
 
@@ -1284,6 +1313,9 @@ def build_recommendations(payload):
                 "propagates_to_future_gws": bool(chip_strategy == "wildcard"),
                 "budget_m": chip_build.get("budget_m"),
                 "budget_breakdown": budget_breakdown,
+                "preset": wildcard_preset_name,
+                "preset_notes": list(chip_build.get("notes") or []),
+                "pins_conflict": list(chip_build.get("pins_conflict") or []),
                 "squad_cost_m": chip_build.get("squad_cost_m"),
                 "remaining_budget_m": chip_build.get("remaining_budget_m"),
                 "objective_score_total": chip_build.get("objective_score_total"),

@@ -159,28 +159,39 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
     xi_rows = [r for r in xi_rows if not bool(r.get("_pinned_bench", False))]
 
     # ---- stage 1b: cheapest available body per remaining XI slot ----
+    pinned_xi = [r.copy() for r in xi_rows]
+
     def remaining_pool(pos):
         ids = {int(r["id"]) for r in xi_rows} | {int(r["id"]) for r in pinned_bench}
         return xi_pool[(xi_pool["pos"] == pos) & ~xi_pool["id"].astype(int).isin(ids)]
 
-    for pos in POS_ORDER:
-        while sum(1 for r in xi_rows if str(r["pos"]) == pos) < xi_need[pos]:
-            pool = remaining_pool(pos).sort_values(["price_m", "chip_score"], ascending=[True, False], kind="mergesort")
-            pick = None
-            for _, cand in pool.iterrows():
-                if _team_count(xi_rows, cand["team"]) >= max_per_team:
-                    continue
-                if not def_cap_ok(xi_rows, cand):
-                    continue
-                if _is_premium(cand, premium_floor, premium_pos) and sum(
-                    1 for r in xi_rows if _is_premium(r, premium_floor, premium_pos)
-                ) >= prem_cap:
-                    continue
-                pick = cand
-                break
-            if pick is None:
-                return {"ok": False, "reason": f"Not enough available {pos} players for the XI.", "squad_df": None}
-            xi_rows.append(pick.copy())
+    def cheapest_fill():
+        """Reset the XI to the pins and fill every open slot with the cheapest
+        available body under the caps. Returns an error reason or None."""
+        xi_rows[:] = [r.copy() for r in pinned_xi]
+        for pos in POS_ORDER:
+            while sum(1 for r in xi_rows if str(r["pos"]) == pos) < xi_need[pos]:
+                pool = remaining_pool(pos).sort_values(["price_m", "chip_score"], ascending=[True, False], kind="mergesort")
+                pick = None
+                for _, cand in pool.iterrows():
+                    if _team_count(xi_rows, cand["team"]) >= max_per_team:
+                        continue
+                    if not def_cap_ok(xi_rows, cand):
+                        continue
+                    if _is_premium(cand, premium_floor, premium_pos) and sum(
+                        1 for r in xi_rows if _is_premium(r, premium_floor, premium_pos)
+                    ) >= prem_cap:
+                        continue
+                    pick = cand
+                    break
+                if pick is None:
+                    return f"Not enough available {pos} players for the XI."
+                xi_rows.append(pick.copy())
+        return None
+
+    fill_error = cheapest_fill()
+    if fill_error:
+        return {"ok": False, "reason": fill_error, "squad_df": None}
 
     # ---- bench reserve: cheapest available body per bench slot ----
     bench_avail = market[chip_bench.availability_mask(market, config.CHIP_BENCH_START_SHARE)]
@@ -263,41 +274,55 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
             xi_rows[best[1]] = best[2].copy()
         return sum(1 for r in xi_rows if _is_premium(r, premium_floor, premium_pos)) >= prem_min
 
-    xi_budget = budget_m - reserve - pinned_bench_cost
     gem_floor = gem_min_xi
     if gem_floor:
         n_low_market = int((xi_pool["selected_by_percent"] < gem_max_pct).sum()) if "selected_by_percent" in xi_pool.columns else 0
         if n_low_market < gem_floor:
             notes.append(f"gems: only {n_low_market} available players under {gem_max_pct:.0f}% ownership; floor relaxed")
             gem_floor = 0
-    premium_ok = ensure_premiums(xi_budget)
-    upgrade_pass(xi_budget, gem_floor)
-    premium_ok = ensure_premiums(xi_budget) and premium_ok
+    bench_cap = float(preset.get("bench_budget_max_m") or config.CHIP_WILDCARD_BENCH_BUDGET_MAX_M)
+    gem_filter = None
+    if gem_min_xi and "selected_by_percent" in market.columns:
+        gem_filter = pd.to_numeric(market["selected_by_percent"], errors="coerce").fillna(100.0) < gem_max_pct
+
+    # The reserve is the cheapest legal bench ignoring team caps; when the XI
+    # has used a cap the real bench costs a little more, so widen the reserve
+    # and rebuild until the bench completes.
+    bench_df = None
+    premium_ok = True
+    for extra in (0.0, 1.0, 2.0, 3.5, 5.0):
+        xi_budget = budget_m - reserve - extra - pinned_bench_cost
+        if extra > 0.0:
+            fill_error = cheapest_fill()
+            if fill_error:
+                return {"ok": False, "reason": fill_error, "squad_df": None}
+        premium_ok = ensure_premiums(xi_budget)
+        upgrade_pass(xi_budget, gem_floor)
+        premium_ok = ensure_premiums(xi_budget) and premium_ok
+
+        xi_df = pd.DataFrame(xi_rows).reset_index(drop=True)
+        # The cap never undercuts the cheapest legal bench: fodder prices are what they are.
+        bench_budget = max(min(bench_cap, budget_m - xi_cost()), reserve + extra) - pinned_bench_cost
+        xi_plus_pinned = pd.concat([xi_df, pd.DataFrame(pinned_bench)], ignore_index=True) if pinned_bench else xi_df
+        cand_bench, bench_notes = chip_bench.fill_bench(
+            market, xi_plus_pinned, mode=str(preset.get("bench_mode") or "enablers"),
+            budget_left_m=bench_budget, max_per_team=max_per_team, team_counts={}, gem_filter=gem_filter,
+        )
+        if len(cand_bench) == 4 - len(pinned_bench) and xi_cost() + float(cand_bench["price_m"].sum()) + pinned_bench_cost <= budget_m + 1e-9:
+            bench_df = cand_bench
+            notes.extend(bench_notes)
+            break
+    if bench_df is None:
+        return {"ok": False, "reason": "Could not complete the bench under the budget.", "squad_df": None}
     if gem_floor and _low_owned_count(xi_rows, gem_max_pct) < gem_floor:
         notes.append("gems: ownership floor not reachable under budget and caps; relaxed")
     if not premium_ok:
         notes.append(f"premium structure ({prem_min}) could not be met under the budget")
-
-    # ---- stage 2: bench ----
-    xi_df = pd.DataFrame(xi_rows).reset_index(drop=True)
-    bench_cap = float(preset.get("bench_budget_max_m") or config.CHIP_WILDCARD_BENCH_BUDGET_MAX_M)
-    # The cap never undercuts the cheapest legal bench: fodder prices are what they are.
-    bench_budget = max(min(bench_cap, budget_m - xi_cost()), reserve) - pinned_bench_cost
-    gem_filter = None
-    if gem_min_xi and "selected_by_percent" in market.columns:
-        gem_filter = pd.to_numeric(market["selected_by_percent"], errors="coerce").fillna(100.0) < gem_max_pct
-    xi_plus_pinned = pd.concat([xi_df, pd.DataFrame(pinned_bench)], ignore_index=True) if pinned_bench else xi_df
-    bench_df, bench_notes = chip_bench.fill_bench(
-        market, xi_plus_pinned, mode=str(preset.get("bench_mode") or "enablers"),
-        budget_left_m=bench_budget, max_per_team=max_per_team, team_counts={}, gem_filter=gem_filter,
-    )
-    notes.extend(bench_notes)
     if pinned_bench:
         pb = pd.DataFrame(pinned_bench).drop(columns=["_pinned_bench"], errors="ignore")
         pb["role"] = "pinned"
         bench_df = pd.concat([pb, bench_df], ignore_index=True)
-    if len(bench_df) != 4:
-        return {"ok": False, "reason": "Could not complete the bench under the budget.", "squad_df": None}
+    xi_df = pd.DataFrame(xi_rows).reset_index(drop=True)
 
     # ---- leftover money back into the XI ----
     bench_cost = float(bench_df["price_m"].sum())
