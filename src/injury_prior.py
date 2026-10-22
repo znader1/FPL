@@ -10,13 +10,15 @@ is an empty frame; `attach` fills 0 / False so sums never see NaN.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pandas as pd
 
 from . import config
+from .season_history import season_label_from_bootstrap
 
-COLUMNS = ["event", "element", "status", "chance"]
+COLUMNS = ["season", "event", "element", "status", "chance"]
 MISS_STATUS = {"i", "d"}
 FLAG_STATUS = {"i", "d", "s"}
 FLAG_P_MISS = 0.25
@@ -25,8 +27,10 @@ FLAG_P_MISS = 0.25
 def append_status_snapshot(bootstrap, event_id, path):
     """Upsert the bootstrap's player statuses for `event_id`. Returns rows written."""
     elements = (bootstrap or {}).get("elements") or []
+    season = str(season_label_from_bootstrap(bootstrap or {}) or "")
     new = pd.DataFrame([
         {
+            "season": season,
             "event": int(event_id),
             "element": int(e["id"]),
             "status": str(e.get("status") or "a").lower(),
@@ -40,14 +44,21 @@ def append_status_snapshot(bootstrap, event_id, path):
             old = pd.read_csv(p)
         except Exception:
             old = pd.DataFrame(columns=COLUMNS)
+        if "season" not in old.columns:
+            old["season"] = ""
         old = old[[c for c in COLUMNS if c in old.columns]]
+        # FPL reissues player ids every season: history from another season
+        # is a stranger's record. Keep this season only.
+        old = old[old["season"].astype(str) == season]
         old = old[~(pd.to_numeric(old["event"], errors="coerce") == int(event_id))]
         out = pd.concat([old, new], ignore_index=True)
     else:
         p.parent.mkdir(parents=True, exist_ok=True)
         out = new
     out = out.sort_values(["event", "element"]).reset_index(drop=True)
-    out.to_csv(p, index=False)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    out.to_csv(tmp, index=False)
+    os.replace(tmp, p)  # atomic: a concurrent reader never sees a half-written file
     return int(len(new))
 
 
@@ -62,6 +73,9 @@ def player_injury_prior(path):
         return pd.DataFrame(columns=["element", "p_miss", "injury_flag"])
     if df.empty or "element" not in df.columns or "status" not in df.columns:
         return pd.DataFrame(columns=["element", "p_miss", "injury_flag"])
+    if "season" in df.columns and df["season"].notna().any():
+        latest = str(df["season"].astype(str).max())
+        df = df[df["season"].astype(str) == latest]
     df["status"] = df["status"].astype(str).str.lower()
     df["event"] = pd.to_numeric(df["event"], errors="coerce")
     df = df.sort_values(["element", "event"])

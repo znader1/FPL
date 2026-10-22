@@ -50,3 +50,10 @@ def test_defender_trend_rewards_falling_xgc_and_rising_dc():
         r["defensive_contribution"] = 4
     out = trend.player_trend(pd.DataFrame(worse), as_of_event=13).set_index("element")
     assert float(out.loc[2, "trend"]) < 0.0
+
+
+def test_nan_element_type_does_not_crash():
+    df = pd.DataFrame(_match_rows(1, 3, [0.1] * 6 + [0.8] * 6))
+    df["element_type"] = None
+    out = trend.player_trend(df, as_of_event=13).set_index("element")
+    assert float(out.loc[1, "trend"]) > 0.0  # treated as an attacker

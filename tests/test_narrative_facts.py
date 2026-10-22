@@ -51,3 +51,10 @@ def test_streak_counts_consecutive_returns():
 def test_missing_history_gives_empty_facts():
     facts = narrative_facts.for_players([10], {10: 2}, pd.DataFrame(), pd.DataFrame(), _elements())
     assert facts[10] == {"vs_opponent": None, "milestone": {"stat": "goals", "current": 48, "target": 50}, "streak": 0}
+
+
+def test_nan_team_id_row_is_skipped_not_crashed():
+    m = _matches()
+    m.loc[0, "team_id"] = None
+    facts = narrative_facts.for_players([10], {10: 2}, m, _fixtures(), _elements())
+    assert facts[10]["vs_opponent"]["games"] == 2

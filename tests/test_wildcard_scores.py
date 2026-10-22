@@ -89,3 +89,12 @@ def test_attach_wildcard_signals_joins_trend_by_id():
     out = projections.attach_wildcard_signals(df, gw_start=13, match_df=match, status_path=None).set_index("id")
     assert float(out.loc[1, "wildcard_trend"]) > 0.0
     assert float(out.loc[2, "wildcard_trend"]) == 0.0
+
+
+def test_attach_wildcard_signals_fails_soft_on_broken_history(monkeypatch):
+    def boom(match_df, as_of_event):
+        raise ValueError("bad row")
+    import src.trend as _trend
+    monkeypatch.setattr(_trend, "player_trend", boom)
+    out = projections.attach_wildcard_signals(pd.DataFrame({"id": [1]}), gw_start=8, match_df=pd.DataFrame({"x": [1]}), status_path=None)
+    assert out["wildcard_trend"].tolist() == [0.0]

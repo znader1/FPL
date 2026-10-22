@@ -85,8 +85,14 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
     applied). Returns the optimizer result dict (see build_chip_squad)."""
     notes: list[str] = []
     pins_conflict: list[int] = []
-    pinned = [int(x) for x in (pinned_ids or [])]
+    pins_conflict_reasons: dict[int, str] = {}
+    pinned = list(dict.fromkeys(int(x) for x in (pinned_ids or [])))  # dedupe, keep order
     excluded = {int(x) for x in (excluded_ids or [])}
+
+    def conflict(pid, reason):
+        if pid not in pins_conflict:
+            pins_conflict.append(pid)
+        pins_conflict_reasons.setdefault(pid, reason)
     budget_m = float(to_number(budget_m, 100.0))
 
     if "start_share" not in market.columns:
@@ -135,28 +141,43 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
         return float(pen_table[min(n, len(pen_table) - 1)])
 
     # ---- stage 1a: pins ----
+    # A pin is honoured when the squad can stay legal with it: at most 15,
+    # at most 2/5/5/3 per position (XI slots first, then bench slots), under
+    # the team cap and the defensive cap. Anything else is dropped and named
+    # in pins_conflict with a reason: "shape", "team_cap", "def_cap", "unknown".
     xi_rows: list[pd.Series] = []
+    pinned_bench: list[pd.Series] = []
+    full_shape = {"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3}
     for pid in pinned:
         hit = market[market["id"].astype(int) == pid]
         if hit.empty:
             notes.append(f"pin {pid} not in market (excluded, unavailable or unknown)")
-            pins_conflict.append(pid)
+            conflict(pid, "unknown")
             continue
-        row = hit.iloc[0]
+        row = hit.iloc[0].copy()
         pos = str(row["pos"])
-        placed = sum(1 for r in xi_rows if str(r["pos"]) == pos)
-        if placed >= xi_need[pos]:
-            # XI slot full for this position: the pin goes to the bench side.
-            pins_conflict.append(pid)
-            bench_need[pos] -= 1 if bench_need[pos] > 0 else 0
-            row = row.copy(); row["_pinned_bench"] = True
-            xi_rows.append(row)
+        if len(xi_rows) + len(pinned_bench) >= 15:
+            conflict(pid, "shape")
             continue
-        if _team_count(xi_rows, row["team"]) >= max_per_team or not def_cap_ok(xi_rows, row):
-            pins_conflict.append(pid)
-        xi_rows.append(row.copy())
-    pinned_bench = [r for r in xi_rows if bool(r.get("_pinned_bench", False))]
-    xi_rows = [r for r in xi_rows if not bool(r.get("_pinned_bench", False))]
+        in_pos = sum(1 for r in xi_rows + pinned_bench if str(r["pos"]) == pos)
+        if in_pos >= full_shape[pos]:
+            conflict(pid, "shape")
+            continue
+        all_rows = xi_rows + pinned_bench
+        if _team_count(all_rows, row["team"]) >= max_per_team:
+            conflict(pid, "team_cap")
+            continue
+        if not def_cap_ok(all_rows, row):
+            conflict(pid, "def_cap")
+            continue
+        placed_xi = sum(1 for r in xi_rows if str(r["pos"]) == pos)
+        if placed_xi < xi_need[pos]:
+            xi_rows.append(row)
+        else:
+            # XI slots for this position are full: the pin sits on the bench.
+            bench_need[pos] -= 1
+            pinned_bench.append(row)
+    pinned = [int(r["id"]) for r in xi_rows + pinned_bench]
 
     # ---- stage 1b: cheapest available body per remaining XI slot ----
     pinned_xi = [r.copy() for r in xi_rows]
@@ -228,8 +249,11 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
                     if not def_cap_ok(others, cand):
                         continue
                     n_prem = sum(1 for r in others if _is_premium(r, premium_floor, premium_pos))
-                    if _is_premium(cand, premium_floor, premium_pos) and n_prem >= prem_cap:
+                    cand_prem = _is_premium(cand, premium_floor, premium_pos)
+                    if cand_prem and n_prem >= prem_cap:
                         continue
+                    if not cand_prem and _is_premium(row, premium_floor, premium_pos) and n_prem < prem_min:
+                        continue  # would drop below the preset's premium floor
                     if gem_floor and not (float(to_number(cand.get("selected_by_percent"), 100.0)) < gem_max_pct):
                         if _low_owned_count(others, gem_max_pct) < gem_floor:
                             continue
@@ -319,7 +343,7 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
     if not premium_ok:
         notes.append(f"premium structure ({prem_min}) could not be met under the budget")
     if pinned_bench:
-        pb = pd.DataFrame(pinned_bench).drop(columns=["_pinned_bench"], errors="ignore")
+        pb = pd.DataFrame(pinned_bench)
         pb["role"] = "pinned"
         bench_df = pd.concat([pb, bench_df], ignore_index=True)
     xi_df = pd.DataFrame(xi_rows).reset_index(drop=True)
@@ -327,12 +351,14 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
     # ---- leftover money back into the XI ----
     bench_cost = float(bench_df["price_m"].sum())
     upgrade_pass(budget_m - bench_cost, gem_floor)
+    n_prem_final = sum(1 for r in xi_rows if _is_premium(r, premium_floor, premium_pos))
+    if n_prem_final < prem_min and not any("premium structure" in n for n in notes):
+        notes.append(f"premium structure ({prem_min}) could not be met under the budget")
     xi_df = pd.DataFrame(xi_rows).reset_index(drop=True)
     xi_df["role"] = ["pinned" if int(i) in pinned_set else "xi" for i in xi_df["id"]]
     xi_df["is_xi"] = True
     bench_df["is_xi"] = False
     selected = pd.concat([xi_df, bench_df], ignore_index=True)
-    selected = selected.drop(columns=[c for c in ("_pinned_bench",) if c in selected.columns])
     selected["player_id"] = selected["id"].astype(int)
     selected["multiplier"] = 0
     selected["is_captain"] = False
@@ -356,6 +382,7 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
         "xi_ids": [int(i) for i in xi_df["id"]],
         "bench_roles": {int(r["id"]): str(r["role"]) for _, r in bench_df.iterrows()},
         "pins_conflict": sorted(set(pins_conflict)),
+        "pins_conflict_reasons": dict(pins_conflict_reasons),
         "notes": notes,
         "squad_df": selected,
     }

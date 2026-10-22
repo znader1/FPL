@@ -2,9 +2,13 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+import logging
+
 import pandas as pd
 
 from . import config, transforms
+
+logger = logging.getLogger(__name__)
 
 
 DIFFICULTY_MULTIPLIER = {
@@ -910,7 +914,11 @@ def attach_wildcard_signals(projections_df, gw_start, match_df=None, status_path
             match_df = _fd.load_match_history()
         except Exception:
             match_df = pd.DataFrame()
-    tr = _trend.player_trend(match_df, as_of_event=int(gw_start))
+    try:
+        tr = _trend.player_trend(match_df, as_of_event=int(gw_start))
+    except Exception as exc:  # noqa: BLE001 — one bad history row must not kill the wildcard
+        logger.warning("wildcard trend unavailable: %s", exc)
+        tr = None
     if tr is not None and not tr.empty:
         out = out.merge(tr.rename(columns={"element": "id"}), on="id", how="left")
         out["wildcard_trend"] = pd.to_numeric(out["trend"], errors="coerce").fillna(0.0)

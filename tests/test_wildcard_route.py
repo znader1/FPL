@@ -122,3 +122,27 @@ def test_unknown_preset_422():
     name, preset = api_main.resolve_wildcard_preset({"chip_strategy": "wildcard"})
     assert name == "balanced" and preset is config.CHIP_WILDCARD_PRESETS["balanced"]
     assert api_main.resolve_wildcard_preset({"chip_strategy": "none"}) == (None, None)
+
+
+def test_drafts_rejects_bad_pin_lists_422(stubbed):
+    from api.main import app
+    from src.auth import require_user
+    app.dependency_overrides[require_user] = lambda: {"sub": "test-user"}
+    try:
+        client = TestClient(app)
+        assert client.post("/wildcard/drafts", json={"entry_id": 1, "pinned_ids": "123"}).status_code == 422
+        assert client.post("/wildcard/drafts", json={"entry_id": 1, "pinned_ids": 5}).status_code == 422
+        assert client.post("/wildcard/drafts", json={"entry_id": 1, "excluded_ids": list(range(40))}).status_code == 422
+        assert client.post("/wildcard/drafts", json={"entry_id": 1, "pinned_ids": [1, "x"]}).status_code == 422
+        assert client.post("/wildcard/drafts", json={"pinned_ids": [1]}).status_code == 422
+    finally:
+        app.dependency_overrides = {}
+
+
+def test_recommendations_id_lists_validated():
+    from api import main as api_main
+    with pytest.raises(HTTPException) as e:
+        api_main.parse_id_list({"pinned_ids": "12"}, "pinned_ids")
+    assert e.value.status_code == 422
+    assert api_main.parse_id_list({"pinned_ids": [3, 3, "4"]}, "pinned_ids") == [3, 4]
+    assert api_main.parse_id_list({}, "pinned_ids") == []

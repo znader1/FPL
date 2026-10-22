@@ -11,6 +11,10 @@ LEGACY_IDS = [12, 17, 51, 53, 68, 88, 111, 120, 150, 186, 216, 222, 242, 251, 27
 PREMIUM = config.CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR
 
 
+def _legal(df):
+    return df["pos"].value_counts().to_dict() == {"GKP": 2, "DEF": 5, "MID": 5, "FWD": 3} and len(df) == 15
+
+
 def _build(preset_name, **kw):
     return optimizer.build_chip_squad(
         elements_all=wildcard_market(), score_col="wildcard_score", budget_m=100.0,
@@ -123,8 +127,12 @@ def test_pins_conflict_reported_not_raised():
         preset=config.CHIP_WILDCARD_PRESETS["balanced"], pinned_ids=pins,
     )
     assert b["ok"]
-    assert set(b["pins_conflict"]) & set(pins)
-    assert set(pins) <= set(b["squad_df"]["id"].astype(int))
+    assert _legal(b["squad_df"])
+    dropped = set(b["pins_conflict"]) & set(pins)
+    assert dropped and all(b["pins_conflict_reasons"][p] == "team_cap" for p in dropped)
+    kept = set(pins) - dropped
+    assert kept <= set(b["squad_df"]["id"].astype(int))
+    assert not dropped & set(b["squad_df"]["id"].astype(int))
 
 
 def test_pinned_player_is_in_xi_and_excluded_never_selected():
@@ -162,3 +170,68 @@ def test_preset_requires_start_share():
             elements_all=market, score_col="wildcard_score", budget_m=100.0,
             preset=config.CHIP_WILDCARD_PRESETS["balanced"],
         )
+
+
+# ---- final-review fix pass -------------------------------------------------
+
+def test_three_goalkeeper_pins_keep_squad_legal_and_report_shape_conflict():
+    market = wildcard_market()
+    gks = market[market["pos"] == "GKP"]["id"].astype(int).tolist()[:3]
+    b = optimizer.build_chip_squad(
+        elements_all=market, score_col="wildcard_score", budget_m=100.0,
+        preset=config.CHIP_WILDCARD_PRESETS["balanced"], pinned_ids=gks,
+    )
+    assert b["ok"], b["reason"]
+    assert _legal(b["squad_df"])
+    assert gks[2] in b["pins_conflict"]
+    assert b["pins_conflict_reasons"][gks[2]] == "shape"
+
+
+def test_sixteen_pins_capped_to_a_legal_squad():
+    market = wildcard_market()
+    pins = market[market["team"].isin([1, 2])]["id"].astype(int).tolist()[:16]
+    b = optimizer.build_chip_squad(
+        elements_all=market, score_col="wildcard_score", budget_m=100.0,
+        preset=config.CHIP_WILDCARD_PRESETS["aggressive"], pinned_ids=pins,
+    )
+    assert b["ok"]
+    assert _legal(b["squad_df"])
+    assert b["squad_df"]["team"].value_counts().max() <= 3 + len([p for p in b["pins_conflict"] if b["pins_conflict_reasons"].get(p) == "team_cap"])
+
+
+def test_duplicate_pin_is_deduped():
+    market = wildcard_market()
+    pin = int(market[market["pos"] == "MID"]["id"].iloc[0])
+    b = optimizer.build_chip_squad(
+        elements_all=market, score_col="wildcard_score", budget_m=100.0,
+        preset=config.CHIP_WILDCARD_PRESETS["balanced"], pinned_ids=[pin, pin],
+    )
+    assert b["ok"] and _legal(b["squad_df"])
+    assert int((b["squad_df"]["id"] == pin).sum()) == 1
+    assert b["pins_conflict"] == []
+
+
+def test_bench_pin_is_not_a_cap_conflict():
+    market = wildcard_market()
+    # Balanced XI has 3 DEF; a 4th pinned DEF goes to the bench without a conflict.
+    defs = [int(market[(market["pos"] == "DEF") & (market["team"] == t)]["id"].iloc[0]) for t in (5, 6, 7, 8)]
+    b = optimizer.build_chip_squad(
+        elements_all=market, score_col="wildcard_score", budget_m=100.0,
+        preset=config.CHIP_WILDCARD_PRESETS["balanced"], pinned_ids=defs,
+    )
+    assert b["ok"] and _legal(b["squad_df"])
+    assert set(defs) <= set(b["squad_df"]["id"].astype(int))
+    assert b["pins_conflict"] == []
+
+
+def test_premium_floor_holds_when_premiums_score_low():
+    market = wildcard_market()
+    prem = (market["price_m"] >= PREMIUM) & market["pos"].isin(["MID", "FWD"])
+    market.loc[prem, "wildcard_score"] = 1.0  # premiums look terrible
+    for name, n in (("aggressive", 3), ("balanced", 2)):
+        b = optimizer.build_chip_squad(
+            elements_all=market, score_col="wildcard_score", budget_m=100.0,
+            preset=config.CHIP_WILDCARD_PRESETS[name],
+        )
+        assert b["ok"]
+        assert _premiums(_xi(b)) == n, (name, b["notes"])

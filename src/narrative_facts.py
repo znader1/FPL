@@ -79,7 +79,9 @@ def for_players(player_ids, next_opponent, match_df, fixtures_df, elements_df):
             opp = next_opponent.get(pid) if next_opponent else None
             if opp is not None and "fixture" in g.columns and "team_id" in g.columns:
                 def _opp_of(row):
-                    pair = fx.get(int(row["fixture"])) if pd.notna(row["fixture"]) else None
+                    if pd.isna(row["fixture"]) or pd.isna(row["team_id"]):
+                        return None
+                    pair = fx.get(int(row["fixture"]))
                     if not pair:
                         return None
                     own = int(row["team_id"])

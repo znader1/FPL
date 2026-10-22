@@ -44,7 +44,8 @@ def player_trend(match_df, as_of_event):
             rows.append({"element": int(element), "trend": 0.0})
             continue
         recent, prior = g.tail(w), g.iloc[-2 * w:-w]
-        etype = int(pd.to_numeric(g["element_type"], errors="coerce").iloc[-1] or 3)
+        et_raw = pd.to_numeric(g["element_type"], errors="coerce").iloc[-1]
+        etype = 3 if pd.isna(et_raw) else int(et_raw)
 
         def block(part):
             mins = float(part["minutes"].sum())

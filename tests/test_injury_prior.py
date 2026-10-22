@@ -40,3 +40,23 @@ def test_injury_flag_from_current_status_or_high_prior(tmp_path):
     out = injury_prior.player_injury_prior(path).set_index("element")
     assert bool(out.loc[1, "injury_flag"]) is True
     assert bool(out.loc[2, "injury_flag"]) is False
+
+
+def _bootstrap_season(status_by_id, year):
+    b = _bootstrap(status_by_id)
+    b["events"] = [{"id": 1, "deadline_time": f"{year}-08-15T17:30:00Z"}]
+    return b
+
+
+def test_status_history_is_keyed_by_season(tmp_path):
+    path = str(tmp_path / "status_history.csv")
+    # last season: player 1 injured for 6 GWs
+    for gw in range(1, 7):
+        injury_prior.append_status_snapshot(_bootstrap_season({1: "i"}, 2025), gw, path)
+    # new season: same id, fit, one GW on file
+    injury_prior.append_status_snapshot(_bootstrap_season({1: "a"}, 2026), 1, path)
+    out = injury_prior.player_injury_prior(path).set_index("element")
+    assert float(out.loc[1, "p_miss"]) == 0.0
+    assert bool(out.loc[1, "injury_flag"]) is False
+    df = pd.read_csv(path)
+    assert set(df["season"]) == {"2026-27"}

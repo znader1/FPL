@@ -973,6 +973,12 @@ def optimize_squad(payload, owner=None):
     }
 
 
+def parse_id_list(payload, key):
+    """Shared with the wildcard router: list of <= 15 ints or a 422."""
+    from api.wildcard_router import parse_id_list as _parse
+    return _parse(payload, key)
+
+
 def resolve_wildcard_preset(payload):
     """(name, preset) for a wildcard request; (None, None) when the chip is not
     the wildcard. Unknown names are a 422 — the three presets are the contract."""
@@ -999,6 +1005,8 @@ def build_recommendations(payload):
     chip_strategy = normalize_chip_strategy(chip_strategy_raw)
     chip_differential = parse_bool(payload.get("differential"), default=False)
     wildcard_preset_name, wildcard_preset = resolve_wildcard_preset(payload)
+    wildcard_pinned_ids = parse_id_list(payload, "pinned_ids") if wildcard_preset else []
+    wildcard_excluded_ids = parse_id_list(payload, "excluded_ids") if wildcard_preset else []
     prioritize_injured = parse_bool(payload.get("prioritize_injured"), default=True)
     latest_n_matches_raw = payload.get("latest_n_matches", config.PROJ_DEFAULT_LATEST_N_MATCHES)
     apply_transfer_count_raw = payload.get("apply_transfer_count")
@@ -1297,8 +1305,8 @@ def build_recommendations(payload):
                 premium_positions=premium_positions,
                 differential=chip_differential,
                 preset=wildcard_preset,
-                pinned_ids=payload.get("pinned_ids") or None,
-                excluded_ids=payload.get("excluded_ids") or None,
+                pinned_ids=wildcard_pinned_ids or None,
+                excluded_ids=wildcard_excluded_ids or None,
             )
         timings["chip_draft_ms"] = elapsed_ms(ts)
 
@@ -2232,7 +2240,7 @@ def recommendations_get(
     horizon_gws=3, chip_horizon_gws=None, chip_play_event_id=None,
     chip_strategy="none", latest_n_matches=3, include_transfers=False,
     apply_transfer_count=None, itb_m=None, free_transfers=None, hit_cap=0, panel_limit=5,
-    prioritize_injured=None,
+    prioritize_injured=None, wildcard_preset=None, pinned_ids=None, excluded_ids=None,
     api_key=None, x_api_key=Header(None), authorization=Header(None),
 ):
     err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
@@ -2246,6 +2254,9 @@ def recommendations_get(
         "apply_transfer_count": apply_transfer_count, "itb_m": itb_m,
         "free_transfers": free_transfers, "hit_cap": hit_cap, "panel_limit": panel_limit,
         "prioritize_injured": prioritize_injured,
+        "wildcard_preset": wildcard_preset,
+        "pinned_ids": [v for v in str(pinned_ids or "").split(",") if v.strip()],
+        "excluded_ids": [v for v in str(excluded_ids or "").split(",") if v.strip()],
     }
     out = build_recommendations(payload)
     return JSONResponse(content=jsonable_encoder(out))
