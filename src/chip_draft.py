@@ -124,6 +124,17 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
     avail = chip_bench.availability_mask(market, xi_share)
     xi_pool = market[avail].copy()
 
+    # Adaptive premium floor: when fewer available attackers clear the absolute
+    # floor than the preset needs, "premium" becomes the TOP_N priciest
+    # available attackers so the structural constraint stays feasible.
+    attackers = xi_pool[xi_pool["pos"].isin(premium_pos)]
+    n_abs = int((attackers["price_m"] >= premium_floor).sum())
+    if prem_min > 0 and n_abs < prem_min and len(attackers):
+        top_n = int(config.CHIP_WILDCARD_PREMIUM_TOP_N)
+        prices = attackers["price_m"].sort_values(ascending=False)
+        premium_floor = float(prices.iloc[min(top_n, len(prices)) - 1])
+        notes.append(f"premium floor adapted to £{premium_floor:.1f}m (only {n_abs} attackers at the usual floor)")
+
     def elite(team):
         r = market.loc[market["team"] == int(team), "team_def_rank"] if "team_def_rank" in market.columns else pd.Series(dtype=float)
         r = pd.to_numeric(r, errors="coerce").dropna()
@@ -381,6 +392,7 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
         "bench_score_total": round(bench_score, 2),
         "xi_ids": [int(i) for i in xi_df["id"]],
         "bench_roles": {int(r["id"]): str(r["role"]) for _, r in bench_df.iterrows()},
+        "premium_floor_m": round(premium_floor, 1),
         "pins_conflict": sorted(set(pins_conflict)),
         "pins_conflict_reasons": dict(pins_conflict_reasons),
         "notes": notes,

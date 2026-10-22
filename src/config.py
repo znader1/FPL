@@ -537,6 +537,11 @@ CHIP_WILDCARD_INJURY_PRIOR_SHRINK_GWS = 6.0  # [untested]
 CHIP_WILDCARD_STATUS_HISTORY_PATH = "data/processed/fpl/status_history.csv"  # [operational]
 # Position-aware upside (spec 4.7): ep_goals + ep_assists + ep_dc + ep_saves.
 CHIP_WILDCARD_UPSIDE_WEIGHT = 0.3  # [untested]
+# "Premium" for the preset counts: price >= CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR,
+# OR among the TOP_N most expensive available attackers when fewer than the
+# preset needs clear the absolute floor (a thin premium market must not make
+# "exactly 3 premiums" infeasible).
+CHIP_WILDCARD_PREMIUM_TOP_N = 8  # [untested]
 # Gems preset ownership constraint (spec 4.8).
 CHIP_WILDCARD_GEM_OWNERSHIP_MAX = 10.0  # [untested] selected_by_percent
 CHIP_WILDCARD_GEM_MIN_XI = 6  # [untested]

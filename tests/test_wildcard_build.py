@@ -235,3 +235,23 @@ def test_premium_floor_holds_when_premiums_score_low():
         )
         assert b["ok"]
         assert _premiums(_xi(b)) == n, (name, b["notes"])
+
+
+def test_premium_floor_adapts_when_market_has_few_premiums():
+    """Only two attackers priced >= the config floor: 'premium' must mean the
+    top-N priced available attackers, so Aggressive still gets three."""
+    market = wildcard_market()
+    atk = market["pos"].isin(["MID", "FWD"])
+    market.loc[atk & (market["price_m"] >= PREMIUM), "price_m"] = 9.9
+    top2 = market[atk].sort_values("price_m", ascending=False).index[:2]
+    market.loc[top2, "price_m"] = 12.0
+    b = optimizer.build_chip_squad(
+        elements_all=market, score_col="wildcard_score", budget_m=100.0,
+        preset=config.CHIP_WILDCARD_PRESETS["aggressive"],
+    )
+    assert b["ok"]
+    floor = b["premium_floor_m"]
+    assert floor < PREMIUM
+    xi = _xi(b)
+    assert int(((xi["price_m"] >= floor) & xi["pos"].isin(["MID", "FWD"])).sum()) == 3
+    assert not any("premium structure" in n for n in b["notes"])
