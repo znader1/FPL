@@ -255,3 +255,23 @@ def test_premium_floor_adapts_when_market_has_few_premiums():
     xi = _xi(b)
     assert int(((xi["price_m"] >= floor) & xi["pos"].isin(["MID", "FWD"])).sum()) == 3
     assert not any("premium structure" in n for n in b["notes"])
+
+
+def test_balanced_reserves_budget_for_a_real_dc_midfielder():
+    # One genuine DC MID at £5.0; every cheaper MID has no DC output. The XI
+    # must leave the extra £0.5 so the dc_mid role is a DC body, not the
+    # cheapest midfielder.
+    m = wildcard_market()
+    mid = m["pos"] == "MID"
+    m.loc[mid & (m["price_m"] < 5.0), "p_dc"] = 0.0
+    m.loc[mid & (m["price_m"] >= 5.0) & (m["price_m"] < 5.6), "p_dc"] = 0.8
+    m.loc[mid, "start_share"] = 0.95
+    b = optimizer.build_chip_squad(
+        elements_all=m, score_col="wildcard_score", budget_m=100.0,
+        preset=config.CHIP_WILDCARD_PRESETS["balanced"],
+    )
+    assert b["ok"], b.get("reason")
+    bench = b["squad_df"][~b["squad_df"]["is_xi"].astype(bool)]
+    row = bench[bench["role"] == "dc_mid"].iloc[0]
+    assert row["pos"] == "MID" and float(row["p_dc"]) >= float(config.CHIP_BENCH_MID_DC_MIN_PROB)
+    assert not any("cheapest" in n for n in b["notes"])

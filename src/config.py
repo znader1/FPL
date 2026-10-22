@@ -125,6 +125,10 @@ PROJ_FORM_SCALE_BASE_MATCHES = 3  # [untested]
 PROJ_LATEST_N_MIN = 1  # [untested]
 PROJ_LATEST_N_MAX = 8  # [untested]
 PROJ_PLAYER_RECENT_GW_WINDOW = 5  # [untested]
+# Zero-minute GWs in the recent average (projections._drop_unavailable_zero_gws):
+# an injured/suspended blank is not evidence about level; a fit-but-benched blank is.
+PROJ_RECENT_DROP_UNAVAILABLE_ZEROS = True  # [untested] False = every zero counts (pre-2026-10 behaviour)
+PROJ_RECENT_SANDWICH_MIN_STARTS = 3  # [untested] started GWs needed before a single blank is read as an absence
 PROJ_PLAYER_RECENT_MIN_SAMPLES = 2  # [untested]
 PROJ_PLAYER_RECENT_BLEND_WEIGHT = 0.65  # [untested]
 PROJ_EP_NEXT_BLEND_WEIGHT = 0.50  # [untested]
@@ -518,6 +522,7 @@ CHIP_BENCH_START_SHARE = 0.85  # [untested]
 CHIP_XI_START_SHARE = 0.70  # [untested] default when a preset gives no xi_start_share
 # DC-midfielder bench role: P(reaching rules.OUTPUT_DC_THRESHOLD) per game.
 CHIP_BENCH_MID_DC_PROB = 0.5  # [untested]
+CHIP_BENCH_MID_DC_MIN_PROB = 0.25  # [untested] below this a MID is not a DC body; bench falls back to the cheapest
 # Same-team defensive correlation (spec 4.5). GK counts as DEF for the cap;
 # the cap lifts for teams whose xG defence rating ranks <= ELITE_DEF_RANK.
 CHIP_WILDCARD_MAX_DEF_PER_TEAM = 2  # [untested]
@@ -638,11 +643,11 @@ FDR_TICKER_BANDS = [
 # --- minutes_model.py: P(start) + expected minutes ---
 MINUTES_HALFLIFE_GWS = 5.0           # [untested] decay half-life (in GWs) on start/minutes history
 MINUTES_START_PRIOR = 0.55           # [untested] prior P(start) for players with no history
-MINUTES_PRIOR_WEIGHT = 2.0           # [untested] pseudo-GWs of prior weight (shrinks thin samples)
+MINUTES_PRIOR_WEIGHT = 0.5           # [untested] pseudo-GWs of prior weight (shrinks thin samples); was 2.0, which with the decayed window left 7/7 starters at P(start) 0.86 vs observed 0.96 (GW1-7 2026-27)
 MINUTES_E_MIN_GIVEN_START = 82.0     # [untested] assumed E[minutes | started] with no history
 MINUTES_CAMEO_MINUTES = 22.0         # [untested] assumed E[minutes | sub appearance]
 MINUTES_SUB_APP_PROB = 0.45          # [untested] P(appear | did not start) baseline
-MINUTES_P60_GIVEN_START = 0.86       # [untested] P(>=60 min | started) baseline
+MINUTES_P60_GIVEN_START = 0.86       # [untested] P(>=60 min | started) prior; blended with the player's own decayed rate
 MINUTES_STATUS_AVAILABILITY = {      # hard availability cap by FPL status code
     "a": 1.0, "d": 0.5, "i": 0.0, "s": 0.0, "u": 0.0, "n": 0.0,
 }  # [untested]
@@ -737,9 +742,15 @@ ODDS_TEAM_ALIASES = {}       # [operational] extra {fpl_name: odds_api_name} fix
 # 2026-09-10 extended sweep (0.5..1.0, GW6-38) resolved the old "top of grid,
 # not a confirmed interior optimum" caveat: the bowl bottoms at 0.5-0.6
 # (MAE 1.902/1.897 — noise-level apart), degrades from 0.8, and 1.0 drops
-# captain hit back to baseline. 0.5 is confirmed at-optimum; do not raise
-# past 0.6 without new evidence.
-PROJ_MODEL_BLEND_WEIGHT = 0.5  # [tuned]
+# captain hit back to baseline.
+# 2026-10-22: raised to 0.7. Re-sweep (GW6-17, 1-GW MAE) 0.5=1.892 / 0.7=1.895 /
+# 0.85=1.911 with captain hit equal at 0.5 and 0.7 — a tie on the only metric
+# we have. The user-facing failure the 50/50 blend produced (GW8 2026-27: six
+# Brighton players projected 5-8 xPts away at Liverpool off a points streak,
+# xG model said 2-3.5; Forest at Ipswich the mirror image) is a multi-GW
+# wildcard/transfer problem the 1-GW MAE does not measure. Do not raise past
+# 0.8 (degrades); revisit with a horizon-aware backtest.
+PROJ_MODEL_BLEND_WEIGHT = 0.7  # [untested] (directional sweep only) 2026-10-22 sweep (2025-26 GW6-17, 1-GW MAE): 0.5=1.892, 0.7=1.895, 0.85=1.911 — tie; 0.7 chosen so fixture/underlying outweighs recent points (user call); was 0.5 [tuned]
 
 # --- LLM specialist agents (api/chat.py) ---
 # Inject the reflection agent's learned strategy rules (src/agent_memory

@@ -228,10 +228,23 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
     # ---- bench reserve: cheapest available body per bench slot ----
     bench_avail = market[chip_bench.availability_mask(market, config.CHIP_BENCH_START_SHARE)]
     reserve = 0.0
+    roles_mode = str(preset.get("bench_mode") or "enablers") == "roles"
     for pos, n in bench_need.items():
         if n <= 0:
             continue
-        prices = bench_avail[bench_avail["pos"] == pos]["price_m"].nsmallest(n)
+        pool = bench_avail[bench_avail["pos"] == pos]
+        if roles_mode and pos == "MID" and "p_dc" in pool.columns:
+            # The dc_mid role needs a DC body, which usually costs more than
+            # the cheapest midfielder; reserve for it or the XI eats the gap
+            # and the role degrades to "cheapest MID".
+            dc_pool = pool[pd.to_numeric(pool["p_dc"], errors="coerce").fillna(0.0) >= float(config.CHIP_BENCH_MID_DC_MIN_PROB)]
+            if not dc_pool.empty:
+                dc_price = float(dc_pool["price_m"].min())
+                rest = pool[pool["id"] != dc_pool.loc[dc_pool["price_m"].idxmin(), "id"]]["price_m"].nsmallest(n - 1)
+                if len(rest) == n - 1:
+                    reserve += dc_price + float(rest.sum())
+                    continue
+        prices = pool["price_m"].nsmallest(n)
         reserve += float(prices.sum()) if len(prices) == n else float(market[market["pos"] == pos]["price_m"].nsmallest(n).sum())
     pinned_bench_cost = sum(float(r["price_m"]) for r in pinned_bench)
 

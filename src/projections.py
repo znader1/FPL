@@ -6,7 +6,7 @@ import logging
 
 import pandas as pd
 
-from . import config, transforms
+from . import config, injury_prior, transforms
 
 logger = logging.getLogger(__name__)
 
@@ -353,12 +353,42 @@ def load_latest_player_gw_history(path=None, base_dir="data/processed/fpl"):
     return df.copy()
 
 
-def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/processed/fpl", fixtures=None, finished_gw_max=None):
+def _drop_unavailable_zero_gws(df, unavailable):
+    """Remove zero-minute GW rows that are not evidence about the player's level.
+
+    A row goes when (a) the status snapshot says the player was injured /
+    suspended / doubtful that GW (`unavailable` = {(player_id, gw)}), or (b) the
+    "sandwiched" rule: the player started every other GW in the window (at least
+    PROJ_RECENT_SANDWICH_MIN_STARTS of them) and blanked exactly once — a nailed
+    starter does not get benched on merit for one week, so that blank is
+    treated as an unrecorded absence. A fit, rotated player keeps every zero.
+    `unavailable=None` disables both rules (legacy behaviour, backtests).
+    """
+    if unavailable is None or df.empty or "gw_minutes" not in df.columns:
+        return df
+    mins = pd.to_numeric(df["gw_minutes"], errors="coerce").fillna(0.0)
+    starts = pd.to_numeric(df.get("gw_starts"), errors="coerce").fillna(0.0) if "gw_starts" in df.columns else pd.Series(0.0, index=df.index)
+    zero = mins <= 0
+    pid = pd.to_numeric(df["player_id"], errors="coerce")
+    gw = pd.to_numeric(df["gw"], errors="coerce")
+    flagged = pd.Series([(int(a), int(b)) in unavailable if pd.notna(a) and pd.notna(b) else False
+                         for a, b in zip(pid, gw)], index=df.index)
+    min_starts = int(config.PROJ_RECENT_SANDWICH_MIN_STARTS)
+    grp = pd.DataFrame({"pid": pid, "zero": zero, "started": starts > 0})
+    per = grp.groupby("pid").agg(n_zero=("zero", "sum"), n_started=("started", "sum"), n=("zero", "size"))
+    sandwich_pids = set(per[(per["n_zero"] == 1) & (per["n_started"] >= min_starts) & (per["n_started"] + per["n_zero"] == per["n"])].index)
+    sandwiched = zero & pid.isin(sandwich_pids)
+    return df[~(zero & (flagged | sandwiched))].copy()
+
+
+def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/processed/fpl", fixtures=None, finished_gw_max=None, unavailable=None):
     """
     Build recent player-by-GW averages before `gw_start`.
     Uses recent calendar GWs before `gw_start`.
     If a player has no row for a GW but their team had a fixture, that GW is treated
-    as a zero-point appearance for recent-form purposes.
+    as a zero-point appearance for recent-form purposes — unless `unavailable`
+    (set of (player_id, gw)) or the sandwiched-blank rule marks that GW as an
+    absence, see `_drop_unavailable_zero_gws`.
     """
     hist = history_df if history_df is not None else load_latest_player_gw_history(base_dir=resolve_history_base_dir(base_dir))
     if hist is None or hist.empty:
@@ -440,6 +470,10 @@ def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/
                 else:
                     merged["gw_fixture_count"] = merged["team_fixture_count"].fillna(0.0)
                 df = merged.drop(columns=["team_fixture_count"], errors="ignore")
+
+    df = _drop_unavailable_zero_gws(df, unavailable)
+    if df.empty:
+        return pd.DataFrame()
 
     agg_map = {
         "gw_total_points": "mean",
@@ -562,7 +596,8 @@ def project_elements_next_gws(
     recent_blend_weight = clamp(config.PROJ_PLAYER_RECENT_BLEND_WEIGHT, 0.0, 1.0)
     ep_next_blend_weight = clamp(config.PROJ_EP_NEXT_BLEND_WEIGHT, 0.0, 1.0)
 
-    recent_gw = player_recent_gw_map(gw_start=gw_start, window=recent_window, fixtures=fixtures, finished_gw_max=finished_gw_max)
+    unavailable = injury_prior.unavailable_gws(config.CHIP_WILDCARD_STATUS_HISTORY_PATH) if config.PROJ_RECENT_DROP_UNAVAILABLE_ZEROS else None
+    recent_gw = player_recent_gw_map(gw_start=gw_start, window=recent_window, fixtures=fixtures, finished_gw_max=finished_gw_max, unavailable=unavailable)
     recent_history_max_gw = None
     if recent_gw is not None and not recent_gw.empty:
         if "recent_history_max_gw" in recent_gw.columns:

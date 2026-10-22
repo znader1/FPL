@@ -21,6 +21,7 @@ from .season_history import season_label_from_bootstrap
 COLUMNS = ["season", "event", "element", "status", "chance"]
 MISS_STATUS = {"i", "d"}
 FLAG_STATUS = {"i", "d", "s"}
+UNAVAILABLE_STATUS = {"i", "d", "s", "n"}  # statuses that make a zero-minute GW an absence, not a benching
 FLAG_P_MISS = 0.25
 
 
@@ -60,6 +61,30 @@ def append_status_snapshot(bootstrap, event_id, path):
     out.to_csv(tmp, index=False)
     os.replace(tmp, p)  # atomic: a concurrent reader never sees a half-written file
     return int(len(new))
+
+
+def unavailable_gws(path):
+    """→ set of (element, event) where the status snapshot for that GW was a
+    miss status (injured / suspended / doubtful / unavailable). Empty set when
+    the file is missing or unreadable. Used by projections.player_recent_gw_map
+    to keep an injured blank out of a player's recent average."""
+    p = Path(path) if path else None
+    if p is None or not p.exists():
+        return set()
+    try:
+        df = pd.read_csv(p)
+    except Exception:
+        return set()
+    if df.empty or any(c not in df.columns for c in ("element", "event", "status")):
+        return set()
+    if "season" in df.columns and df["season"].notna().any():
+        latest = str(df["season"].astype(str).max())
+        df = df[df["season"].astype(str) == latest]
+    miss = df["status"].astype(str).str.lower().isin(UNAVAILABLE_STATUS)
+    el = pd.to_numeric(df["element"], errors="coerce")
+    ev = pd.to_numeric(df["event"], errors="coerce")
+    ok = miss & el.notna() & ev.notna()
+    return {(int(a), int(b)) for a, b in zip(el[ok], ev[ok])}
 
 
 def player_injury_prior(path):

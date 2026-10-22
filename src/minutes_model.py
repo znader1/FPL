@@ -109,34 +109,35 @@ def _gw_decay_weights(gws, asof_gw, halflife_gws):
     return np.power(0.5, age / halflife).astype("float64")
 
 
+_FEATURE_COLUMNS = [
+    "player_id", "hist_start_rate", "hist_min_given_start",
+    "hist_p60_given_start", "hist_start_weight", "hist_appear_rate", "eff_samples",
+]
+
+
 def compute_minutes_features(history_df, gw, halflife_gws=None):
     """
     Decayed per-player start/minutes features from history strictly before ``gw``.
 
     Returns columns:
         player_id, hist_start_rate, hist_min_given_start,
-        hist_appear_rate, eff_samples
+        hist_p60_given_start, hist_start_weight, hist_appear_rate, eff_samples
     """
     halflife_gws = float(halflife_gws if halflife_gws is not None
                          else config.MINUTES_HALFLIFE_GWS)
     if history_df is None or history_df.empty:
-        return pd.DataFrame(columns=[
-            "player_id", "hist_start_rate", "hist_min_given_start",
-            "hist_appear_rate", "eff_samples",
-        ])
+        return pd.DataFrame(columns=_FEATURE_COLUMNS)
 
     df = history_df[history_df["gw"] < int(gw)].copy()
     if df.empty:
-        return pd.DataFrame(columns=[
-            "player_id", "hist_start_rate", "hist_min_given_start",
-            "hist_appear_rate", "eff_samples",
-        ])
+        return pd.DataFrame(columns=_FEATURE_COLUMNS)
 
     df["w"] = _gw_decay_weights(df["gw"], int(gw), halflife_gws)
     df["started"] = (df["gw_starts"] > 0).astype(float)
     df["appeared"] = (df["gw_minutes"] > 0).astype(float)
     # Minutes only count toward "given start" when the player actually started.
     df["start_minutes"] = df["gw_minutes"].where(df["started"] > 0, 0.0)
+    df["start_60"] = ((df["started"] > 0) & (df["gw_minutes"] >= 60)).astype(float)
 
     rows = []
     for pid, g in df.groupby("player_id"):
@@ -148,12 +149,16 @@ def compute_minutes_features(history_df, gw, halflife_gws=None):
         start_w = float((g["started"] * g["w"]).sum())
         if start_w > 0:
             min_given_start = float((g["start_minutes"] * g["w"]).sum() / start_w)
+            p60_given_start = float((g["start_60"] * g["w"]).sum() / start_w)
         else:
             min_given_start = float(config.MINUTES_E_MIN_GIVEN_START)
+            p60_given_start = float(config.MINUTES_P60_GIVEN_START)
         rows.append({
             "player_id": int(pid),
             "hist_start_rate": start_rate,
             "hist_min_given_start": min_given_start,
+            "hist_p60_given_start": p60_given_start,
+            "hist_start_weight": start_w,
             "hist_appear_rate": appear_rate,
             "eff_samples": wsum,
         })
@@ -221,13 +226,15 @@ def minutes_projection(elements_df, history_df, gw):
     if not feats.empty:
         df = df.merge(feats, left_on="id", right_on="player_id", how="left")
     else:
-        for c in ["hist_start_rate", "hist_min_given_start", "hist_appear_rate", "eff_samples"]:
+        for c in _FEATURE_COLUMNS[1:]:
             df[c] = np.nan
 
     eff = pd.to_numeric(df.get("eff_samples"), errors="coerce").fillna(0.0)
     hist_start = pd.to_numeric(df.get("hist_start_rate"), errors="coerce")
     hist_appear = pd.to_numeric(df.get("hist_appear_rate"), errors="coerce")
     hist_min_start = pd.to_numeric(df.get("hist_min_given_start"), errors="coerce")
+    hist_p60_start = pd.to_numeric(df.get("hist_p60_given_start"), errors="coerce")
+    start_w = pd.to_numeric(df.get("hist_start_weight"), errors="coerce").fillna(0.0)
 
     # Shrink the historical start rate toward the prior using effective samples.
     blended_start = ((hist_start.fillna(start_prior) * eff) + (start_prior * prior_w)) / (eff + prior_w)
@@ -248,7 +255,15 @@ def minutes_projection(elements_df, history_df, gw):
     prob_appear = (base_appear * avail).clip(0.0, 1.0)
     prob_appear = pd.concat([prob_appear, prob_start], axis=1).max(axis=1)  # appear >= start
 
-    prob_60 = (prob_start * p60_given_start).clip(0.0, 1.0)
+    # P(60' | start) is the player's own decayed rate, shrunk toward the
+    # baseline by the same pseudo-GW weight as the start rate. A generic 0.86
+    # on top of an already-shrunk start rate under-rated every ever-present
+    # starter (observed 0.96 vs projected 0.73 over GW1-7 2026-27).
+    p60_player = (
+        (hist_p60_start.fillna(p60_given_start) * start_w + p60_given_start * prior_w)
+        / (start_w + prior_w)
+    ).clip(0.0, 1.0)
+    prob_60 = (prob_start * p60_player).clip(0.0, 1.0)
 
     exp_minutes = (
         prob_start * e_min_given_start

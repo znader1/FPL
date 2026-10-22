@@ -193,6 +193,17 @@ def fill_bench(market, xi_df, mode, budget_left_m, max_per_team, team_counts, ge
                             counts, max_per_team, headroom("DEF"))
                 if row is not None:
                     notes.append("dc_mid fallback: DEF (no midfielder reaches the DC floor under budget)")
+            # Best-effort: the MID with the highest DC odds under budget, as long
+            # as it is a real DC body (>= CHIP_BENCH_MID_DC_MIN_PROB). Only then
+            # the cheapest body — that is what the user asked us to avoid.
+            if row is None and need["MID"] > 0 and "p_dc" in pool.columns:
+                mids = remaining("MID").copy()
+                mids["_p_dc"] = pd.to_numeric(mids["p_dc"], errors="coerce").fillna(0.0)
+                mids = mids[mids["_p_dc"] >= float(config.CHIP_BENCH_MID_DC_MIN_PROB)]
+                row = _pick(mids.sort_values(["_p_dc", "price_m"], ascending=[False, True], kind="mergesort").drop(columns=["_p_dc"]),
+                            counts, max_per_team, headroom("MID"))
+                if row is not None:
+                    notes.append(f"dc_mid: best available DC odds {float(row['p_dc']):.0%} (no midfielder reaches the {dc_floor:.0%} floor under budget)")
             if row is None:
                 pos = "MID" if need["MID"] > 0 else "DEF"
                 row = cheapest(pos)

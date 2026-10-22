@@ -99,3 +99,23 @@ def test_enablers_mode_is_cheapest_playing():
     )
     assert set(bench["role"]) == {"enabler"}
     assert sorted(bench["id"].tolist()) == [202, 212, 213, 221]
+
+
+def _xi_532():
+    rows = [(1, "GK1", "GKP", 14)]
+    rows += [(10 + i, f"D{i}", "DEF", 15 + i) for i in range(5)]
+    rows += [(20 + i, f"M{i}", "MID", 20 + i) for i in range(3)]
+    rows += [(30 + i, f"F{i}", "FWD", 23 + i) for i in range(2)]
+    return pd.DataFrame(rows, columns=["id", "web_name", "pos", "team"])
+
+
+def test_dc_mid_takes_best_available_p_dc_before_cheapest():
+    # No DEF slot left on the bench and no MID reaches the 0.5 floor: the role
+    # must go to the MID with the best DC odds (0.3), not the cheapest body.
+    bench, notes = chip_bench.fill_bench(
+        _market(mid_dc=False), _xi_532(), mode="roles", budget_left_m=20.0, max_per_team=3, team_counts={}
+    )
+    row = bench[bench["role"] == "dc_mid"].iloc[0]
+    assert int(row["id"]) == 223
+    assert any("best available" in n for n in notes)
+    assert not any("cheapest" in n for n in notes)
