@@ -39,7 +39,7 @@ from src.insights import (
 from src.lineup_builder import build_position_panels, pack_lineup_records
 from src.media import attach_media
 from src.season_history import season_label_from_bootstrap
-from src.squad_builder import apply_transfer_moves_to_squad, build_transfer_step, estimate_squad_budget_m
+from src.squad_builder import apply_transfer_moves_to_squad, build_transfer_step, squad_budget_breakdown
 from src.utils import (
     df_records,
     elapsed_ms,
@@ -705,6 +705,7 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
         "notes": notes,
         "derived_itb_m": derived_itb_m,
         "derived_free_transfers": derived_free_transfers,
+        "entry_history": eh,
     }
 
 
@@ -1205,6 +1206,7 @@ def build_recommendations(payload):
         "play_event_id": int(wildcard_play_event_id) if wildcard_play_event_id is not None else None,
         "propagates_to_future_gws": bool(chip_strategy == "wildcard"),
         "budget_m": None,
+        "budget_breakdown": None,
         "squad_cost_m": None,
         "remaining_budget_m": None,
         "objective_score_total": None,
@@ -1218,11 +1220,13 @@ def build_recommendations(payload):
         chip_objective_col = "wildcard_score" if chip_strategy == "wildcard" else score_col
         chip_objective_horizon = int(chip_build_horizon_gws) if chip_strategy == "wildcard" else 1
         ts = time.perf_counter()
-        budget_m = estimate_squad_budget_m(
-            squad_df=squad_df,
-            elements=elements,
-            itb_m=safe_float(itb_m, default=0.0) or 0.0,
+        budget_breakdown = squad_budget_breakdown(
+            ctx.get("entry_history"),
+            squad_df,
+            elements,
+            itb_m=safe_float(itb_m, default=None) if itb_m_explicit else None,
         )
+        budget_m = float(budget_breakdown["budget_m"])
         premium_floor = float(
             config.CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR
             or config.CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR
@@ -1279,6 +1283,7 @@ def build_recommendations(payload):
                 "play_event_id": int(wildcard_play_event_id) if wildcard_play_event_id is not None else None,
                 "propagates_to_future_gws": bool(chip_strategy == "wildcard"),
                 "budget_m": chip_build.get("budget_m"),
+                "budget_breakdown": budget_breakdown,
                 "squad_cost_m": chip_build.get("squad_cost_m"),
                 "remaining_budget_m": chip_build.get("remaining_budget_m"),
                 "objective_score_total": chip_build.get("objective_score_total"),
@@ -1301,6 +1306,7 @@ def build_recommendations(payload):
                 "play_event_id": int(wildcard_play_event_id) if wildcard_play_event_id is not None else None,
                 "propagates_to_future_gws": bool(chip_strategy == "wildcard"),
                 "budget_m": budget_m,
+                "budget_breakdown": budget_breakdown,
                 "squad_cost_m": None,
                 "remaining_budget_m": None,
                 "objective_score_total": None,

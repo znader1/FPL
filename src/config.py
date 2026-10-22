@@ -106,7 +106,8 @@ METRIC_MAP = {
 # Output columns for the squad table
 SQUAD_COLUMNS = [
     "player_id","web_name","pos","team_short","team_name",
-    "is_captain","is_vice_captain","multiplier"
+    "is_captain","is_vice_captain","multiplier",
+    "selling_price",  # my-team only (tenths); absent on public picks
 ]  # [operational]
 
 
