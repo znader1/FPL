@@ -29,7 +29,7 @@ def build_chip_profile(chip_strategy, squad_df, proj_all, gws):
 
     join_cols = ["id", "pos", "price_m"]
     for extra in ["wildcard_score", "wildcard_weighted_xpts", "wildcard_future_dgw_bonus",
-                  "wildcard_captaincy_bonus", "wildcard_form_bonus", "wildcard_ownership_bonus"]:
+                  "wildcard_captaincy_bonus", "wildcard_trend_term", "wildcard_upside", "wildcard_injury_mult"]:
         if extra in proj_all.columns:
             join_cols.append(extra)
     for gw in gws:

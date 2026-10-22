@@ -76,7 +76,7 @@ def _compact_context(recommendations):
         "summary": strategy.get("summary"),
     }
 
-    return {
+    context = {
         "transfers": transfers,
         "captain": {"player": lookup.get(int(captain_id)) if captain_id else None, "id": captain_id},
         "vice": {"player": lookup.get(int(vice_id)) if vice_id else None, "id": vice_id},
@@ -84,12 +84,39 @@ def _compact_context(recommendations):
         "horizon_gws": recommendations.get("horizon_gws"),
         "free_transfers": recommendations.get("free_transfers"),
     }
+    # Wildcard picks: the engine's own component breakdown plus the
+    # engine-blind narrative facts are the ONLY numbers the model may cite
+    # for them (spec 4.9). Nothing else about those players goes in.
+    picks = []
+    for source in (
+        recommendations.get("squad_with_transfers", {}).get("starting_xi") or [],
+        recommendations.get("squad_with_transfers", {}).get("bench") or [],
+        recommendations.get("squad", {}).get("starting_xi") or [],
+        recommendations.get("squad", {}).get("bench") or [],
+    ):
+        for p in source:
+            wc = (p.get("score_breakdown") or {}).get("wildcard") if isinstance(p.get("score_breakdown"), dict) else None
+            if not isinstance(wc, dict):
+                continue
+            pid = p.get("player_id") or p.get("id")
+            if pid is None or any(x["id"] == int(pid) for x in picks):
+                continue
+            picks.append({
+                "id": int(pid),
+                "name": p.get("web_name") or p.get("name"),
+                "breakdown": {k: v for k, v in wc.items() if k != "facts"},
+                "facts": wc.get("facts"),
+            })
+    if picks:
+        context["wildcard_picks"] = picks
+    return context
 
 
 SYSTEM_PROMPT = (
     "You are an FPL optimizer assistant. "
     "Explain each decision in one short sentence using ONLY numbers from the input — "
     "projected points, cost, form, fixtures. Never invent numbers. No filler. "
+    "For wildcard picks, cite only the numbers in score_breakdown and facts; never invent records or totals. "
     "Respond ONLY with valid JSON."
 )
 
