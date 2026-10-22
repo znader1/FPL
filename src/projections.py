@@ -108,6 +108,26 @@ def resolve_projection_difficulty_ratings(teams_short_map):
         return None
 
 
+def team_defence_table(ratings):
+    """{team_id: {"defense": ..., "samples": ...}} → DataFrame[team, team_def_rank,
+    team_rated_matches]. Rank 1 = lowest defence rating (fewest xG conceded).
+    None / empty ratings → empty frame, so callers fail soft."""
+    rows = []
+    for team_id, r in (ratings or {}).items():
+        if not isinstance(r, dict) or not isinstance(team_id, (int, float)):
+            continue
+        rows.append({
+            "team": int(team_id),
+            "_defense": float(r.get("defense", 1.0)),
+            "team_rated_matches": float(r.get("samples", 0.0) or 0.0),
+        })
+    if not rows:
+        return pd.DataFrame(columns=["team", "team_def_rank", "team_rated_matches"])
+    out = pd.DataFrame(rows)
+    out["team_def_rank"] = out["_defense"].rank(method="first", ascending=True).astype(int)
+    return out[["team", "team_def_rank", "team_rated_matches"]]
+
+
 def difficulty_multiplier(diff_avg):
     """Map FPL difficulty (1..5) to a simple multiplier."""
     if pd.isna(diff_avg):
@@ -195,6 +215,23 @@ def penalty_taker_uplift(penalties_order, index=None):
     if not isinstance(order, pd.Series):
         order = pd.Series(order, index=index)
     return (order == 1.0).astype(float) * uplift
+
+
+def _team_played_counts(fixtures, gw_start):
+    """{team_id: fixtures with event < gw_start} (finished when the column exists)."""
+    if fixtures is None or len(fixtures) == 0 or "event" not in fixtures.columns:
+        return {}
+    fx = fixtures.copy()
+    ev = pd.to_numeric(fx["event"], errors="coerce")
+    fx = fx[ev.notna() & (ev < int(gw_start))]
+    if "finished" in fx.columns:
+        fx = fx[fx["finished"].fillna(False).astype(bool)]
+    counts = {}
+    for col in ("team_h", "team_a"):
+        if col in fx.columns:
+            for t, n in pd.to_numeric(fx[col], errors="coerce").dropna().astype(int).value_counts().items():
+                counts[int(t)] = counts.get(int(t), 0) + int(n)
+    return counts
 
 
 def team_recent_ppg_map(fixtures, gw_start, latest_n_matches=config.PROJ_DEFAULT_LATEST_N_MATCHES):
@@ -602,6 +639,26 @@ def project_elements_next_gws(
 
     horizon_total = pd.Series(0.0, index=df.index, dtype="float64")
 
+    # Availability inputs for chip drafts (wildcard v2 spec 4.4): share of
+    # team games started — the recent window when it has >= 2 samples, else
+    # season starts over the team's played fixtures before gw_start.
+    played = _team_played_counts(fixtures, int(gw_start))
+    team_num = _numeric_series(df, "team", default=float("nan"))
+    team_played = team_num.map(played).fillna(0.0)
+    season_starts = _numeric_series(df, "starts", default=0.0).fillna(0.0)
+    season_share = (season_starts / team_played.where(team_played > 0)).clip(lower=0.0, upper=1.0)
+    recent_starts = _numeric_series(df, "recent_gw_avg_starts", default=float("nan"))
+    df["start_share"] = recent_starts.where(
+        recent_starts.notna() & (recent_samples >= 2.0), season_share
+    ).fillna(0.0).round(3)
+    team_table = team_defence_table(xg_diff_ratings)
+    if not team_table.empty:
+        df["team_def_rank"] = team_num.map(team_table.set_index("team")["team_def_rank"])
+        df["team_rated_matches"] = team_num.map(team_table.set_index("team")["team_rated_matches"])
+    else:
+        df["team_def_rank"] = pd.NA
+        df["team_rated_matches"] = pd.NA
+
     # Market difficulty covers only the next fixture — blend it into the
     # FIRST horizon GW at ODDS_DIFFICULTY_BLEND_WEIGHT; the xG ratings carry
     # the rest of the horizon alone. The market prices team news, rotation
@@ -785,6 +842,9 @@ def project_elements_next_gws(
         "recent_history_window_gws",
         "recent_history_max_gw",
         "recent_history_available",
+        "start_share",
+        "team_def_rank",
+        "team_rated_matches",
         "transfers_in_event",
         "transfers_out_event",
         "penalties_order",

@@ -97,7 +97,10 @@ def _prepare_chip_market(elements_all, score_col, shape):
         return pd.DataFrame()
 
     cols = ["id", "web_name", "pos", "team", "team_short", "team_name", "price_m", "now_cost",
-            "status", "minutes", "selected_by_percent", score_col]
+            "status", "minutes", "selected_by_percent", score_col,
+            # wildcard v2 optional inputs (availability gate, bench roles, caps, upside)
+            "start_share", "p_dc", "p_clean_sheet", "injury_flag", "team_def_rank",
+            "team_rated_matches", "ep_goals", "ep_assists", "ep_dc", "ep_saves"]
     keep = [c for c in cols if c in elements_all.columns]
     market = elements_all[keep].copy()
 
