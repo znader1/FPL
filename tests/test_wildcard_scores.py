@@ -98,3 +98,28 @@ def test_attach_wildcard_signals_fails_soft_on_broken_history(monkeypatch):
     monkeypatch.setattr(_trend, "player_trend", boom)
     out = projections.attach_wildcard_signals(pd.DataFrame({"id": [1]}), gw_start=8, match_df=pd.DataFrame({"x": [1]}), status_path=None)
     assert out["wildcard_trend"].tolist() == [0.0]
+
+
+def _twins():
+    df = _proj()
+    twin = df[df["id"] == 2].copy()
+    twin["id"] = 4
+    twin["selected_by_percent"] = 55.0  # same player, template ownership
+    df.loc[df["id"] == 2, "selected_by_percent"] = 5.0
+    return pd.concat([df, twin], ignore_index=True)
+
+
+def test_ownership_term_is_a_preset_weight():
+    # Balanced/aggressive carry a small template-protection term; gems and the
+    # legacy (no preset) path carry none.
+    bal = projections.add_wildcard_scores(_twins(), gw_start=8, horizon_gws=2, preset=config.CHIP_WILDCARD_PRESETS["balanced"]).set_index("id")
+    gems = projections.add_wildcard_scores(_twins(), gw_start=8, horizon_gws=2, preset=config.CHIP_WILDCARD_PRESETS["gems"]).set_index("id")
+    legacy = projections.add_wildcard_scores(_twins(), gw_start=8, horizon_gws=2).set_index("id")
+    w = float(config.CHIP_WILDCARD_PRESETS["balanced"]["ownership_weight"])
+    assert w > 0
+    assert abs(float(bal.loc[4, "wildcard_ownership_term"]) - w * 55.0) < 1e-6
+    assert float(bal.loc[4, "wildcard_score"]) - float(bal.loc[2, "wildcard_score"]) > 0
+    assert float(gems.loc[4, "wildcard_score"]) == float(gems.loc[2, "wildcard_score"])
+    assert float(legacy.loc[4, "wildcard_ownership_term"]) == 0.0
+    # One full template player (55%) is worth about one xPt over the horizon, not more.
+    assert w * 55.0 <= 2.0

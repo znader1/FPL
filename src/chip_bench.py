@@ -62,11 +62,32 @@ def _needed_positions(xi_df):
     return {pos: int(FULL_SHAPE[pos] - xi_pos.get(pos, 0)) for pos in POS_ORDER}
 
 
+def _home_away(row, fx_cols):
+    """['H' | 'A' | None] per horizon GW from the "H-EVE(D3)" fixture strings;
+    a double GW counts as home if any leg is home."""
+    out = []
+    for c in fx_cols:
+        s = str(row.get(c) or "")
+        legs = [x.strip() for x in s.replace("|", ",").split(",") if x.strip()]
+        if not legs:
+            out.append(None)
+        elif any(leg.upper().startswith("H") for leg in legs):
+            out.append("H")
+        else:
+            out.append("A")
+    return out
+
+
+def _cap(max_per_team, team):
+    """`max_per_team` is an int or a callable(team) -> int (per-club caps)."""
+    return int(max_per_team(team)) if callable(max_per_team) else int(max_per_team)
+
+
 def _pick(pool, team_counts, max_per_team, budget_left):
     """First row of `pool` that respects the team cap and the budget, or None."""
     for _, row in pool.iterrows():
         team = int(row["team"])
-        if team_counts.get(team, 0) >= int(max_per_team):
+        if team_counts.get(team, 0) >= _cap(max_per_team, team):
             continue
         if float(row["price_m"]) > budget_left + 1e-9:
             continue
@@ -137,6 +158,28 @@ def fill_bench(market, xi_df, mode, budget_left_m, max_per_team, team_counts, ge
         return _pick(remaining(pos).sort_values(["price_m", "chip_score"], ascending=[True, False], kind="mergesort"),
                      counts, max_per_team, headroom(pos))
 
+    def rotation_gk():
+        """Bench keeper: among the cheapest playing keepers (within
+        CHIP_BENCH_GK_ROTATION_PRICE_SLACK of the floor), the one who is at
+        home when the starting keeper is away over the horizon — a real
+        rotation pair, not a dead £4.0m body. Falls back to cheapest when no
+        fixture columns exist."""
+        gks = remaining("GKP")
+        if gks.empty:
+            return None
+        fx_cols = [c for c in market.columns if str(c).startswith("fixtures_gw")]
+        xi_gk = market[market["id"].astype(int).isin(xi_ids) & (market["pos"] == "GKP")]
+        if not fx_cols or xi_gk.empty:
+            return cheapest("GKP")
+        xi_ha = _home_away(xi_gk.iloc[0], fx_cols)
+        floor = float(gks["price_m"].min())
+        slack = float(config.CHIP_BENCH_GK_ROTATION_PRICE_SLACK)
+        cand = gks[gks["price_m"] <= floor + slack + 1e-9].copy()
+        cand["_rot"] = [sum(1 for a, b in zip(_home_away(r, fx_cols), xi_ha) if a == "H" and b == "A") for _, r in cand.iterrows()]
+        cand = cand.sort_values(["_rot", "price_m", "chip_score"], ascending=[False, True, False], kind="mergesort")
+        row = _pick(cand.drop(columns=["_rot"]), counts, max_per_team, headroom("GKP"))
+        return row if row is not None else cheapest("GKP")
+
     def best(pos_list, prefer=None):
         out = remaining()
         out = out[out["pos"].isin(pos_list)]
@@ -152,9 +195,9 @@ def fill_bench(market, xi_df, mode, budget_left_m, max_per_team, team_counts, ge
                      counts, max_per_team, budget)
 
     if mode == "roles":
-        # GK2: cheapest playing keeper.
+        # GK2: cheapest playing keeper that rotates home/away with the starter.
         if need["GKP"] > 0:
-            row = cheapest("GKP")
+            row = rotation_gk()
             if row is not None:
                 take(row, "gk2")
         # DEF cover: cheapest DEF with CS or DC at/above the DEF median.
@@ -224,7 +267,7 @@ def fill_bench(market, xi_df, mode, budget_left_m, max_per_team, team_counts, ge
         slots_enabler = 4 if mode == "enablers" else 3
         for pos in POS_ORDER:
             while need[pos] > 0 and len(picked) < slots_enabler:
-                row = cheapest(pos)
+                row = rotation_gk() if pos == "GKP" else cheapest(pos)
                 if row is None:
                     break
                 take(row, "enabler")

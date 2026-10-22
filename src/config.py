@@ -521,13 +521,15 @@ CHIP_BENCH_START_SHARE = 0.85  # [untested]
 CHIP_XI_START_SHARE = 0.70  # [untested] default when a preset gives no xi_start_share
 # DC-midfielder bench role: P(reaching rules.OUTPUT_DC_THRESHOLD) per game.
 CHIP_BENCH_MID_DC_PROB = 0.5  # [untested]
+CHIP_BENCH_GK_ROTATION_PRICE_SLACK = 0.5  # [untested] £m above the cheapest playing keeper the bench may spend for a home/away rotation partner
 CHIP_BENCH_MID_DC_MIN_PROB = 0.25  # [untested] below this a MID is not a DC body; bench falls back to the cheapest
 # Same-team defensive correlation (spec 4.5). GK counts as DEF for the cap;
 # the cap lifts for teams whose xG defence rating ranks <= ELITE_DEF_RANK.
 CHIP_WILDCARD_MAX_DEF_PER_TEAM = 2  # [untested]
+CHIP_WILDCARD_ELITE_ATT_RANK = 4  # [untested] top-N attack rating counts as an elite club for the per-club cap
 CHIP_WILDCARD_ELITE_DEF_RANK = 4  # [untested]
 # Index = defenders/GKs already drafted from that team; last entry repeats.
-CHIP_WILDCARD_SAME_TEAM_DEF_PENALTY = [0.0, 0.15, 0.30]  # [untested]
+CHIP_WILDCARD_SAME_TEAM_DEF_PENALTY = [0.0, 0.0, 0.20]  # [untested] score multiplier haircut on the Nth defensive body (GKP+DEF) from one club: a double-up on a strong defence is free, a triple is cut 20%. Was [0, .15, .30]: the 15% on the second body let the keeper block his own defenders (GW8 2026-27, Raya vs Calafiori/Gabriel)
 # Small-sample guard: teams with fewer rated matches shrink toward the price prior.
 CHIP_WILDCARD_MIN_TEAM_MATCHES = 8  # [untested]
 # Trend (spec 4.3): slope of per-90 xGI (attackers) / xGC + DC rate (defence).
@@ -549,7 +551,11 @@ CHIP_WILDCARD_PREMIUM_TOP_N = 8  # [untested]
 # Gems preset ownership constraint (spec 4.8).
 CHIP_WILDCARD_GEM_OWNERSHIP_MAX = 10.0  # [untested] selected_by_percent
 CHIP_WILDCARD_GEM_MIN_XI = 6  # [untested]
-# Presets are hard structural constraints, not weights (spec 4.8). `formation`
+# Presets are hard structural constraints, not weights (spec 4.8), plus one
+# `max_per_team` applies to elite clubs (top CHIP_WILDCARD_ELITE_DEF_RANK defence
+# or top CHIP_WILDCARD_ELITE_ATT_RANK attack); `max_per_team_other` to the rest.
+# soft term: `ownership_weight` (score per ownership point, template
+# protection — 0.03 x 55% owned = +1.65 over the horizon). 0 for gems. `formation`
 # is the DEF/MID/FWD shape of the XI pick (plus one GK); the bench completes
 # the 15 to 2/5/5/3.
 CHIP_WILDCARD_PRESET_ORDER = ["aggressive", "balanced", "gems"]  # [operational]
@@ -558,25 +564,25 @@ CHIP_WILDCARD_PRESETS = {
         "label": "Aggressive",
         "premiums_exact": 3, "premiums_max": None,
         "bench_mode": "enablers", "bench_budget_max_m": 17.0, "gem_min_xi": 0,
-        "max_def_per_team": 2, "max_per_team": 3,
+        "max_def_per_team": 2, "max_per_team": 3, "max_per_team_other": 2,
         "captaincy_mult": 1.5, "trend_mult": 1.0, "xi_start_share": 0.70,
-        "formation": (3, 5, 2),
+        "ownership_weight": 0.02, "formation": (3, 5, 2),
     },
     "balanced": {
         "label": "Balanced",
         "premiums_exact": 2, "premiums_max": None,
         "bench_mode": "roles", "bench_budget_max_m": 17.5, "gem_min_xi": 0,
-        "max_def_per_team": 2, "max_per_team": 3,
+        "max_def_per_team": 2, "max_per_team": 3, "max_per_team_other": 2,
         "captaincy_mult": 1.0, "trend_mult": 1.0, "xi_start_share": 0.80,
-        "formation": (3, 4, 3),
+        "ownership_weight": 0.03, "formation": (3, 4, 3),
     },
     "gems": {
         "label": "Gems",
         "premiums_exact": None, "premiums_max": 1,
         "bench_mode": "enablers_gem", "bench_budget_max_m": 17.0, "gem_min_xi": 6,
-        "max_def_per_team": 2, "max_per_team": 2,
+        "max_def_per_team": 2, "max_per_team": 2, "max_per_team_other": 2,
         "captaincy_mult": 0.0, "trend_mult": 2.0, "xi_start_share": 0.85,
-        "formation": (4, 4, 2),
+        "ownership_weight": 0.0, "formation": (4, 4, 2),
     },
 }  # [operational]
 

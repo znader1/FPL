@@ -119,3 +119,23 @@ def test_dc_mid_takes_best_available_p_dc_before_cheapest():
     assert int(row["id"]) == 223
     assert any("best available" in n for n in notes)
     assert not any("cheapest" in n for n in notes)
+
+
+def test_gk2_prefers_home_away_rotation_with_the_starting_keeper():
+    # Two cheap playing keepers at the same price: 202 mirrors the XI keeper's
+    # fixtures (no rotation value), 203 is home exactly when the XI keeper is
+    # away. The bench slot must take 203 even though 202 scores the same.
+    m = _market()
+    gws = ["fixtures_gw8", "fixtures_gw9", "fixtures_gw10", "fixtures_gw11", "fixtures_gw12"]
+    for c in gws:
+        m[c] = "H-AAA(D3)"
+    xi = _xi()
+    xi_gk = pd.DataFrame([{"id": 1, "web_name": "GK1", "pos": "GKP", "team": 14}])
+    m = pd.concat([m, xi_gk.assign(price_m=5.0, chip_score=4.0, start_share=1.0, p_dc=0.0, p_clean_sheet=0.3, status="a", injury_flag=False)], ignore_index=True)
+    m.loc[m["id"] == 1, gws] = ["H-X(D3)", "A-X(D3)", "H-X(D3)", "A-X(D3)", "H-X(D3)"]
+    m.loc[m["id"] == 202, gws] = ["H-X(D3)", "A-X(D3)", "H-X(D3)", "A-X(D3)", "H-X(D3)"]
+    m.loc[m["id"] == 203, gws] = ["A-X(D3)", "H-X(D3)", "A-X(D3)", "H-X(D3)", "A-X(D3)"]
+    m.loc[m["id"] == 203, "price_m"] = 4.0
+    m.loc[m["id"] == 203, "chip_score"] = 1.5
+    bench, _ = chip_bench.fill_bench(m, xi, mode="roles", budget_left_m=20.0, max_per_team=3, team_counts={})
+    assert int(bench.loc[bench["role"] == "gk2", "id"].iloc[0]) == 203

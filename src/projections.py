@@ -123,13 +123,17 @@ def team_defence_table(ratings):
         rows.append({
             "team": int(team_id),
             "_defense": float(r.get("defense", 1.0)),
+            "_attack": float(r.get("attack", 1.0)),
             "team_rated_matches": float(r.get("samples", 0.0) or 0.0),
         })
     if not rows:
-        return pd.DataFrame(columns=["team", "team_def_rank", "team_rated_matches"])
+        return pd.DataFrame(columns=["team", "team_def_rank", "team_att_rank", "team_rated_matches"])
     out = pd.DataFrame(rows)
     out["team_def_rank"] = out["_defense"].rank(method="first", ascending=True).astype(int)
-    return out[["team", "team_def_rank", "team_rated_matches"]]
+    # Rank 1 = highest attack rating (most xG for). Used with team_def_rank to
+    # decide which clubs a wildcard may stack to three.
+    out["team_att_rank"] = out["_attack"].rank(method="first", ascending=False).astype(int)
+    return out[["team", "team_def_rank", "team_att_rank", "team_rated_matches"]]
 
 
 def difficulty_multiplier(diff_avg):
@@ -693,9 +697,11 @@ def project_elements_next_gws(
     team_table = team_defence_table(xg_diff_ratings)
     if not team_table.empty:
         df["team_def_rank"] = team_num.map(team_table.set_index("team")["team_def_rank"])
+        df["team_att_rank"] = team_num.map(team_table.set_index("team")["team_att_rank"])
         df["team_rated_matches"] = team_num.map(team_table.set_index("team")["team_rated_matches"])
     else:
         df["team_def_rank"] = pd.NA
+        df["team_att_rank"] = pd.NA
         df["team_rated_matches"] = pd.NA
 
     # Market difficulty covers only the next fixture — blend it into the
@@ -883,6 +889,7 @@ def project_elements_next_gws(
         "recent_history_available",
         "start_share",
         "team_def_rank",
+        "team_att_rank",
         "team_rated_matches",
         "transfers_in_event",
         "transfers_out_event",
@@ -1067,6 +1074,12 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws, preset=None):
     p_miss = _numeric_series(out, "p_miss", default=0.0).clip(lower=0.0, upper=1.0)
     injury_mult = (1.0 - p_miss * float(config.CHIP_WILDCARD_INJURY_PRIOR_WEIGHT)).clip(lower=0.0, upper=1.0)
 
+    # Template protection: a preset weight on ownership, not a form proxy.
+    # Missing a 55%-owned player who hauls costs rank even when the pick that
+    # replaced him was right on expectation. Gems and the legacy path use 0.
+    ownership_weight = float(preset.get("ownership_weight") or 0.0)
+    ownership_term = _numeric_series(out, "selected_by_percent", default=0.0).fillna(0.0).clip(lower=0.0) * ownership_weight
+
     out["wildcard_weighted_xpts"] = weighted_xpts.round(3)
     out["wildcard_future_dgw_bonus"] = future_dgw_bonus.round(3)
     out["wildcard_captaincy_bonus"] = captaincy_bonus.round(3)
@@ -1074,9 +1087,10 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws, preset=None):
     out["wildcard_trend_term"] = trend_term.round(3)
     out["wildcard_upside"] = upside.round(3)
     out["wildcard_injury_mult"] = injury_mult.round(3)
+    out["wildcard_ownership_term"] = ownership_term.round(3)
     out["wildcard_extra_fixtures"] = future_extra_fixtures.astype(int)
     out["wildcard_score"] = (
-        (weighted_xpts + future_dgw_bonus + captaincy_bonus + trend_term + upside) * injury_mult
+        (weighted_xpts + future_dgw_bonus + captaincy_bonus + trend_term + upside + ownership_term) * injury_mult
     ).round(3)
     sort_cols = ["wildcard_score"] + (["xpts_horizon"] if "xpts_horizon" in out.columns else [])
     out = out.sort_values(sort_cols, ascending=[False] * len(sort_cols)).reset_index(drop=True)

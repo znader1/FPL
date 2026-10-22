@@ -140,6 +140,20 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
         r = pd.to_numeric(r, errors="coerce").dropna()
         return bool(len(r)) and int(r.iloc[0]) <= elite_rank
 
+    def elite_club(team):
+        """Top defence OR top attack: the clubs a wildcard may stack to max_per_team."""
+        if elite(team):
+            return True
+        a = market.loc[market["team"] == int(team), "team_att_rank"] if "team_att_rank" in market.columns else pd.Series(dtype=float)
+        a = pd.to_numeric(a, errors="coerce").dropna()
+        return bool(len(a)) and int(a.iloc[0]) <= int(config.CHIP_WILDCARD_ELITE_ATT_RANK)
+
+    other_cap_raw = preset.get("max_per_team_other")
+    other_cap = int(other_cap_raw) if other_cap_raw is not None else max_per_team
+
+    def cap_for(team):
+        return max_per_team if elite_club(team) else min(max_per_team, other_cap)
+
     def def_cap_ok(rows, cand, skip_id=None):
         if str(cand["pos"]) not in DEFENSIVE or elite(cand["team"]):
             return True
@@ -175,7 +189,7 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
             conflict(pid, "shape")
             continue
         all_rows = xi_rows + pinned_bench
-        if _team_count(all_rows, row["team"]) >= max_per_team:
+        if _team_count(all_rows, row["team"]) >= cap_for(row["team"]):
             conflict(pid, "team_cap")
             continue
         if not def_cap_ok(all_rows, row):
@@ -206,7 +220,7 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
                 pool = remaining_pool(pos).sort_values(["price_m", "chip_score"], ascending=[True, False], kind="mergesort")
                 pick = None
                 for _, cand in pool.iterrows():
-                    if _team_count(xi_rows, cand["team"]) >= max_per_team:
+                    if _team_count(xi_rows, cand["team"]) >= cap_for(cand["team"]):
                         continue
                     if not def_cap_ok(xi_rows, cand):
                         continue
@@ -268,7 +282,7 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
                 pool = remaining_pool(str(row["pos"]))
                 pool = pool[(pool["price_m"] <= float(row["price_m"]) + left + 1e-9) & (pool["chip_score"] > row_score)]
                 for _, cand in pool.head(60).iterrows():
-                    if _team_count(others, cand["team"]) >= max_per_team:
+                    if _team_count(others, cand["team"]) >= cap_for(cand["team"]):
                         continue
                     if not def_cap_ok(others, cand):
                         continue
@@ -311,7 +325,7 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
                 pool = remaining_pool(str(row["pos"]))
                 pool = pool[(pool["price_m"] >= premium_floor) & (pool["price_m"] <= float(row["price_m"]) + left + 1e-9)]
                 for _, cand in pool.iterrows():
-                    if _team_count(others, cand["team"]) >= max_per_team:
+                    if _team_count(others, cand["team"]) >= cap_for(cand["team"]):
                         continue
                     gain = float(cand["chip_score"]) - float(row["chip_score"])
                     if best is None or gain > best[0]:
@@ -354,7 +368,7 @@ def build_preset_squad(market, preset, budget_m, pinned_ids=None, excluded_ids=N
         xi_plus_pinned = pd.concat([xi_df, pd.DataFrame(pinned_bench)], ignore_index=True) if pinned_bench else xi_df
         cand_bench, bench_notes = chip_bench.fill_bench(
             market, xi_plus_pinned, mode=str(preset.get("bench_mode") or "enablers"),
-            budget_left_m=bench_budget, max_per_team=max_per_team, team_counts={}, gem_filter=gem_filter,
+            budget_left_m=bench_budget, max_per_team=cap_for, team_counts={}, gem_filter=gem_filter,
         )
         if len(cand_bench) == 4 - len(pinned_bench) and xi_cost() + float(cand_bench["price_m"].sum()) + pinned_bench_cost <= budget_m + 1e-9:
             bench_df = cand_bench

@@ -14,7 +14,7 @@ def _record():
 def test_breakdown_lists_new_components():
     bd = lineup_builder._build_score_breakdown(_record(), chip_strategy="wildcard", objective_score_col="wildcard_score")
     wc = bd["wildcard"]
-    assert set(wc) >= {"score", "weighted_xpts", "dgw", "captaincy", "trend", "upside", "injury_mult", "role"}
+    assert set(wc) >= {"score", "weighted_xpts", "dgw", "captaincy", "trend", "upside", "injury_mult", "ownership_term", "role"}
     assert "form_bonus" not in wc and "ownership_bonus" not in wc
     assert wc["trend"] == 0.2 and wc["injury_mult"] == 0.95 and wc["role"] == "xi"
 
@@ -40,7 +40,7 @@ def test_explainer_wildcard_prompt_contains_only_provided_facts():
     picks = ctx["wildcard_picks"]
     assert picks[0]["id"] == 10
     assert picks[0]["facts"]["milestone"]["target"] == 50
-    assert set(picks[0]["breakdown"]) <= {"score", "weighted_xpts", "dgw", "captaincy", "trend", "trend_term", "upside", "injury_mult", "role"}
+    assert set(picks[0]["breakdown"]) <= {"score", "weighted_xpts", "dgw", "captaincy", "trend", "trend_term", "upside", "injury_mult", "ownership_term", "role"}
     assert "score_breakdown and facts" in explainer.SYSTEM_PROMPT
 
 

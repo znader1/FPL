@@ -142,6 +142,7 @@ def _build_score_breakdown(record, chip_strategy="none", objective_score_col=Non
             "trend_term": _opt("wildcard_trend_term"),
             "upside": _opt("wildcard_upside"),
             "injury_mult": _opt("wildcard_injury_mult"),
+            "ownership_term": _opt("wildcard_ownership_term"),
             "role": record.get("role"),
         }
         if isinstance(record.get("facts"), dict):
@@ -219,7 +220,7 @@ def _lineup_projection_cols(proj_all, gws):
         "selected_by_percent", "p80_low", "p80_high",
         "wildcard_score", "wildcard_weighted_xpts", "wildcard_future_dgw_bonus",
         "wildcard_captaincy_bonus", "wildcard_trend", "wildcard_trend_term", "wildcard_upside",
-        "wildcard_injury_mult", "role", "is_xi",
+        "wildcard_injury_mult", "wildcard_ownership_term", "wildcard_ownership_term", "role", "is_xi",
         "baseline_long_term_xpts", "baseline_recent_gw_xpts", "baseline_blended_xpts", "baseline_gw1_xpts",
         "recent_gw_avg_points", "recent_gw_avg_fixture_count", "recent_gw_avg_minutes",
         "recent_gw_avg_starts", "recent_gw_samples", "recent_gw_last",
@@ -307,7 +308,7 @@ def build_position_panels(
         "event_points",
         "wildcard_score", "wildcard_weighted_xpts", "wildcard_future_dgw_bonus",
         "wildcard_captaincy_bonus", "wildcard_trend", "wildcard_trend_term", "wildcard_upside",
-        "wildcard_injury_mult", "role", "is_xi",
+        "wildcard_injury_mult", "wildcard_ownership_term", "wildcard_ownership_term", "role", "is_xi",
         "baseline_long_term_xpts", "baseline_recent_gw_xpts", "baseline_blended_xpts", "baseline_gw1_xpts",
         "recent_gw_avg_points", "recent_gw_avg_fixture_count", "recent_gw_avg_minutes",
         "recent_gw_avg_starts", "recent_gw_samples", "recent_gw_last",

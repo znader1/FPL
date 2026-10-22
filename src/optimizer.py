@@ -100,8 +100,10 @@ def _prepare_chip_market(elements_all, score_col, shape):
     cols = ["id", "web_name", "pos", "team", "team_short", "team_name", "price_m", "now_cost",
             "status", "minutes", "selected_by_percent", score_col,
             # wildcard v2 optional inputs (availability gate, bench roles, caps, upside)
-            "start_share", "p_dc", "p_clean_sheet", "injury_flag", "team_def_rank",
+            "start_share", "p_dc", "p_clean_sheet", "injury_flag", "team_def_rank", "team_att_rank",
             "team_rated_matches", "ep_goals", "ep_assists", "ep_dc", "ep_saves"]
+    # Per-GW fixture strings ("H-EVE(D3)") feed the bench keeper's home/away rotation.
+    cols += [c for c in elements_all.columns if str(c).startswith("fixtures_gw")]
     keep = [c for c in cols if c in elements_all.columns]
     market = elements_all[keep].copy()
 

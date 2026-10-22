@@ -275,3 +275,38 @@ def test_balanced_reserves_budget_for_a_real_dc_midfielder():
     row = bench[bench["role"] == "dc_mid"].iloc[0]
     assert row["pos"] == "MID" and float(row["p_dc"]) >= float(config.CHIP_BENCH_MID_DC_MIN_PROB)
     assert not any("cheapest" in n for n in b["notes"])
+
+
+def test_keeper_does_not_block_his_own_defenders_live_gw8_market():
+    # Staging market, GW8 2026-27, aggressive scoring. With the old penalty
+    # table ([0, .15, .30]) Raya in goal cut Calafiori (22.2) and Gabriel
+    # (22.1) by 15%, both fell below Silva (20.5), and £3.6m stayed unspent.
+    import os
+    m = pd.read_csv(os.path.join(os.path.dirname(__file__), "fixtures", "market_gw8_2026_aggressive.csv"))
+    b = optimizer.build_chip_squad(
+        elements_all=m, score_col="wildcard_score", budget_m=101.3, max_per_team=3,
+        preset=config.CHIP_WILDCARD_PRESETS["aggressive"],
+    )
+    assert b["ok"], b.get("reason")
+    xi = set(b["xi_ids"])
+    assert xi & {4, 8}, "neither Gabriel (4) nor Calafiori (8) made the XI"
+    assert float(b["remaining_budget_m"]) < 3.0
+
+
+def test_non_elite_club_capped_at_two_while_elite_club_may_have_three():
+    # Team 10 (def rank 10, no elite attack) and team 2 (elite) each get three
+    # monster attackers. Balanced may stack the elite club to 3, the other to 2.
+    m = wildcard_market()
+    m["team_att_rank"] = m["team"]  # team 1 best attack ... team 20 worst
+    for team in (2, 10):
+        ids = m[(m["team"] == team) & (m["pos"].isin(["MID", "FWD"]))].sort_values("price_m")["id"].head(3)
+        m.loc[m["id"].isin(ids), "wildcard_score"] = 40.0
+        m.loc[m["id"].isin(ids), "start_share"] = 0.95
+    b = optimizer.build_chip_squad(
+        elements_all=m, score_col="wildcard_score", budget_m=100.0,
+        preset=config.CHIP_WILDCARD_PRESETS["balanced"],
+    )
+    assert b["ok"], b.get("reason")
+    counts = b["squad_df"]["team"].value_counts()
+    assert int(counts.get(10, 0)) <= 2
+    assert int(counts.get(2, 0)) == 3
