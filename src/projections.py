@@ -892,18 +892,63 @@ _MODEL_COMPONENT_COLS = [
 ]
 
 
-def add_wildcard_scores(projections_df, gw_start, horizon_gws):
+def attach_wildcard_signals(projections_df, gw_start, match_df=None, status_path=None):
+    """Join the wildcard-only inputs onto a projections frame by `id`:
+    `wildcard_trend` (src/trend.py over the match history before gw_start)
+    and `p_miss` / `injury_flag` (src/injury_prior.py over the status-history
+    CSV). Missing data → 0 / False, never NaN. Callers pass `match_df` /
+    `status_path` explicitly in tests; the route uses the live loaders."""
+    from . import injury_prior as _injury
+    from . import trend as _trend
+
+    if projections_df is None or projections_df.empty:
+        return projections_df
+    out = projections_df.copy()
+    if match_df is None:
+        try:
+            from . import fixture_difficulty as _fd
+            match_df = _fd.load_match_history()
+        except Exception:
+            match_df = pd.DataFrame()
+    tr = _trend.player_trend(match_df, as_of_event=int(gw_start))
+    if tr is not None and not tr.empty:
+        out = out.merge(tr.rename(columns={"element": "id"}), on="id", how="left")
+        out["wildcard_trend"] = pd.to_numeric(out["trend"], errors="coerce").fillna(0.0)
+        out = out.drop(columns=["trend"])
+    else:
+        out["wildcard_trend"] = 0.0
+    path = status_path if status_path is not None else config.CHIP_WILDCARD_STATUS_HISTORY_PATH
+    out = _injury.attach(out, _injury.player_injury_prior(path), id_col="id")
+    return out
+
+
+def add_wildcard_scores(projections_df, gw_start, horizon_gws, preset=None):
     """
-    Add a dedicated wildcard score that favors:
-      - strong next-fixture runs,
-      - future double gameweeks within the horizon,
-      - premium captaincy-ready attackers.
+    Add a dedicated wildcard score (spec 4.3 / 4.6 / 4.7):
+
+        wildcard_score = (weighted_xpts + future_dgw_bonus + captaincy_bonus
+                          + trend_term + upside) * injury_mult
+
+    - weighted_xpts: horizon xPts under CHIP_WILDCARD_GW_WEIGHTS.
+    - future_dgw_bonus: extra fixtures inside the horizon.
+    - captaincy_bonus: premium attackers only; next-GW xPts, price and
+      penalty duty — no form term (level already lives in xPts).
+    - trend_term: direction of underlying output (`wildcard_trend`, from
+      src/trend.py, attached by the caller; 0 when absent) x TREND_WEIGHT x
+      the preset's trend_mult.
+    - upside: position-neutral CHIP_WILDCARD_UPSIDE_WEIGHT x (ep_goals +
+      ep_assists + ep_dc + ep_saves) from the xG components (GW1).
+    - injury_mult: 1 - p_miss x INJURY_PRIOR_WEIGHT (`p_miss` from
+      src/injury_prior.py, attached by the caller; 0 when absent).
+    Form and ownership bonuses are gone: form was counted three times and
+    ownership rewarded the template, the opposite of gem hunting.
     """
     if projections_df is None or projections_df.empty:
         return projections_df
 
     gw_start = int(gw_start)
     horizon_gws = max(1, int(horizon_gws or 1))
+    preset = dict(preset or {})
     out = projections_df.copy()
 
     weights = _weight_list(
@@ -938,12 +983,8 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws):
         future_extra_fixtures = future_extra_fixtures + extra_fixtures
 
     price_m = _numeric_series(out, "price_m", default=0.0)
-    form = _numeric_series(out, "form", default=0.0).clip(lower=0.0)
-    recent_avg_points = _numeric_series(out, "recent_gw_avg_points", default=0.0).clip(lower=0.0)
-    recent_samples = _numeric_series(out, "recent_gw_samples", default=0.0)
     penalties_order = _numeric_series(out, "penalties_order", default=99.0)
     next_xpts = _numeric_series(out, f"xpts_gw{gw_start}", default=0.0)
-    selected_by_percent = _numeric_series(out, "selected_by_percent", default=0.0).clip(lower=0.0)
 
     pos = out.get("pos", pd.Series("", index=out.index)).astype(str)
     is_attacker = pos.isin(["MID", "FWD"]).astype(float)
@@ -955,14 +996,12 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws):
     )
     premium_base_bonus = float(config.CHIP_WILDCARD_PREMIUM_ATTACKER_BASE_BONUS or 0.8)
     captaincy_weight = float(config.CHIP_WILDCARD_CAPTAINCY_WEIGHT or 0.32)
-    form_bonus_weight = float(config.CHIP_WILDCARD_FORM_BONUS_WEIGHT or 0.12)
-    ownership_bonus_weight = float(config.CHIP_WILDCARD_OWNERSHIP_BONUS_WEIGHT or 0.55)
-    ownership_bonus_scale = float(config.CHIP_WILDCARD_OWNERSHIP_BONUS_SCALE or 40.0)
+    captaincy_mult = float(preset.get("captaincy_mult", 1.0))
+    trend_mult = float(preset.get("trend_mult", 1.0))
 
     captain_signal = (
         next_xpts * pos_mult
         + ((price_m - premium_floor).clip(lower=0.0) * float(config.CAPTAIN_PREMIUM_PRICE_BONUS_PER_M) * is_attacker)
-        + (form * float(config.CAPTAIN_FORM_CEILING_WEIGHT) * is_attacker)
         + (
             (penalties_order == 1.0).astype(float)
             * float(config.CAPTAIN_SET_PIECE_PENALTY_WEIGHT)
@@ -970,23 +1009,34 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws):
         )
     )
     is_premium_attacker = ((price_m >= premium_floor).astype(float) * is_attacker).astype(float)
-    captaincy_bonus = is_premium_attacker * (premium_base_bonus + (captain_signal * captaincy_weight))
-    recent_signal = ((form * 0.55) + (recent_avg_points * 0.45)).where(recent_samples >= 2.0, form)
-    form_bonus = recent_signal * form_bonus_weight * (1.0 + (is_attacker * 0.2))
-    ownership_bonus = (
-        (selected_by_percent / max(1.0, ownership_bonus_scale)).clip(lower=0.0, upper=1.0)
-        * ownership_bonus_weight
-        * is_premium_attacker
+    captaincy_bonus = is_premium_attacker * (premium_base_bonus + (captain_signal * captaincy_weight)) * captaincy_mult
+
+    trend = _numeric_series(out, "wildcard_trend", default=0.0)
+    trend_term = trend * float(config.CHIP_WILDCARD_TREND_WEIGHT) * trend_mult
+
+    upside = float(config.CHIP_WILDCARD_UPSIDE_WEIGHT) * (
+        _numeric_series(out, "ep_goals", default=0.0)
+        + _numeric_series(out, "ep_assists", default=0.0)
+        + _numeric_series(out, "ep_dc", default=0.0)
+        + _numeric_series(out, "ep_saves", default=0.0)
     )
+
+    p_miss = _numeric_series(out, "p_miss", default=0.0).clip(lower=0.0, upper=1.0)
+    injury_mult = (1.0 - p_miss * float(config.CHIP_WILDCARD_INJURY_PRIOR_WEIGHT)).clip(lower=0.0, upper=1.0)
 
     out["wildcard_weighted_xpts"] = weighted_xpts.round(3)
     out["wildcard_future_dgw_bonus"] = future_dgw_bonus.round(3)
     out["wildcard_captaincy_bonus"] = captaincy_bonus.round(3)
-    out["wildcard_form_bonus"] = form_bonus.round(3)
-    out["wildcard_ownership_bonus"] = ownership_bonus.round(3)
+    out["wildcard_trend"] = trend.round(3)
+    out["wildcard_trend_term"] = trend_term.round(3)
+    out["wildcard_upside"] = upside.round(3)
+    out["wildcard_injury_mult"] = injury_mult.round(3)
     out["wildcard_extra_fixtures"] = future_extra_fixtures.astype(int)
-    out["wildcard_score"] = (weighted_xpts + future_dgw_bonus + captaincy_bonus + form_bonus + ownership_bonus).round(3)
-    out = out.sort_values(["wildcard_score", "xpts_horizon"], ascending=[False, False]).reset_index(drop=True)
+    out["wildcard_score"] = (
+        (weighted_xpts + future_dgw_bonus + captaincy_bonus + trend_term + upside) * injury_mult
+    ).round(3)
+    sort_cols = ["wildcard_score"] + (["xpts_horizon"] if "xpts_horizon" in out.columns else [])
+    out = out.sort_values(sort_cols, ascending=[False] * len(sort_cols)).reset_index(drop=True)
     return out
 
 

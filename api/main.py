@@ -23,7 +23,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src import config, data_status, explainer, field_projection, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, rank_model as rank_model_mod, recommender, refresh_status, seed_models, top10k_eo, transfer_planner, transforms
+from src import config, data_status, explainer, field_projection, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, injury_prior, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, rank_model as rank_model_mod, recommender, refresh_status, seed_models, top10k_eo, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key, require_user, authenticated_subject
 from src import auth, llm_usage
 from src.ratelimit import (
@@ -1797,6 +1797,17 @@ def admin_refresh(
         except Exception as exc:
             match_history_error = str(exc)
             logger.warning("Match-history refresh failed: %s", exc)
+        # Status history for the wildcard injury prior (src/injury_prior.py):
+        # one upserted row per player per GW, so the prior grows with every
+        # refresh. Fail-soft — a bad write never fails the refresh.
+        try:
+            status_gw = _event_id(bootstrap, "is_next") or _event_id(bootstrap, "is_current")
+            if status_gw:
+                injury_prior.append_status_snapshot(
+                    bootstrap, int(status_gw), config.CHIP_WILDCARD_STATUS_HISTORY_PATH
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Status-history snapshot failed: %s", exc)
 
     # New history invalidates every projection, and rebuilding one costs seconds
     # on a shared-cpu machine. Pay that here, on a scheduled job, rather than
