@@ -40,31 +40,24 @@ def status_buy_bonus(status):
     return to_number(mapping.get(str(status or "").strip().lower(), 0.0), 0.0)
 
 
-def set_piece_score(row):
-    p_order = pd.to_numeric(row.get("penalties_order"), errors="coerce")
+def set_piece_score(row, horizon_gws=1):
+    """Per-GW corner / direct-free-kick edge times the horizon. Penalties are
+    not scored here: the first-choice taker's uplift already lives in xPts."""
     d_order = pd.to_numeric(row.get("direct_freekicks_order"), errors="coerce")
     c_order = pd.to_numeric(row.get("corners_and_indirect_freekicks_order"), errors="coerce")
-    score = 0.0
-    if pd.notna(p_order):
-        score += to_number(config.TRANSFER_SET_PIECE_WEIGHTS.get("penalties", {}).get(int(p_order), 0.0), 0.0)
-        if int(p_order) == 1:
-            score += to_number(config.TRANSFER_SET_PIECE_PRIMARY_BONUS.get("penalties", 0.0), 0.0)
+    per_gw = 0.0
     if pd.notna(d_order):
-        score += to_number(config.TRANSFER_SET_PIECE_WEIGHTS.get("direct_free_kicks", {}).get(int(d_order), 0.0), 0.0)
-        if int(d_order) == 1:
-            score += to_number(config.TRANSFER_SET_PIECE_PRIMARY_BONUS.get("direct_free_kicks", 0.0), 0.0)
+        per_gw += to_number(config.TRANSFER_SET_PIECE_PER_GW.get("direct_free_kicks", {}).get(int(d_order), 0.0), 0.0)
     if pd.notna(c_order):
-        score += to_number(config.TRANSFER_SET_PIECE_WEIGHTS.get("corners_indirect", {}).get(int(c_order), 0.0), 0.0)
-        if int(c_order) == 1:
-            score += to_number(config.TRANSFER_SET_PIECE_PRIMARY_BONUS.get("corners_indirect", 0.0), 0.0)
-    return float(score)
+        per_gw += to_number(config.TRANSFER_SET_PIECE_PER_GW.get("corners_indirect", {}).get(int(c_order), 0.0), 0.0)
+    return float(per_gw) * float(max(1, int(horizon_gws or 1)))
 
 
 # ---------------------------------------------------------------------------
 # Score computation
 # ---------------------------------------------------------------------------
 
-def build_transfer_scores(elements_all, score_col=None):
+def build_transfer_scores(elements_all, score_col=None, horizon_gws=1):
     el = elements_all.copy()
     numeric_cols = [
         "now_cost", "price_m", "form", "points_per_game", "total_points",
@@ -105,7 +98,7 @@ def build_transfer_scores(elements_all, score_col=None):
         float(config.TRANSFER_CONSISTENCY_TOTAL_POINTS_WEIGHT) * series_ratio_clip(series_num(el, "total_points", 0.0), config.TRANSFER_CONSISTENCY_TOTAL_POINTS_SCALE)
         + float(config.TRANSFER_CONSISTENCY_MINUTES_WEIGHT) * series_ratio_clip(series_num(el, "minutes", 0.0), config.TRANSFER_CONSISTENCY_MINUTES_TARGET)
     )
-    el["set_piece_score"] = el.apply(set_piece_score, axis=1)
+    el["set_piece_score"] = el.apply(lambda r: set_piece_score(r, horizon_gws), axis=1)
     el["attack_bonus"] = el["pos"].apply(position_attack_bonus) if "pos" in el.columns else 0.0
     el["transfer_score"] = (
         el["base_score"].fillna(0.0)
@@ -156,9 +149,9 @@ MARKET_COLS = [
 ]
 
 
-def prepare_market(elements_all, score_col=None):
+def prepare_market(elements_all, score_col=None, horizon_gws=1):
     """Score all elements and attach buyer bonuses. Returns enriched market df."""
-    el = build_transfer_scores(elements_all, score_col=score_col)
+    el = build_transfer_scores(elements_all, score_col=score_col, horizon_gws=horizon_gws)
     for c in MARKET_COLS:
         if c not in el.columns:
             if c == "id":
@@ -463,7 +456,7 @@ def suggest_transfers(squad_df, elements_all, itb_m, free_transfers, hit_cap=0, 
         return {"note": "No squad loaded.", "moves": [], "remaining_itb": itb_m}
 
     try:
-        el = prepare_market(elements_all, score_col=score_col)
+        el = prepare_market(elements_all, score_col=score_col, horizon_gws=horizon_gws)
     except ValueError as exc:
         return {"note": str(exc), "moves": [], "remaining_itb": itb_m}
 

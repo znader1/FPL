@@ -191,16 +191,15 @@ TRANSFER_MIN_SCORE_GAIN = 0.60  # [untested]
 TRANSFER_MAX_MOVES = 5  # [untested]
 TRANSFER_DEFAULT_HOT_TOPN = 5  # [untested]
 
-TRANSFER_SET_PIECE_WEIGHTS = {
-    "penalties": {1: 3.1, 2: 1.2, 3: 0.35},
-    "direct_free_kicks": {1: 1.0, 2: 0.35},
-    "corners_indirect": {1: 0.75, 2: 0.25},
-}  # [untested]
-TRANSFER_SET_PIECE_PRIMARY_BONUS = {
-    "penalties": 1.1,
-    "direct_free_kicks": 0.35,
-    "corners_indirect": 0.25,
-}  # [untested]
+# Set-piece duty in the transfer score, per GW of the horizon. Penalties are
+# deliberately absent: the first-choice taker already carries
+# PROJ_PENALTY_TAKER_UPLIFT inside xPts, and the old flat +4.2 (3.1 + 1.1
+# primary bonus) on top of a ~5 xPt single-GW base ranked a £4.9m pen taker
+# above a £7.8m midfielder with +0.8 xPts (GW8 2026-27, Rudoni over Mbeumo).
+TRANSFER_SET_PIECE_PER_GW = {
+    "direct_free_kicks": {1: 0.15, 2: 0.05},
+    "corners_indirect": {1: 0.10, 2: 0.03},
+}  # [untested] replaced TRANSFER_SET_PIECE_WEIGHTS / _PRIMARY_BONUS on 2026-10-22
 
 TRANSFER_SELL_STARTER_BOOST = 1.25  # [untested]
 TRANSFER_SELL_BENCH_PENALTY = 1.55  # [untested]
