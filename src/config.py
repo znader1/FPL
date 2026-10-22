@@ -106,7 +106,8 @@ METRIC_MAP = {
 # Output columns for the squad table
 SQUAD_COLUMNS = [
     "player_id","web_name","pos","team_short","team_name",
-    "is_captain","is_vice_captain","multiplier"
+    "is_captain","is_vice_captain","multiplier",
+    "selling_price",  # my-team only (tenths); absent on public picks
 ]  # [operational]
 
 
@@ -124,6 +125,10 @@ PROJ_FORM_SCALE_BASE_MATCHES = 3  # [untested]
 PROJ_LATEST_N_MIN = 1  # [untested]
 PROJ_LATEST_N_MAX = 8  # [untested]
 PROJ_PLAYER_RECENT_GW_WINDOW = 5  # [untested]
+# Zero-minute GWs in the recent average (projections._drop_unavailable_zero_gws):
+# an injured/suspended blank is not evidence about level; a fit-but-benched blank is.
+PROJ_RECENT_DROP_UNAVAILABLE_ZEROS = True  # [untested] False = every zero counts (pre-2026-10 behaviour)
+PROJ_RECENT_SANDWICH_MIN_STARTS = 3  # [untested] started GWs needed before a single blank is read as an absence
 PROJ_PLAYER_RECENT_MIN_SAMPLES = 2  # [untested]
 PROJ_PLAYER_RECENT_BLEND_WEIGHT = 0.65  # [untested]
 PROJ_EP_NEXT_BLEND_WEIGHT = 0.50  # [untested]
@@ -186,16 +191,15 @@ TRANSFER_MIN_SCORE_GAIN = 0.60  # [untested]
 TRANSFER_MAX_MOVES = 5  # [untested]
 TRANSFER_DEFAULT_HOT_TOPN = 5  # [untested]
 
-TRANSFER_SET_PIECE_WEIGHTS = {
-    "penalties": {1: 3.1, 2: 1.2, 3: 0.35},
-    "direct_free_kicks": {1: 1.0, 2: 0.35},
-    "corners_indirect": {1: 0.75, 2: 0.25},
-}  # [untested]
-TRANSFER_SET_PIECE_PRIMARY_BONUS = {
-    "penalties": 1.1,
-    "direct_free_kicks": 0.35,
-    "corners_indirect": 0.25,
-}  # [untested]
+# Set-piece duty in the transfer score, per GW of the horizon. Penalties are
+# deliberately absent: the first-choice taker already carries
+# PROJ_PENALTY_TAKER_UPLIFT inside xPts, and the old flat +4.2 (3.1 + 1.1
+# primary bonus) on top of a ~5 xPt single-GW base ranked a £4.9m pen taker
+# above a £7.8m midfielder with +0.8 xPts (GW8 2026-27, Rudoni over Mbeumo).
+TRANSFER_SET_PIECE_PER_GW = {
+    "direct_free_kicks": {1: 0.15, 2: 0.05},
+    "corners_indirect": {1: 0.10, 2: 0.03},
+}  # [untested] replaced TRANSFER_SET_PIECE_WEIGHTS / _PRIMARY_BONUS on 2026-10-22
 
 TRANSFER_SELL_STARTER_BOOST = 1.25  # [untested]
 TRANSFER_SELL_BENCH_PENALTY = 1.55  # [untested]
@@ -504,12 +508,83 @@ CHIP_WILDCARD_SHORT_HORIZON_DGW_MULTIPLIER = 1.4  # [untested]
 CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR = 8.5  # [untested]
 CHIP_WILDCARD_PREMIUM_ATTACKER_BASE_BONUS = 0.8  # [untested]
 CHIP_WILDCARD_CAPTAINCY_WEIGHT = 0.32  # [untested]
-CHIP_WILDCARD_FORM_BONUS_WEIGHT = 0.12  # [untested]
-CHIP_WILDCARD_OWNERSHIP_BONUS_WEIGHT = 0.55  # [untested]
-CHIP_WILDCARD_OWNERSHIP_BONUS_SCALE = 40.0  # [untested]
 CHIP_WILDCARD_MIN_PREMIUM_CAPTAINS = 1  # [untested]
 CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR = 10.5  # [untested]
 CHIP_WILDCARD_PREMIUM_CAPTAIN_POSITIONS = ["MID", "FWD"]  # [operational]
+
+# --- wildcard v2 (docs/superpowers/specs/2026-10-22-wildcard-v2-design.md) ---
+# Objective split (spec 4.4): bench score counts at this weight next to the XI.
+CHIP_WILDCARD_BENCH_WEIGHT = 0.15  # [untested]
+CHIP_WILDCARD_BENCH_BUDGET_MAX_M = 17.5  # [untested] cap on the four bench slots (roles mode)
+# Availability gate (spec 4.4): share of team games started this season.
+CHIP_BENCH_START_SHARE = 0.85  # [untested]
+CHIP_XI_START_SHARE = 0.70  # [untested] default when a preset gives no xi_start_share
+# DC-midfielder bench role: P(reaching rules.OUTPUT_DC_THRESHOLD) per game.
+CHIP_BENCH_MID_DC_PROB = 0.5  # [untested]
+CHIP_BENCH_GK_ROTATION_PRICE_SLACK = 0.5  # [untested] £m above the cheapest playing keeper the bench may spend for a home/away rotation partner
+CHIP_BENCH_MID_DC_MIN_PROB = 0.25  # [untested] below this a MID is not a DC body; bench falls back to the cheapest
+# Same-team defensive correlation (spec 4.5). GK counts as DEF for the cap;
+# the cap lifts for teams whose xG defence rating ranks <= ELITE_DEF_RANK.
+CHIP_WILDCARD_MAX_DEF_PER_TEAM = 2  # [untested]
+CHIP_WILDCARD_ELITE_ATT_RANK = 4  # [untested] top-N attack rating counts as an elite club for the per-club cap
+CHIP_WILDCARD_ELITE_DEF_RANK = 4  # [untested]
+# Index = defenders/GKs already drafted from that team; last entry repeats.
+CHIP_WILDCARD_SAME_TEAM_DEF_PENALTY = [0.0, 0.0, 0.20]  # [untested] score multiplier haircut on the Nth defensive body (GKP+DEF) from one club: a double-up on a strong defence is free, a triple is cut 20%. Was [0, .15, .30]: the 15% on the second body let the keeper block his own defenders (GW8 2026-27, Raya vs Calafiori/Gabriel)
+# Small-sample guard: teams with fewer rated matches shrink toward the price prior.
+CHIP_WILDCARD_MIN_TEAM_MATCHES = 8  # [untested]
+# Trend (spec 4.3): slope of per-90 xGI (attackers) / xGC + DC rate (defence).
+CHIP_WILDCARD_TREND_WINDOW = 6  # [untested]
+CHIP_WILDCARD_TREND_CLIP = 0.5  # [untested]
+CHIP_WILDCARD_TREND_WEIGHT = 1.0  # [untested]
+CHIP_WILDCARD_TREND_SHRINK_GAMES = 6.0  # [untested]
+# Injury prior (spec 4.6) from the status-history CSV the refresh appends.
+CHIP_WILDCARD_INJURY_PRIOR_WEIGHT = 1.0  # [untested]
+CHIP_WILDCARD_INJURY_PRIOR_SHRINK_GWS = 6.0  # [untested]
+CHIP_WILDCARD_STATUS_HISTORY_PATH = "data/processed/fpl/status_history.csv"  # [operational]
+# Position-aware upside (spec 4.7): ep_goals + ep_assists + ep_dc + ep_saves.
+CHIP_WILDCARD_UPSIDE_WEIGHT = 0.3  # [untested]
+# "Premium" for the preset counts: price >= CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR,
+# OR among the TOP_N most expensive available attackers when fewer than the
+# preset needs clear the absolute floor (a thin premium market must not make
+# "exactly 3 premiums" infeasible).
+CHIP_WILDCARD_PREMIUM_TOP_N = 8  # [untested]
+# Gems preset ownership constraint (spec 4.8).
+CHIP_WILDCARD_GEM_OWNERSHIP_MAX = 10.0  # [untested] selected_by_percent
+CHIP_WILDCARD_GEM_MIN_XI = 6  # [untested]
+# Presets are hard structural constraints, not weights (spec 4.8), plus one
+# `max_per_team` applies to elite clubs (top CHIP_WILDCARD_ELITE_DEF_RANK defence
+# or top CHIP_WILDCARD_ELITE_ATT_RANK attack); `max_per_team_other` to the rest.
+# soft term: `ownership_weight` (score per ownership point, template
+# protection — 0.03 x 55% owned = +1.65 over the horizon). 0 for gems. `formation`
+# is the DEF/MID/FWD shape of the XI pick (plus one GK); the bench completes
+# the 15 to 2/5/5/3.
+CHIP_WILDCARD_PRESET_ORDER = ["aggressive", "balanced", "gems"]  # [operational]
+CHIP_WILDCARD_PRESETS = {
+    "aggressive": {
+        "label": "Aggressive",
+        "premiums_exact": 3, "premiums_max": None,
+        "bench_mode": "enablers", "bench_budget_max_m": 17.0, "gem_min_xi": 0,
+        "max_def_per_team": 2, "max_per_team": 3, "max_per_team_other": 2,
+        "captaincy_mult": 1.5, "trend_mult": 1.0, "xi_start_share": 0.70,
+        "ownership_weight": 0.02, "formation": (3, 5, 2),
+    },
+    "balanced": {
+        "label": "Balanced",
+        "premiums_exact": 2, "premiums_max": None,
+        "bench_mode": "roles", "bench_budget_max_m": 17.5, "gem_min_xi": 0,
+        "max_def_per_team": 2, "max_per_team": 3, "max_per_team_other": 2,
+        "captaincy_mult": 1.0, "trend_mult": 1.0, "xi_start_share": 0.80,
+        "ownership_weight": 0.03, "formation": (3, 4, 3),
+    },
+    "gems": {
+        "label": "Gems",
+        "premiums_exact": None, "premiums_max": 1,
+        "bench_mode": "enablers_gem", "bench_budget_max_m": 17.0, "gem_min_xi": 6,
+        "max_def_per_team": 2, "max_per_team": 2, "max_per_team_other": 2,
+        "captaincy_mult": 0.0, "trend_mult": 2.0, "xi_start_share": 0.85,
+        "ownership_weight": 0.0, "formation": (4, 4, 2),
+    },
+}  # [operational]
 
 # ---------------------------------------------------------------------------
 # xG expected-points model (fixture_difficulty / minutes_model / output_model)
@@ -573,11 +648,11 @@ FDR_TICKER_BANDS = [
 # --- minutes_model.py: P(start) + expected minutes ---
 MINUTES_HALFLIFE_GWS = 5.0           # [untested] decay half-life (in GWs) on start/minutes history
 MINUTES_START_PRIOR = 0.55           # [untested] prior P(start) for players with no history
-MINUTES_PRIOR_WEIGHT = 2.0           # [untested] pseudo-GWs of prior weight (shrinks thin samples)
+MINUTES_PRIOR_WEIGHT = 0.5           # [untested] pseudo-GWs of prior weight (shrinks thin samples); was 2.0, which with the decayed window left 7/7 starters at P(start) 0.86 vs observed 0.96 (GW1-7 2026-27)
 MINUTES_E_MIN_GIVEN_START = 82.0     # [untested] assumed E[minutes | started] with no history
 MINUTES_CAMEO_MINUTES = 22.0         # [untested] assumed E[minutes | sub appearance]
 MINUTES_SUB_APP_PROB = 0.45          # [untested] P(appear | did not start) baseline
-MINUTES_P60_GIVEN_START = 0.86       # [untested] P(>=60 min | started) baseline
+MINUTES_P60_GIVEN_START = 0.86       # [untested] P(>=60 min | started) prior; blended with the player's own decayed rate
 MINUTES_STATUS_AVAILABILITY = {      # hard availability cap by FPL status code
     "a": 1.0, "d": 0.5, "i": 0.0, "s": 0.0, "u": 0.0, "n": 0.0,
 }  # [untested]
@@ -672,9 +747,15 @@ ODDS_TEAM_ALIASES = {}       # [operational] extra {fpl_name: odds_api_name} fix
 # 2026-09-10 extended sweep (0.5..1.0, GW6-38) resolved the old "top of grid,
 # not a confirmed interior optimum" caveat: the bowl bottoms at 0.5-0.6
 # (MAE 1.902/1.897 — noise-level apart), degrades from 0.8, and 1.0 drops
-# captain hit back to baseline. 0.5 is confirmed at-optimum; do not raise
-# past 0.6 without new evidence.
-PROJ_MODEL_BLEND_WEIGHT = 0.5  # [tuned]
+# captain hit back to baseline.
+# 2026-10-22: raised to 0.7. Re-sweep (GW6-17, 1-GW MAE) 0.5=1.892 / 0.7=1.895 /
+# 0.85=1.911 with captain hit equal at 0.5 and 0.7 — a tie on the only metric
+# we have. The user-facing failure the 50/50 blend produced (GW8 2026-27: six
+# Brighton players projected 5-8 xPts away at Liverpool off a points streak,
+# xG model said 2-3.5; Forest at Ipswich the mirror image) is a multi-GW
+# wildcard/transfer problem the 1-GW MAE does not measure. Do not raise past
+# 0.8 (degrades); revisit with a horizon-aware backtest.
+PROJ_MODEL_BLEND_WEIGHT = 0.7  # [untested] (directional sweep only) 2026-10-22 sweep (2025-26 GW6-17, 1-GW MAE): 0.5=1.892, 0.7=1.895, 0.85=1.911 — tie; 0.7 chosen so fixture/underlying outweighs recent points (user call); was 0.5 [tuned]
 
 # --- LLM specialist agents (api/chat.py) ---
 # Inject the reflection agent's learned strategy rules (src/agent_memory

@@ -68,7 +68,7 @@ def test_every_config_reference_exists_so_deleting_a_param_fails_loudly():
     # The 13 parameters whose old call-site fallback differed numerically from
     # config.py. Each previously resolved to the config value; pin that so a
     # future edit can't quietly restore the fallback number instead.
-    ("PROJ_MODEL_BLEND_WEIGHT", 0.5),          # fallback was 0.0 - would disable the xG blend
+    ("PROJ_MODEL_BLEND_WEIGHT", 0.7),          # fallback was 0.0 - would disable the xG blend; 0.5 -> 0.7 on 2026-10-22 (see config comment)
     ("PROJ_SHRINKAGE_GAMES", 5.0),             # fallback was 0.0 - would disable early-season shrinkage
     ("PROJ_PENALTY_TAKER_UPLIFT", 0.45),       # fallback was 0.0
     ("PROJ_GK_FIXTURE_DAMP", 0.5),             # fallback was 1.0

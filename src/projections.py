@@ -2,9 +2,13 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+import logging
+
 import pandas as pd
 
-from . import config, transforms
+from . import config, injury_prior, transforms
+
+logger = logging.getLogger(__name__)
 
 
 DIFFICULTY_MULTIPLIER = {
@@ -108,6 +112,30 @@ def resolve_projection_difficulty_ratings(teams_short_map):
         return None
 
 
+def team_defence_table(ratings):
+    """{team_id: {"defense": ..., "samples": ...}} → DataFrame[team, team_def_rank,
+    team_rated_matches]. Rank 1 = lowest defence rating (fewest xG conceded).
+    None / empty ratings → empty frame, so callers fail soft."""
+    rows = []
+    for team_id, r in (ratings or {}).items():
+        if not isinstance(r, dict) or not isinstance(team_id, (int, float)):
+            continue
+        rows.append({
+            "team": int(team_id),
+            "_defense": float(r.get("defense", 1.0)),
+            "_attack": float(r.get("attack", 1.0)),
+            "team_rated_matches": float(r.get("samples", 0.0) or 0.0),
+        })
+    if not rows:
+        return pd.DataFrame(columns=["team", "team_def_rank", "team_att_rank", "team_rated_matches"])
+    out = pd.DataFrame(rows)
+    out["team_def_rank"] = out["_defense"].rank(method="first", ascending=True).astype(int)
+    # Rank 1 = highest attack rating (most xG for). Used with team_def_rank to
+    # decide which clubs a wildcard may stack to three.
+    out["team_att_rank"] = out["_attack"].rank(method="first", ascending=False).astype(int)
+    return out[["team", "team_def_rank", "team_att_rank", "team_rated_matches"]]
+
+
 def difficulty_multiplier(diff_avg):
     """Map FPL difficulty (1..5) to a simple multiplier."""
     if pd.isna(diff_avg):
@@ -195,6 +223,23 @@ def penalty_taker_uplift(penalties_order, index=None):
     if not isinstance(order, pd.Series):
         order = pd.Series(order, index=index)
     return (order == 1.0).astype(float) * uplift
+
+
+def _team_played_counts(fixtures, gw_start):
+    """{team_id: fixtures with event < gw_start} (finished when the column exists)."""
+    if fixtures is None or len(fixtures) == 0 or "event" not in fixtures.columns:
+        return {}
+    fx = fixtures.copy()
+    ev = pd.to_numeric(fx["event"], errors="coerce")
+    fx = fx[ev.notna() & (ev < int(gw_start))]
+    if "finished" in fx.columns:
+        fx = fx[fx["finished"].fillna(False).astype(bool)]
+    counts = {}
+    for col in ("team_h", "team_a"):
+        if col in fx.columns:
+            for t, n in pd.to_numeric(fx[col], errors="coerce").dropna().astype(int).value_counts().items():
+                counts[int(t)] = counts.get(int(t), 0) + int(n)
+    return counts
 
 
 def team_recent_ppg_map(fixtures, gw_start, latest_n_matches=config.PROJ_DEFAULT_LATEST_N_MATCHES):
@@ -312,12 +357,42 @@ def load_latest_player_gw_history(path=None, base_dir="data/processed/fpl"):
     return df.copy()
 
 
-def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/processed/fpl", fixtures=None, finished_gw_max=None):
+def _drop_unavailable_zero_gws(df, unavailable):
+    """Remove zero-minute GW rows that are not evidence about the player's level.
+
+    A row goes when (a) the status snapshot says the player was injured /
+    suspended / doubtful that GW (`unavailable` = {(player_id, gw)}), or (b) the
+    "sandwiched" rule: the player started every other GW in the window (at least
+    PROJ_RECENT_SANDWICH_MIN_STARTS of them) and blanked exactly once — a nailed
+    starter does not get benched on merit for one week, so that blank is
+    treated as an unrecorded absence. A fit, rotated player keeps every zero.
+    `unavailable=None` disables both rules (legacy behaviour, backtests).
+    """
+    if unavailable is None or df.empty or "gw_minutes" not in df.columns:
+        return df
+    mins = pd.to_numeric(df["gw_minutes"], errors="coerce").fillna(0.0)
+    starts = pd.to_numeric(df.get("gw_starts"), errors="coerce").fillna(0.0) if "gw_starts" in df.columns else pd.Series(0.0, index=df.index)
+    zero = mins <= 0
+    pid = pd.to_numeric(df["player_id"], errors="coerce")
+    gw = pd.to_numeric(df["gw"], errors="coerce")
+    flagged = pd.Series([(int(a), int(b)) in unavailable if pd.notna(a) and pd.notna(b) else False
+                         for a, b in zip(pid, gw)], index=df.index)
+    min_starts = int(config.PROJ_RECENT_SANDWICH_MIN_STARTS)
+    grp = pd.DataFrame({"pid": pid, "zero": zero, "started": starts > 0})
+    per = grp.groupby("pid").agg(n_zero=("zero", "sum"), n_started=("started", "sum"), n=("zero", "size"))
+    sandwich_pids = set(per[(per["n_zero"] == 1) & (per["n_started"] >= min_starts) & (per["n_started"] + per["n_zero"] == per["n"])].index)
+    sandwiched = zero & pid.isin(sandwich_pids)
+    return df[~(zero & (flagged | sandwiched))].copy()
+
+
+def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/processed/fpl", fixtures=None, finished_gw_max=None, unavailable=None):
     """
     Build recent player-by-GW averages before `gw_start`.
     Uses recent calendar GWs before `gw_start`.
     If a player has no row for a GW but their team had a fixture, that GW is treated
-    as a zero-point appearance for recent-form purposes.
+    as a zero-point appearance for recent-form purposes — unless `unavailable`
+    (set of (player_id, gw)) or the sandwiched-blank rule marks that GW as an
+    absence, see `_drop_unavailable_zero_gws`.
     """
     hist = history_df if history_df is not None else load_latest_player_gw_history(base_dir=resolve_history_base_dir(base_dir))
     if hist is None or hist.empty:
@@ -399,6 +474,10 @@ def player_recent_gw_map(gw_start, window=None, history_df=None, base_dir="data/
                 else:
                     merged["gw_fixture_count"] = merged["team_fixture_count"].fillna(0.0)
                 df = merged.drop(columns=["team_fixture_count"], errors="ignore")
+
+    df = _drop_unavailable_zero_gws(df, unavailable)
+    if df.empty:
+        return pd.DataFrame()
 
     agg_map = {
         "gw_total_points": "mean",
@@ -521,7 +600,8 @@ def project_elements_next_gws(
     recent_blend_weight = clamp(config.PROJ_PLAYER_RECENT_BLEND_WEIGHT, 0.0, 1.0)
     ep_next_blend_weight = clamp(config.PROJ_EP_NEXT_BLEND_WEIGHT, 0.0, 1.0)
 
-    recent_gw = player_recent_gw_map(gw_start=gw_start, window=recent_window, fixtures=fixtures, finished_gw_max=finished_gw_max)
+    unavailable = injury_prior.unavailable_gws(config.CHIP_WILDCARD_STATUS_HISTORY_PATH) if config.PROJ_RECENT_DROP_UNAVAILABLE_ZEROS else None
+    recent_gw = player_recent_gw_map(gw_start=gw_start, window=recent_window, fixtures=fixtures, finished_gw_max=finished_gw_max, unavailable=unavailable)
     recent_history_max_gw = None
     if recent_gw is not None and not recent_gw.empty:
         if "recent_history_max_gw" in recent_gw.columns:
@@ -601,6 +681,28 @@ def project_elements_next_gws(
     )
 
     horizon_total = pd.Series(0.0, index=df.index, dtype="float64")
+
+    # Availability inputs for chip drafts (wildcard v2 spec 4.4): share of
+    # team games started — the recent window when it has >= 2 samples, else
+    # season starts over the team's played fixtures before gw_start.
+    played = _team_played_counts(fixtures, int(gw_start))
+    team_num = _numeric_series(df, "team", default=float("nan"))
+    team_played = team_num.map(played).fillna(0.0)
+    season_starts = _numeric_series(df, "starts", default=0.0).fillna(0.0)
+    season_share = (season_starts / team_played.where(team_played > 0)).clip(lower=0.0, upper=1.0)
+    recent_starts = _numeric_series(df, "recent_gw_avg_starts", default=float("nan"))
+    df["start_share"] = recent_starts.where(
+        recent_starts.notna() & (recent_samples >= 2.0), season_share
+    ).fillna(0.0).round(3)
+    team_table = team_defence_table(xg_diff_ratings)
+    if not team_table.empty:
+        df["team_def_rank"] = team_num.map(team_table.set_index("team")["team_def_rank"])
+        df["team_att_rank"] = team_num.map(team_table.set_index("team")["team_att_rank"])
+        df["team_rated_matches"] = team_num.map(team_table.set_index("team")["team_rated_matches"])
+    else:
+        df["team_def_rank"] = pd.NA
+        df["team_att_rank"] = pd.NA
+        df["team_rated_matches"] = pd.NA
 
     # Market difficulty covers only the next fixture — blend it into the
     # FIRST horizon GW at ODDS_DIFFICULTY_BLEND_WEIGHT; the xG ratings carry
@@ -785,6 +887,10 @@ def project_elements_next_gws(
         "recent_history_window_gws",
         "recent_history_max_gw",
         "recent_history_available",
+        "start_share",
+        "team_def_rank",
+        "team_att_rank",
+        "team_rated_matches",
         "transfers_in_event",
         "transfers_out_event",
         "penalties_order",
@@ -832,18 +938,67 @@ _MODEL_COMPONENT_COLS = [
 ]
 
 
-def add_wildcard_scores(projections_df, gw_start, horizon_gws):
+def attach_wildcard_signals(projections_df, gw_start, match_df=None, status_path=None):
+    """Join the wildcard-only inputs onto a projections frame by `id`:
+    `wildcard_trend` (src/trend.py over the match history before gw_start)
+    and `p_miss` / `injury_flag` (src/injury_prior.py over the status-history
+    CSV). Missing data → 0 / False, never NaN. Callers pass `match_df` /
+    `status_path` explicitly in tests; the route uses the live loaders."""
+    from . import injury_prior as _injury
+    from . import trend as _trend
+
+    if projections_df is None or projections_df.empty:
+        return projections_df
+    out = projections_df.copy()
+    if match_df is None:
+        try:
+            from . import fixture_difficulty as _fd
+            match_df = _fd.load_match_history()
+        except Exception:
+            match_df = pd.DataFrame()
+    try:
+        tr = _trend.player_trend(match_df, as_of_event=int(gw_start))
+    except Exception as exc:  # noqa: BLE001 — one bad history row must not kill the wildcard
+        logger.warning("wildcard trend unavailable: %s", exc)
+        tr = None
+    if tr is not None and not tr.empty:
+        out = out.merge(tr.rename(columns={"element": "id"}), on="id", how="left")
+        out["wildcard_trend"] = pd.to_numeric(out["trend"], errors="coerce").fillna(0.0)
+        out = out.drop(columns=["trend"])
+    else:
+        out["wildcard_trend"] = 0.0
+    path = status_path if status_path is not None else config.CHIP_WILDCARD_STATUS_HISTORY_PATH
+    out = _injury.attach(out, _injury.player_injury_prior(path), id_col="id")
+    return out
+
+
+def add_wildcard_scores(projections_df, gw_start, horizon_gws, preset=None):
     """
-    Add a dedicated wildcard score that favors:
-      - strong next-fixture runs,
-      - future double gameweeks within the horizon,
-      - premium captaincy-ready attackers.
+    Add a dedicated wildcard score (spec 4.3 / 4.6 / 4.7):
+
+        wildcard_score = (weighted_xpts + future_dgw_bonus + captaincy_bonus
+                          + trend_term + upside) * injury_mult
+
+    - weighted_xpts: horizon xPts under CHIP_WILDCARD_GW_WEIGHTS.
+    - future_dgw_bonus: extra fixtures inside the horizon.
+    - captaincy_bonus: premium attackers only; next-GW xPts, price and
+      penalty duty — no form term (level already lives in xPts).
+    - trend_term: direction of underlying output (`wildcard_trend`, from
+      src/trend.py, attached by the caller; 0 when absent) x TREND_WEIGHT x
+      the preset's trend_mult.
+    - upside: position-neutral CHIP_WILDCARD_UPSIDE_WEIGHT x (ep_goals +
+      ep_assists + ep_dc + ep_saves) from the xG components (GW1).
+    - injury_mult: 1 - p_miss x INJURY_PRIOR_WEIGHT (`p_miss` from
+      src/injury_prior.py, attached by the caller; 0 when absent).
+    Form and ownership bonuses are gone: form was counted three times and
+    ownership rewarded the template, the opposite of gem hunting.
     """
     if projections_df is None or projections_df.empty:
         return projections_df
 
     gw_start = int(gw_start)
     horizon_gws = max(1, int(horizon_gws or 1))
+    preset = dict(preset or {})
     out = projections_df.copy()
 
     weights = _weight_list(
@@ -878,12 +1033,8 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws):
         future_extra_fixtures = future_extra_fixtures + extra_fixtures
 
     price_m = _numeric_series(out, "price_m", default=0.0)
-    form = _numeric_series(out, "form", default=0.0).clip(lower=0.0)
-    recent_avg_points = _numeric_series(out, "recent_gw_avg_points", default=0.0).clip(lower=0.0)
-    recent_samples = _numeric_series(out, "recent_gw_samples", default=0.0)
     penalties_order = _numeric_series(out, "penalties_order", default=99.0)
     next_xpts = _numeric_series(out, f"xpts_gw{gw_start}", default=0.0)
-    selected_by_percent = _numeric_series(out, "selected_by_percent", default=0.0).clip(lower=0.0)
 
     pos = out.get("pos", pd.Series("", index=out.index)).astype(str)
     is_attacker = pos.isin(["MID", "FWD"]).astype(float)
@@ -895,14 +1046,12 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws):
     )
     premium_base_bonus = float(config.CHIP_WILDCARD_PREMIUM_ATTACKER_BASE_BONUS or 0.8)
     captaincy_weight = float(config.CHIP_WILDCARD_CAPTAINCY_WEIGHT or 0.32)
-    form_bonus_weight = float(config.CHIP_WILDCARD_FORM_BONUS_WEIGHT or 0.12)
-    ownership_bonus_weight = float(config.CHIP_WILDCARD_OWNERSHIP_BONUS_WEIGHT or 0.55)
-    ownership_bonus_scale = float(config.CHIP_WILDCARD_OWNERSHIP_BONUS_SCALE or 40.0)
+    captaincy_mult = float(preset.get("captaincy_mult", 1.0))
+    trend_mult = float(preset.get("trend_mult", 1.0))
 
     captain_signal = (
         next_xpts * pos_mult
         + ((price_m - premium_floor).clip(lower=0.0) * float(config.CAPTAIN_PREMIUM_PRICE_BONUS_PER_M) * is_attacker)
-        + (form * float(config.CAPTAIN_FORM_CEILING_WEIGHT) * is_attacker)
         + (
             (penalties_order == 1.0).astype(float)
             * float(config.CAPTAIN_SET_PIECE_PENALTY_WEIGHT)
@@ -910,23 +1059,41 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws):
         )
     )
     is_premium_attacker = ((price_m >= premium_floor).astype(float) * is_attacker).astype(float)
-    captaincy_bonus = is_premium_attacker * (premium_base_bonus + (captain_signal * captaincy_weight))
-    recent_signal = ((form * 0.55) + (recent_avg_points * 0.45)).where(recent_samples >= 2.0, form)
-    form_bonus = recent_signal * form_bonus_weight * (1.0 + (is_attacker * 0.2))
-    ownership_bonus = (
-        (selected_by_percent / max(1.0, ownership_bonus_scale)).clip(lower=0.0, upper=1.0)
-        * ownership_bonus_weight
-        * is_premium_attacker
+    captaincy_bonus = is_premium_attacker * (premium_base_bonus + (captain_signal * captaincy_weight)) * captaincy_mult
+
+    trend = _numeric_series(out, "wildcard_trend", default=0.0)
+    trend_term = trend * float(config.CHIP_WILDCARD_TREND_WEIGHT) * trend_mult
+
+    upside = float(config.CHIP_WILDCARD_UPSIDE_WEIGHT) * (
+        _numeric_series(out, "ep_goals", default=0.0)
+        + _numeric_series(out, "ep_assists", default=0.0)
+        + _numeric_series(out, "ep_dc", default=0.0)
+        + _numeric_series(out, "ep_saves", default=0.0)
     )
+
+    p_miss = _numeric_series(out, "p_miss", default=0.0).clip(lower=0.0, upper=1.0)
+    injury_mult = (1.0 - p_miss * float(config.CHIP_WILDCARD_INJURY_PRIOR_WEIGHT)).clip(lower=0.0, upper=1.0)
+
+    # Template protection: a preset weight on ownership, not a form proxy.
+    # Missing a 55%-owned player who hauls costs rank even when the pick that
+    # replaced him was right on expectation. Gems and the legacy path use 0.
+    ownership_weight = float(preset.get("ownership_weight") or 0.0)
+    ownership_term = _numeric_series(out, "selected_by_percent", default=0.0).fillna(0.0).clip(lower=0.0) * ownership_weight
 
     out["wildcard_weighted_xpts"] = weighted_xpts.round(3)
     out["wildcard_future_dgw_bonus"] = future_dgw_bonus.round(3)
     out["wildcard_captaincy_bonus"] = captaincy_bonus.round(3)
-    out["wildcard_form_bonus"] = form_bonus.round(3)
-    out["wildcard_ownership_bonus"] = ownership_bonus.round(3)
+    out["wildcard_trend"] = trend.round(3)
+    out["wildcard_trend_term"] = trend_term.round(3)
+    out["wildcard_upside"] = upside.round(3)
+    out["wildcard_injury_mult"] = injury_mult.round(3)
+    out["wildcard_ownership_term"] = ownership_term.round(3)
     out["wildcard_extra_fixtures"] = future_extra_fixtures.astype(int)
-    out["wildcard_score"] = (weighted_xpts + future_dgw_bonus + captaincy_bonus + form_bonus + ownership_bonus).round(3)
-    out = out.sort_values(["wildcard_score", "xpts_horizon"], ascending=[False, False]).reset_index(drop=True)
+    out["wildcard_score"] = (
+        (weighted_xpts + future_dgw_bonus + captaincy_bonus + trend_term + upside + ownership_term) * injury_mult
+    ).round(3)
+    sort_cols = ["wildcard_score"] + (["xpts_horizon"] if "xpts_horizon" in out.columns else [])
+    out = out.sort_values(sort_cols, ascending=[False] * len(sort_cols)).reset_index(drop=True)
     return out
 
 

@@ -2,7 +2,8 @@ import re
 
 import pandas as pd
 
-from . import config
+from . import chip_bench, config
+from .chip_draft import shrink_small_sample_scores  # noqa: F401 (re-exported for tests/callers)
 
 
 VALID_FORMATIONS = [
@@ -97,7 +98,12 @@ def _prepare_chip_market(elements_all, score_col, shape):
         return pd.DataFrame()
 
     cols = ["id", "web_name", "pos", "team", "team_short", "team_name", "price_m", "now_cost",
-            "status", "minutes", "selected_by_percent", score_col]
+            "status", "minutes", "selected_by_percent", score_col,
+            # wildcard v2 optional inputs (availability gate, bench roles, caps, upside)
+            "start_share", "p_dc", "p_clean_sheet", "injury_flag", "team_def_rank", "team_att_rank",
+            "team_rated_matches", "ep_goals", "ep_assists", "ep_dc", "ep_saves"]
+    # Per-GW fixture strings ("H-EVE(D3)") feed the bench keeper's home/away rotation.
+    cols += [c for c in elements_all.columns if str(c).startswith("fixtures_gw")]
     keep = [c for c in cols if c in elements_all.columns]
     market = elements_all[keep].copy()
 
@@ -414,24 +420,8 @@ def _ensure_min_premium_attackers(
 _H2H_DEFENSIVE_POS = {"GKP", "DEF"}
 
 
-def _bench_sort(pool):
-    """Bench-fodder ordering: players with at least CHIP_BENCH_MIN_MINUTES
-    season minutes come first (cheap is fine, ghosts are not), then price
-    ascending, then WORST scorer so a price tie never eats an XI candidate.
-    Preference, not a filter — a thin market falls through to the ghosts."""
-    pool = pool.copy()
-    floor = float(config.CHIP_BENCH_MIN_MINUTES)
-    if "minutes" in pool.columns:
-        pool["_bench_pref"] = (
-            pd.to_numeric(pool["minutes"], errors="coerce").fillna(0.0) >= floor
-        )
-    else:
-        pool["_bench_pref"] = True
-    return pool.sort_values(
-        ["_bench_pref", "price_m", "chip_score"],
-        ascending=[False, True, True],
-        kind="mergesort",
-    )
+# Bench ordering lives in chip_bench; alias kept for callers and tests.
+_bench_sort = chip_bench.bench_sort
 
 
 def _h2h_conflict_count(row, picked_rows, opponents):
@@ -714,9 +704,18 @@ def build_chip_squad(
     premium_floor=0.0,
     premium_positions=None,
     differential=False,
+    preset=None,
+    pinned_ids=None,
+    excluded_ids=None,
 ):
     """
     Build a legal 15-man draft for wildcard/free-hit under budget and team caps.
+
+    With `preset` (a CHIP_WILDCARD_PRESETS entry) the two-stage preset build in
+    chip_draft runs instead: XI by greedy under caps, bench by role rules,
+    pins/excludes honoured, result carrying xi_ids / bench_roles /
+    pins_conflict / notes. Without it, the legacy single-stage build below is
+    untouched (chip_advisor, the squad picker and free hit rely on that).
 
     The draft squad objective is `score_col` (for example `xpts_horizon` for wildcard,
     or `xpts_gwXX` for free hit), while the final XI can still be optimized separately.
@@ -730,6 +729,20 @@ def build_chip_squad(
         return {"ok": False, "reason": f"Market missing columns or score `{score_col}`.", "squad_df": None}
     if differential:
         market = _apply_differential(market)
+
+    if preset is not None:
+        from . import chip_draft
+        preset_name = next(
+            (k for k, v in (config.CHIP_WILDCARD_PRESETS or {}).items() if v is preset), None
+        )
+        built = chip_draft.build_preset_squad(
+            market, dict(preset, name=preset_name), budget_m,
+            pinned_ids=pinned_ids, excluded_ids=excluded_ids,
+        )
+        built["objective_score_col"] = score_col
+        if built.get("ok") and built.get("squad_df") is not None:
+            built["squad_df"] = built["squad_df"].rename(columns={"chip_score": "chip_score"})
+        return built
 
     for pos, need in shape_map.items():
         have = int((market["pos"] == pos).sum())

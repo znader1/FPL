@@ -6,7 +6,9 @@ from src import recommender
 
 
 def _market(rows):
-    """rows: (id, pos, base, penalties_order or None, status, chance)."""
+    """rows: (id, pos, base, set_piece or None, status, chance). `set_piece=1`
+    marks the first-choice corner + direct-free-kick taker (penalties carry no
+    transfer bonus: the uplift already lives in xPts)."""
     recs = []
     for pid, pos, base, pens, status, chance in rows:
         recs.append({
@@ -21,7 +23,8 @@ def _market(rows):
             "selected_by_percent": 0.0,
             "status": status,
             "chance_of_playing_next_round": chance,
-            "penalties_order": pens,
+            "direct_freekicks_order": pens,
+            "corners_and_indirect_freekicks_order": pens,
             "xh": base,           # score_col -> base_score
             "xpts_horizon": base,  # hot_by_position reads this unconditionally
         })
@@ -46,11 +49,11 @@ def _moves(squad_df, market_df):
 
 
 def test_bench_seller_ignores_buyer_set_piece_bonus():
-    # Buyer's raw upgrade is +0.3 (< bench threshold); his penalty-taker bonus
-    # would clear it, but set pieces are worthless to a bench slot.
+    # Buyer's raw upgrade is +0.4 (< bench threshold); his set-piece edge
+    # (+0.25/GW) would clear it, but set pieces are worthless to a bench slot.
     market = _market([
         (1, "MID", 2.0, None, "a", 100),
-        (2, "MID", 2.3, 1, "a", 100),
+        (2, "MID", 2.4, 1, "a", 100),
     ])
     assert _moves(_squad(1, multiplier=0), market) == []
 
@@ -58,7 +61,7 @@ def test_bench_seller_ignores_buyer_set_piece_bonus():
 def test_starter_seller_still_credits_buyer_bonuses():
     market = _market([
         (1, "MID", 2.0, None, "a", 100),
-        (2, "MID", 2.3, 1, "a", 100),
+        (2, "MID", 2.4, 1, "a", 100),
     ])
     moves = _moves(_squad(1, multiplier=1), market)
     assert len(moves) == 1

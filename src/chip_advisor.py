@@ -999,7 +999,7 @@ def _season_prior(chip, half):
 
 
 def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon, half,
-                    transfer_plan_net_gain=0.0, structural_gw=None, stress=None):
+                    transfer_plan_net_gain=0.0, structural_gw=None, stress=None, current_gw=None):
     """Plain-language "why is this chip on hold" sentence for one outlook or
     recommendation row. Raises on a missing/unexpected field — callers use
     `_safe_chip_guidance` so a gap never breaks the payload."""
@@ -1024,6 +1024,18 @@ def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon, 
         text = f"Hold. Nothing in the next {horizon} GWs beats keeping it. Best use: {prior}."
         if chip == "wildcard" and transfer_plan_net_gain > 0:
             text += " Your squad plus free transfers already covers this stretch."
+        return text
+
+    if chip == "wildcard" and current_gw is not None and int(event_id) <= int(current_gw):
+        # The best wildcard week in the window is the deadline week itself:
+        # "re-check later" would be wrong, the decision is now. Say that the gain is
+        # real but under the bar, and what would change the call.
+        text = (f"This is the week. GW{event_id} is the best wildcard week in the window at "
+                f"+{ev_gain:.1f} pts, but that is under the {bar:.0f}-pt bar")
+        if distribution and "p_beats_bar" in distribution:
+            text += f" ({round(distribution['p_beats_bar'] * 100)}% chance to beat it)"
+        text += ". Keep it unless you want the full rebuild now; your free transfers cover the gain. Best use: "
+        text += f"{prior.split(';')[0]}."
         return text
 
     text = f"Hold for now. GW{event_id} is the best week so far (+{ev_gain:.1f} pts"
@@ -1202,7 +1214,8 @@ def build_chip_plan(
             chip, status="hold", event_id=outlook_row["event_id"],
             ev_gain=outlook_row["ev_gain"], bar=outlook_row["bar"],
             distribution=distribution, horizon=horizon, half=windows[chip]["half"],
-            transfer_plan_net_gain=plan_net_gain)
+            transfer_plan_net_gain=plan_net_gain,
+            current_gw=(min(gw_projections) if gw_projections else None))
         outlook.append(outlook_row)
         if best.expected_value < bar:
             continue  # hold — nothing in the model zone clears the bar

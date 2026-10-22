@@ -134,3 +134,28 @@ def test_compute_gw_minutes_multiplier_empty_or_none_mins_df_is_all_ones():
     for result in (empty_result, none_result):
         assert len(result) == 3
         assert (result == 1.0).all()
+
+
+def _nailed_history(pid, gws, minutes=90):
+    return [{"player_id": pid, "gw": g, "gw_minutes": minutes, "gw_starts": 1} for g in gws]
+
+
+def test_prob_60_for_ever_present_starter_is_at_least_0_90():
+    # 7 straight 90-minute starts: the empirical 60' rate is 1.0, so the
+    # projection must not sit at prob_start * generic 0.86 (~0.73).
+    elements = _elements([{"id": 1, "status": "a", "chance_of_playing_next_round": 100}])
+    history = pd.DataFrame(_nailed_history(1, range(1, 8)))
+    out = minutes_model.minutes_projection(elements, history, gw=8)
+    assert out.loc[1, "prob_60"] >= 0.90
+
+
+def test_prob_60_uses_player_own_sixty_minute_rate():
+    # p1 starts and plays 90; p2 starts every week but is subbed at 55'.
+    elements = _elements([
+        {"id": 1, "status": "a", "chance_of_playing_next_round": 100},
+        {"id": 2, "status": "a", "chance_of_playing_next_round": 100},
+    ])
+    history = pd.DataFrame(_nailed_history(1, range(1, 8), 90) + _nailed_history(2, range(1, 8), 55))
+    out = minutes_model.minutes_projection(elements, history, gw=8)
+    assert out.loc[1, "prob_start"] == pytest.approx(out.loc[2, "prob_start"])
+    assert out.loc[2, "prob_60"] < 0.5 < out.loc[1, "prob_60"]

@@ -124,17 +124,29 @@ def _build_score_breakdown(record, chip_strategy="none", objective_score_col=Non
 
     if chip_strategy == "wildcard" or record.get("wildcard_score") is not None:
         breakdown["objective_explanation"] = (
-            "Wildcard score is a planning score: weighted future xPts plus bonuses for future doubles, recent form, ownership confidence, and premium captaincy coverage. "
+            "Wildcard score is a planning score: weighted future xPts plus bonuses for future doubles and premium "
+            "captaincy coverage, a trend term (direction of underlying xG/xA or defensive output), position-aware "
+            "upside, and an injury-history multiplier. "
             "The underlying xPts baseline blends long-term FPL data with recent calendar-gameweek averages when available."
         )
+
+        def _opt(key):
+            return round_float(record.get(key), 3, 0.0) if record.get(key) is not None else None
+
         breakdown["wildcard"] = {
-            "score": round_float(record.get("wildcard_score"), 3, 0.0) if record.get("wildcard_score") is not None else None,
-            "weighted_xpts": round_float(record.get("wildcard_weighted_xpts"), 3, 0.0) if record.get("wildcard_weighted_xpts") is not None else None,
-            "future_dgw_bonus": round_float(record.get("wildcard_future_dgw_bonus"), 3, 0.0) if record.get("wildcard_future_dgw_bonus") is not None else None,
-            "captaincy_bonus": round_float(record.get("wildcard_captaincy_bonus"), 3, 0.0) if record.get("wildcard_captaincy_bonus") is not None else None,
-            "form_bonus": round_float(record.get("wildcard_form_bonus"), 3, 0.0) if record.get("wildcard_form_bonus") is not None else None,
-            "ownership_bonus": round_float(record.get("wildcard_ownership_bonus"), 3, 0.0) if record.get("wildcard_ownership_bonus") is not None else None,
+            "score": _opt("wildcard_score"),
+            "weighted_xpts": _opt("wildcard_weighted_xpts"),
+            "dgw": _opt("wildcard_future_dgw_bonus"),
+            "captaincy": _opt("wildcard_captaincy_bonus"),
+            "trend": _opt("wildcard_trend"),
+            "trend_term": _opt("wildcard_trend_term"),
+            "upside": _opt("wildcard_upside"),
+            "injury_mult": _opt("wildcard_injury_mult"),
+            "ownership_term": _opt("wildcard_ownership_term"),
+            "role": record.get("role"),
         }
+        if isinstance(record.get("facts"), dict):
+            breakdown["wildcard"]["facts"] = record.get("facts")
     else:
         breakdown["objective_explanation"] = (
             "Single-gameweek xPts estimate for the selected lineup week, built from fixture context plus a blended player baseline."
@@ -207,7 +219,8 @@ def _lineup_projection_cols(proj_all, gws):
         "event_points", "total_points", "form",
         "selected_by_percent", "p80_low", "p80_high",
         "wildcard_score", "wildcard_weighted_xpts", "wildcard_future_dgw_bonus",
-        "wildcard_captaincy_bonus", "wildcard_form_bonus", "wildcard_ownership_bonus",
+        "wildcard_captaincy_bonus", "wildcard_trend", "wildcard_trend_term", "wildcard_upside",
+        "wildcard_injury_mult", "wildcard_ownership_term", "wildcard_ownership_term", "role", "is_xi",
         "baseline_long_term_xpts", "baseline_recent_gw_xpts", "baseline_blended_xpts", "baseline_gw1_xpts",
         "recent_gw_avg_points", "recent_gw_avg_fixture_count", "recent_gw_avg_minutes",
         "recent_gw_avg_starts", "recent_gw_samples", "recent_gw_last",
@@ -294,7 +307,8 @@ def build_position_panels(
         "status", "chance_of_playing_next_round", "xpts_horizon",
         "event_points",
         "wildcard_score", "wildcard_weighted_xpts", "wildcard_future_dgw_bonus",
-        "wildcard_captaincy_bonus", "wildcard_form_bonus", "wildcard_ownership_bonus",
+        "wildcard_captaincy_bonus", "wildcard_trend", "wildcard_trend_term", "wildcard_upside",
+        "wildcard_injury_mult", "wildcard_ownership_term", "wildcard_ownership_term", "role", "is_xi",
         "baseline_long_term_xpts", "baseline_recent_gw_xpts", "baseline_blended_xpts", "baseline_gw1_xpts",
         "recent_gw_avg_points", "recent_gw_avg_fixture_count", "recent_gw_avg_minutes",
         "recent_gw_avg_starts", "recent_gw_samples", "recent_gw_last",

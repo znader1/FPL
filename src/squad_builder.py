@@ -39,6 +39,62 @@ def estimate_squad_budget_m(squad_df, elements, itb_m=0.0):
     return float(round(max(0.0, squad_value + itb_val), 2))
 
 
+def squad_budget_breakdown(entry_history, squad_df, elements, itb_m=None):
+    """
+    The money a chip draft can actually spend, best source first:
+
+    - ``my_team``: the linked my-team payload carries ``selling_price`` per
+      pick (tenths). Budget = sum(selling_price)/10 + bank.
+    - ``entry_value``: FPL's ``entry_history.value`` is sum(selling prices) +
+      bank, in tenths (verified 2026-10-22 on GW1 entries with a non-zero
+      bank: sum(start prices) + bank == value). Budget = value/10.
+    - ``market``: neither available -> today's market-price estimate
+      (sum of now_cost + bank), which overstates a risen squad.
+
+    ``itb_m`` (millions) is the bank to use when the squad frame carries
+    selling prices or nothing usable; ``entry_history.bank`` wins for the
+    entry_value path because value already includes it.
+    """
+    eh = entry_history if isinstance(entry_history, dict) else {}
+    bank_tenths = eh.get("bank")
+    bank_from_eh = float(bank_tenths) / 10.0 if isinstance(bank_tenths, (int, float)) else None
+    bank_m = float(itb_m) if isinstance(itb_m, (int, float)) else bank_from_eh
+    if bank_m is None:
+        bank_m = 0.0
+
+    if squad_df is not None and not squad_df.empty and "selling_price" in squad_df.columns:
+        sell = pd.to_numeric(squad_df["selling_price"], errors="coerce")
+        if sell.notna().all() and len(sell) > 0:
+            sell_m = float(sell.sum()) / 10.0
+            return {
+                "source": "my_team",
+                "squad_sell_value_m": round(sell_m, 1),
+                "bank_m": round(bank_m, 1),
+                "budget_m": round(sell_m + bank_m, 1),
+            }
+
+    value_tenths = eh.get("value")
+    if isinstance(value_tenths, (int, float)) and value_tenths > 0:
+        value_m = float(value_tenths) / 10.0
+        eh_bank = bank_from_eh if bank_from_eh is not None else 0.0
+        sell_m = value_m - eh_bank
+        # An explicit itb_m override replaces the bank inside `value`.
+        return {
+            "source": "entry_value",
+            "squad_sell_value_m": round(sell_m, 1),
+            "bank_m": round(bank_m, 1),
+            "budget_m": round(sell_m + bank_m, 1),
+        }
+
+    budget = estimate_squad_budget_m(squad_df, elements, itb_m=bank_m)
+    return {
+        "source": "market",
+        "squad_sell_value_m": round(budget - bank_m, 1),
+        "bank_m": round(bank_m, 1),
+        "budget_m": round(budget, 1),
+    }
+
+
 def apply_transfer_moves_to_squad(squad_df, transfer_moves, elements):
     if squad_df is None or squad_df.empty:
         return squad_df, {"requested": 0, "applied": 0, "skipped": 0}

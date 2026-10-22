@@ -23,7 +23,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src import config, data_status, explainer, field_projection, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, rank_model as rank_model_mod, recommender, refresh_status, seed_models, top10k_eo, transfer_planner, transforms
+from src import config, data_status, explainer, field_projection, fixture_difficulty, fpl_client, fpl_refresh_next_gw, ft_tracker, injury_prior, league as league_mod, league_strategy, live_history, manual_squad, optimizer, plan_merge, player_knowledge, projections, rank_model as rank_model_mod, recommender, refresh_status, seed_models, top10k_eo, transfer_planner, transforms
 from src.auth import check_api_key, check_admin_key, require_user, authenticated_subject
 from src import auth, llm_usage
 from src.ratelimit import (
@@ -39,7 +39,7 @@ from src.insights import (
 from src.lineup_builder import build_position_panels, pack_lineup_records
 from src.media import attach_media
 from src.season_history import season_label_from_bootstrap
-from src.squad_builder import apply_transfer_moves_to_squad, build_transfer_step, estimate_squad_budget_m
+from src.squad_builder import apply_transfer_moves_to_squad, build_transfer_step, squad_budget_breakdown
 from src.utils import (
     df_records,
     elapsed_ms,
@@ -82,6 +82,9 @@ if os.environ.get("REPLAY_MODE") == "1":
 if os.environ.get("SQUAD_PICKER_MODE") == "1":
     from api.squad_router import router as squad_picker_router
     app.include_router(squad_picker_router)
+
+from api.wildcard_router import router as wildcard_router  # noqa: E402
+app.include_router(wildcard_router)
 
 # Mount /chat endpoint (orchestrator agent over HTTP) — LLM calls, login required.
 try:
@@ -705,6 +708,7 @@ def load_fpl_context(entry_id, squad_event_id, with_fixtures=True):
         "notes": notes,
         "derived_itb_m": derived_itb_m,
         "derived_free_transfers": derived_free_transfers,
+        "entry_history": eh,
     }
 
 
@@ -969,6 +973,24 @@ def optimize_squad(payload, owner=None):
     }
 
 
+def parse_id_list(payload, key):
+    """Shared with the wildcard router: list of <= 15 ints or a 422."""
+    from api.wildcard_router import parse_id_list as _parse
+    return _parse(payload, key)
+
+
+def resolve_wildcard_preset(payload):
+    """(name, preset) for a wildcard request; (None, None) when the chip is not
+    the wildcard. Unknown names are a 422 — the three presets are the contract."""
+    if normalize_chip_strategy((payload or {}).get("chip_strategy")) != "wildcard":
+        return None, None
+    name = str((payload or {}).get("wildcard_preset") or "balanced").lower()
+    preset = (config.CHIP_WILDCARD_PRESETS or {}).get(name)
+    if preset is None:
+        raise HTTPException(status_code=422, detail=f"Unknown wildcard_preset `{name}`; use one of {list(config.CHIP_WILDCARD_PRESET_ORDER)}.")
+    return name, preset
+
+
 def build_recommendations(payload):
     total_start = time.perf_counter()
     timings = {}
@@ -982,6 +1004,9 @@ def build_recommendations(payload):
     chip_strategy_raw = payload.get("chip_strategy")
     chip_strategy = normalize_chip_strategy(chip_strategy_raw)
     chip_differential = parse_bool(payload.get("differential"), default=False)
+    wildcard_preset_name, wildcard_preset = resolve_wildcard_preset(payload)
+    wildcard_pinned_ids = parse_id_list(payload, "pinned_ids") if wildcard_preset else []
+    wildcard_excluded_ids = parse_id_list(payload, "excluded_ids") if wildcard_preset else []
     prioritize_injured = parse_bool(payload.get("prioritize_injured"), default=True)
     latest_n_matches_raw = payload.get("latest_n_matches", config.PROJ_DEFAULT_LATEST_N_MATCHES)
     apply_transfer_count_raw = payload.get("apply_transfer_count")
@@ -1175,11 +1200,21 @@ def build_recommendations(payload):
         )
         notes.extend(pk_notes)
         if wildcard_is_active:
-            proj_all = projections.add_wildcard_scores(
-                projections_df=proj_all,
+            # Score on a copy: the European haircut must not change the xPts
+            # the client sees; only the wildcard_* columns come back.
+            from api import wildcard as _wildcard
+            _wc_gws = list(range(int(wildcard_play_event_id), int(wildcard_play_event_id) + int(chip_build_horizon_gws)))
+            _scoring = _wildcard.european_haircut(proj_all, _wc_gws, ctx["bootstrap"])
+            _scoring = projections.attach_wildcard_signals(_scoring, gw_start=wildcard_play_event_id)
+            _scoring = projections.add_wildcard_scores(
+                projections_df=_scoring,
                 gw_start=wildcard_play_event_id,
                 horizon_gws=chip_build_horizon_gws,
+                preset=wildcard_preset,
             )
+            _wc_cols = ["id"] + [c for c in _scoring.columns if c.startswith("wildcard_")]
+            proj_all = proj_all.drop(columns=[c for c in proj_all.columns if c.startswith("wildcard_")], errors="ignore")
+            proj_all = proj_all.merge(_scoring[_wc_cols], on="id", how="left")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Projection failed: {e}")
     timings["projections_ms"] = elapsed_ms(ts)
@@ -1205,6 +1240,7 @@ def build_recommendations(payload):
         "play_event_id": int(wildcard_play_event_id) if wildcard_play_event_id is not None else None,
         "propagates_to_future_gws": bool(chip_strategy == "wildcard"),
         "budget_m": None,
+        "budget_breakdown": None,
         "squad_cost_m": None,
         "remaining_budget_m": None,
         "objective_score_total": None,
@@ -1218,11 +1254,13 @@ def build_recommendations(payload):
         chip_objective_col = "wildcard_score" if chip_strategy == "wildcard" else score_col
         chip_objective_horizon = int(chip_build_horizon_gws) if chip_strategy == "wildcard" else 1
         ts = time.perf_counter()
-        budget_m = estimate_squad_budget_m(
-            squad_df=squad_df,
-            elements=elements,
-            itb_m=safe_float(itb_m, default=0.0) or 0.0,
+        budget_breakdown = squad_budget_breakdown(
+            ctx.get("entry_history"),
+            squad_df,
+            elements,
+            itb_m=safe_float(itb_m, default=None) if itb_m_explicit else None,
         )
+        budget_m = float(budget_breakdown["budget_m"])
         premium_floor = float(
             config.CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR
             or config.CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR
@@ -1261,11 +1299,14 @@ def build_recommendations(payload):
                 elements_all=proj_all,
                 score_col=chip_objective_col,
                 budget_m=budget_m,
-                max_per_team=int(config.CHIP_MAX_PER_TEAM or 3),
+                max_per_team=int((wildcard_preset or {}).get("max_per_team") or config.CHIP_MAX_PER_TEAM or 3),
                 min_premium_attackers=min_premium_attackers,
                 premium_floor=premium_floor,
                 premium_positions=premium_positions,
                 differential=chip_differential,
+                preset=wildcard_preset,
+                pinned_ids=wildcard_pinned_ids or None,
+                excluded_ids=wildcard_excluded_ids or None,
             )
         timings["chip_draft_ms"] = elapsed_ms(ts)
 
@@ -1279,6 +1320,10 @@ def build_recommendations(payload):
                 "play_event_id": int(wildcard_play_event_id) if wildcard_play_event_id is not None else None,
                 "propagates_to_future_gws": bool(chip_strategy == "wildcard"),
                 "budget_m": chip_build.get("budget_m"),
+                "budget_breakdown": budget_breakdown,
+                "preset": wildcard_preset_name,
+                "preset_notes": list(chip_build.get("notes") or []),
+                "pins_conflict": list(chip_build.get("pins_conflict") or []),
                 "squad_cost_m": chip_build.get("squad_cost_m"),
                 "remaining_budget_m": chip_build.get("remaining_budget_m"),
                 "objective_score_total": chip_build.get("objective_score_total"),
@@ -1301,6 +1346,7 @@ def build_recommendations(payload):
                 "play_event_id": int(wildcard_play_event_id) if wildcard_play_event_id is not None else None,
                 "propagates_to_future_gws": bool(chip_strategy == "wildcard"),
                 "budget_m": budget_m,
+                "budget_breakdown": budget_breakdown,
                 "squad_cost_m": None,
                 "remaining_budget_m": None,
                 "objective_score_total": None,
@@ -1791,6 +1837,17 @@ def admin_refresh(
         except Exception as exc:
             match_history_error = str(exc)
             logger.warning("Match-history refresh failed: %s", exc)
+        # Status history for the wildcard injury prior (src/injury_prior.py):
+        # one upserted row per player per GW, so the prior grows with every
+        # refresh. Fail-soft — a bad write never fails the refresh.
+        try:
+            status_gw = _event_id(bootstrap, "is_next") or _event_id(bootstrap, "is_current")
+            if status_gw:
+                injury_prior.append_status_snapshot(
+                    bootstrap, int(status_gw), config.CHIP_WILDCARD_STATUS_HISTORY_PATH
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Status-history snapshot failed: %s", exc)
 
     # New history invalidates every projection, and rebuilding one costs seconds
     # on a shared-cpu machine. Pay that here, on a scheduled job, rather than
@@ -2183,7 +2240,7 @@ def recommendations_get(
     horizon_gws=3, chip_horizon_gws=None, chip_play_event_id=None,
     chip_strategy="none", latest_n_matches=3, include_transfers=False,
     apply_transfer_count=None, itb_m=None, free_transfers=None, hit_cap=0, panel_limit=5,
-    prioritize_injured=None,
+    prioritize_injured=None, wildcard_preset=None, pinned_ids=None, excluded_ids=None,
     api_key=None, x_api_key=Header(None), authorization=Header(None),
 ):
     err = check_api_key(x_api_key=x_api_key, authorization=authorization, api_key=api_key)
@@ -2197,6 +2254,9 @@ def recommendations_get(
         "apply_transfer_count": apply_transfer_count, "itb_m": itb_m,
         "free_transfers": free_transfers, "hit_cap": hit_cap, "panel_limit": panel_limit,
         "prioritize_injured": prioritize_injured,
+        "wildcard_preset": wildcard_preset,
+        "pinned_ids": [v for v in str(pinned_ids or "").split(",") if v.strip()],
+        "excluded_ids": [v for v in str(excluded_ids or "").split(",") if v.strip()],
     }
     out = build_recommendations(payload)
     return JSONResponse(content=jsonable_encoder(out))
