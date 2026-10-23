@@ -1,0 +1,150 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Fix browser autofill overriding input text/background colors on dark forms */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-text-fill-color: white !important;
+  -webkit-box-shadow: 0 0 0 1000px rgb(20, 20, 30) inset !important;
+  caret-color: white !important;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+/* FPL Ace Advisor – Premier League inspired design system
+   All colors are HSL values.
+*/
+
+@layer base {
+  :root {
+    --background: 248 20% 96%;
+    --foreground: 248 25% 15%;
+
+    --card: 248 15% 99%;
+    --card-foreground: 248 25% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 248 25% 15%;
+
+    --primary: 328 80% 48%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 248 15% 92%;
+    --secondary-foreground: 248 25% 15%;
+
+    --muted: 248 12% 92%;
+    --muted-foreground: 248 8% 46%;
+
+    --accent: 172 70% 38%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* Unsaved-changes amber (v2 flow handoff): the status pill and swap-rule hints. */
+    --warning: 38 92% 50%;
+
+    --border: 248 12% 89%;
+    --input: 248 12% 87%;
+    --ring: 328 80% 48%;
+
+    --radius: 0.75rem;
+
+    --pitch: 152 48% 40%;
+    --pitch-dark: 152 52% 32%;
+    --pitch-lines: 0 0% 100%;
+    --player-card: 0 0% 100%;
+
+    --shadow-soft: 0 2px 8px rgba(0, 0, 0, 0.06);
+    --shadow-medium: 0 4px 20px rgba(0, 0, 0, 0.10);
+
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* Fixture difficulty 1 (easiest) → 5 (hardest); the handoff's rose for
+       negatives is --fdr-4. Same values in both themes — they sit on tinted
+       backgrounds, not on the page. */
+    --fdr-1: 152 60% 45%;
+    --fdr-2: 152 50% 50%;
+    --fdr-3: 38 92% 55%;
+    --fdr-4: 348 80% 60%;
+    --fdr-5: 348 85% 52%;
+
+    --sidebar-background: 248 18% 94%;
+    --sidebar-foreground: 248 25% 15%;
+    --sidebar-primary: 328 80% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 248 15% 90%;
+    --sidebar-accent-foreground: 248 25% 15%;
+    --sidebar-border: 248 12% 86%;
+    --sidebar-ring: 328 80% 48%;
+  }
+
+  .dark {
+    --background: 248 20% 8%;
+    --foreground: 248 10% 92%;
+
+    --card: 248 18% 11%;
+    --card-foreground: 248 10% 92%;
+
+    --popover: 248 18% 11%;
+    --popover-foreground: 248 10% 92%;
+
+    --primary: 328 75% 55%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 248 15% 15%;
+    --secondary-foreground: 248 10% 92%;
+
+    --muted: 248 15% 15%;
+    --muted-foreground: 248 8% 58%;
+
+    --accent: 172 65% 42%;
+    --accent-foreground: 0 0% 100%;
+
+    /* Lightness must stay high on the near-black dark background: at 30% this
+       renders error text at ~1.8:1 contrast, which is effectively invisible. */
+    --destructive: 0 72% 62%;
+    --destructive-foreground: 0 0% 100%;
+    --warning: 38 92% 55%;
+
+    --border: 248 15% 18%;
+    --input: 248 15% 18%;
+    --ring: 328 75% 55%;
+
+    --pitch: 152 40% 25%;
+    --pitch-dark: 152 44% 18%;
+    --pitch-lines: 152 10% 45%;
+    --player-card: 248 15% 13%;
+
+    /* Fixture difficulty 1 (easiest) → 5 (hardest); the handoff's rose for
+       negatives is --fdr-4. Same values in both themes — they sit on tinted
+       backgrounds, not on the page. */
+    --fdr-1: 152 60% 45%;
+    --fdr-2: 152 50% 50%;
+    --fdr-3: 38 92% 55%;
+    --fdr-4: 348 80% 60%;
+    --fdr-5: 348 85% 52%;
+
+    --sidebar-background: 248 20% 10%;
+    --sidebar-foreground: 248 10% 85%;
+    --sidebar-primary: 328 75% 55%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 248 18% 14%;
+    --sidebar-accent-foreground: 248 10% 85%;
+    --sidebar-border: 248 15% 16%;
+    --sidebar-ring: 328 75% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+}

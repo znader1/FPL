@@ -2,6 +2,19 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Repo map (monorepo since R.1, 2026-10)
+
+- Root = the FastAPI backend (`api/`, `src/`, `scripts/`, `tests/`) → Fly.io (`fpl-assistant-api`), deployed by `fly-deploy.yml` on `master`.
+- `frontend/` = the React app → Vercel project `fpl-decision` (Root Directory `frontend`), with its own `frontend/CLAUDE.md`.
+- `supabase/` = one Supabase project for both (migrations applied by hand, see `supabase/README.md`).
+- CI is path-filtered: a `frontend/`-only commit runs `frontend-ci.yml` and never redeploys Fly; a backend commit skips the Vercel build.
+
+## Working rules
+
+- One short branch per fix off `master`, one PR, merged the same day. No PRs stacked on unmerged branches.
+- Head branches auto-delete on merge. Worktrees only when two sessions run at once; otherwise a branch in the main clone.
+- A fix that spans backend and frontend is one PR.
+
 ## Commands
 
 ```bash
@@ -156,5 +169,3 @@ Step 3 of the handoff's backend numbers, for the rail's "Projected GW" card. `/r
 **Fly.io is the production backend.** `fly.toml` + `Dockerfile` (slim Python) define the Fly.io app (`fpl-assistant-api`, region `lhr`); `master` auto-deploys via `.github/workflows/fly-deploy.yml`. The machine auto-suspends when idle (free tier) — the refresh workflow wakes it with retry.
 
 The tracked `data/models/*.json` seeds (ratings, knowledge discount, European calendar) ship in the image at `/app/seed/models` (staged by the Dockerfile, since `/app/data` is a volume mount that shadows the image); `src/seed_models.py`'s `ensure_seed_models()` runs at `api/main.py` import and copies any seed missing from the volume into `data/models` — it never overwrites a file already there, so runtime writes (e.g. `knowledge_discount.json`) win.
-
-Legacy/alternative: an Azure Container App path also exists in the repo (`.github/workflows/deploy-azure-containerapp.yml`, `docs/production_azure.md`, app `fpl-refresh-app`). It is **not** the intended backend — treat it as deprecated.

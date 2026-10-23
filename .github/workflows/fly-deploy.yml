@@ -9,6 +9,8 @@ on:
     branches:
       - main
       - master
+    # A frontend-, spec- or docs-only commit must not redeploy the API.
+    paths-ignore: ["frontend/**", "specs/**", "supabase/**", "**/*.md"]
 jobs:
   test:
     name: Test suite

@@ -1,0 +1,34 @@
+<!doctype html>
+<!-- `dark` belongs here, not on a per-page wrapper: Radix portals
+     (dialogs, selects, drawers, hover cards) mount to document.body and
+     escaped a wrapper-scoped class, rendering light over a dark app.
+     See docs/prelaunch_audit_2026-09-12.md (U2) in the backend repo. -->
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FPLedge — FPL Assistant</title>
+    <meta name="description" content="FPL squad recommendations, mini-league strategy, and AI explanations.">
+    <meta name="author" content="FPLedge" />
+
+    
+    
+    <meta property="og:type" content="website" />
+
+    <!-- og:image and twitter:image previously pointed at a Lovable preview
+         screenshot on their R2 bucket, and twitter:site was @Lovable, so every
+         shared link previewed with the wrong brand. Dropped until there's a
+         real FPLedge image to point at; add one here and restore
+         twitter:card="summary_large_image" when you have it. -->
+    <meta name="twitter:card" content="summary" />
+    <meta property="og:title" content="FPLedge — FPL Assistant">
+  <meta name="twitter:title" content="FPLedge — FPL Assistant">
+  <meta property="og:description" content="FPL squad recommendations, mini-league strategy, and AI explanations.">
+  <meta name="twitter:description" content="FPL squad recommendations, mini-league strategy, and AI explanations.">
+</head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
