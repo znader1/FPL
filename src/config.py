@@ -508,6 +508,7 @@ CHIP_WILDCARD_SHORT_HORIZON_DGW_MULTIPLIER = 1.4  # [untested]
 CHIP_WILDCARD_PREMIUM_ATTACKER_FLOOR = 8.5  # [untested]
 CHIP_WILDCARD_PREMIUM_ATTACKER_BASE_BONUS = 0.8  # [untested]
 CHIP_WILDCARD_CAPTAINCY_WEIGHT = 0.32  # [untested]
+CHIP_WILDCARD_CAPTAIN_PLAUSIBLE_RATIO = 0.85  # [untested] a player is a plausible captain in a GW when his xPts reach this share of the best MID/FWD xPts in the market that GW; the captaincy bonus is scaled by the share of horizon GWs where he is (Palmer 4.07 vs Haaland 6.64 at GW9 earns none)
 CHIP_WILDCARD_MIN_PREMIUM_CAPTAINS = 1  # [untested]
 CHIP_WILDCARD_PREMIUM_CAPTAIN_PRICE_FLOOR = 10.5  # [untested]
 CHIP_WILDCARD_PREMIUM_CAPTAIN_POSITIONS = ["MID", "FWD"]  # [operational]

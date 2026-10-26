@@ -1059,7 +1059,19 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws, preset=None):
         )
     )
     is_premium_attacker = ((price_m >= premium_floor).astype(float) * is_attacker).astype(float)
-    captaincy_bonus = is_premium_attacker * (premium_base_bonus + (captain_signal * captaincy_weight)) * captaincy_mult
+    # Only one player captains each GW: the bonus goes to plausible captains only,
+    # scaled by the share of horizon GWs in which a player is one.
+    ratio = float(config.CHIP_WILDCARD_CAPTAIN_PLAUSIBLE_RATIO)
+    plausible_gws = pd.Series(0.0, index=out.index, dtype="float64")
+    for idx in range(horizon_gws):
+        gw_xpts = _numeric_series(out, f"xpts_gw{int(gw_start) + idx}", default=0.0)
+        best = float(gw_xpts[is_attacker > 0].max()) if bool((is_attacker > 0).any()) else 0.0
+        if best > 0.0:
+            plausible_gws = plausible_gws + ((gw_xpts >= ratio * best) & (is_attacker > 0)).astype(float)
+    captain_share = plausible_gws / float(horizon_gws)
+    captaincy_bonus = (
+        is_premium_attacker * (premium_base_bonus + (captain_signal * captaincy_weight)) * captaincy_mult * captain_share
+    )
 
     trend = _numeric_series(out, "wildcard_trend", default=0.0)
     trend_term = trend * float(config.CHIP_WILDCARD_TREND_WEIGHT) * trend_mult
@@ -1083,6 +1095,7 @@ def add_wildcard_scores(projections_df, gw_start, horizon_gws, preset=None):
     out["wildcard_weighted_xpts"] = weighted_xpts.round(3)
     out["wildcard_future_dgw_bonus"] = future_dgw_bonus.round(3)
     out["wildcard_captaincy_bonus"] = captaincy_bonus.round(3)
+    out["wildcard_captain_share"] = captain_share.round(3)
     out["wildcard_trend"] = trend.round(3)
     out["wildcard_trend_term"] = trend_term.round(3)
     out["wildcard_upside"] = upside.round(3)
