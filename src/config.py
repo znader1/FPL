@@ -321,7 +321,8 @@ CHIP_PLAN_HORIZON_GWS = 8       # [tuned] model zone: full EV math over this man
 # horizon). On = the headline-plan settings the user is actually shown
 # (TRANSFER_PLAN_ALLOW_HITS / MAX_MOVES_PER_GW / scaled_min_gain). Behaviour
 # change → stays off until 4.0/4.1 can measure it.
-CHIP_PLAN_BASELINE_HEADLINE_SETTINGS = False  # [flag]
+CHIP_PLAN_BASELINE_HEADLINE_SETTINGS = True  # [flag] on since 2026-10-26: the wildcard is judged against the plan the user is shown (calibration spec overrides the wait-for-parity note above)
+CHIP_PLAN_WC_PRESET = "balanced"  # [operational] the preset draft the chip planner scores for the wildcard verdict
 CHIP_PLAN_MIN_EV = {            # below this, "hold" beats playing the chip
     # Live spot-check (2026-09-02, entry 107342, GW3-10, no DGWs announced):
     # captain xPts clustered 9.9-13.5 and bench xPts clustered 5.2-6.4 every
@@ -354,7 +355,15 @@ CHIP_PLAN_MIN_EV = {            # below this, "hold" beats playing the chip
     # so WC reads "hold" rather than nudging "play now" off a contaminated
     # GW3 number, while staying reachable for a genuinely severe gap once
     # the projections bug is fixed and/or a real one shows up later.
-    "wildcard": 120.0,
+    # 2026-10-26 recalibration (calibration spec part 4): the wildcard is now netted
+    # against the squad the headline transfer plan would hold each GW, over the same
+    # 5-GW window, scored on the Balanced preset draft — the old 120 stopgap (set when
+    # the baseline was a hits-allowed 8-GW walk) became unreachable. Live GW9 runs
+    # (scripts in the session scratchpad, not committed): ordinary squad 5645321 peaks
+    # at +16.6 (GW9) and ~5 later; the same squad with its 5 best players ruled out
+    # +77.8; entry 107342 +44.0. 40 = 8 pts a GW over the window: above ordinary weeks,
+    # well below a broken squad. The expiry ramp still lowers it towards GW19.
+    "wildcard": 40.0,  # [tuned] was 120.0
 }  # [untested]
 CHIP_PLAN_EXPIRY_RAMP_GWS = 5   # [untested] threshold decays linearly to 0 over the last N GWs
 CHIP_PLAN_NUDGE_MIN_EV = 4.0    # [untested] floor for the next-GW nudge surface
