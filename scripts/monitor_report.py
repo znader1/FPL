@@ -81,18 +81,14 @@ def main():
         print(monitoring.summarize(frames)["table"].round(3).to_string(index=False))
         print()
 
-    if "shadow_xpts" in rows.columns and pd.to_numeric(rows["shadow_xpts"], errors="coerce").notna().any():
-        shadowed = rows[pd.to_numeric(rows["shadow_xpts"], errors="coerce").notna()]
-        live = monitoring.frames_from_snapshots(shadowed, "runner_xpts", history)
-        prev = monitoring.frames_from_snapshots(shadowed, "shadow_xpts", history)
-        s_live, s_prev = monitoring.summarize(live), monitoring.summarize(prev)
-        print(f"=== current vs previous model on the same runner data · {len(live)} finished GWs")
-        print(f"current MAE {s_live['mae']:.3f} band bias {s_live['band_bias']:.3f} | "
-              f"previous MAE {s_prev['mae']:.3f} band bias {s_prev['band_bias']:.3f}")
-        print(f"verdict: {monitoring.rollback_verdict(live, prev, len(live))}")
-    else:
+    verdicts = monitoring.shadow_verdicts(rows, history) if "shadow_xpts" in rows.columns else {}
+    if not verdicts:
         print("No shadow rows yet — verdict: wait")
-
+    for version, v in verdicts.items():
+        print(f"=== current vs previous model {version} on the same runner data · {v['gws']} finished GWs")
+        print(f"current MAE {v['live']['mae']:.3f} band bias {v['live']['band_bias']:.3f} | "
+              f"previous MAE {v['shadow']['mae']:.3f} band bias {v['shadow']['band_bias']:.3f}")
+        print(f"verdict: {v['verdict']}")
 
 if __name__ == "__main__":
     main()

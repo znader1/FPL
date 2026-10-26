@@ -88,6 +88,11 @@ def main():
     if not overrides:
         logger.info("no shadow model configured — nothing to do")
         return 0
+    unknown = [k for k in overrides if not (isinstance(k, str) and k.isupper() and k in vars(config))]
+    if unknown:
+        # A typo must show red in the Actions log (continue-on-error keeps the job green).
+        logger.error("PROJ_SHADOW_OVERRIDES names unknown config keys: %s", unknown)
+        return 1
     try:
         ctx = refresh_local_data()
         if not ctx["deadline_open"]:

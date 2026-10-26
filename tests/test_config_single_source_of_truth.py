@@ -86,3 +86,12 @@ def test_every_config_reference_exists_so_deleting_a_param_fails_loudly():
 ])
 def test_parameters_whose_old_fallback_disagreed_keep_the_config_value(name, expected):
     assert getattr(config, name) == expected
+
+
+def test_shadow_overrides_name_real_config_keys_and_a_distinct_version():
+    values = vars(config)
+    for key in config.PROJ_SHADOW_OVERRIDES:
+        assert key.isupper() and key in values, key
+    if config.PROJ_SHADOW_OVERRIDES:
+        assert config.PROJ_SHADOW_MODEL_VERSION
+        assert config.PROJ_SHADOW_MODEL_VERSION != config.PROJ_MODEL_VERSION

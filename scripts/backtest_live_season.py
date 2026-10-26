@@ -48,6 +48,16 @@ def parse_grid(spec):
     return [dict(combo) for combo in itertools.product(*axes)]
 
 
+def validate_grid(candidates):
+    """Reject unknown config keys before any data is loaded or replayed."""
+    values = vars(config)
+    for cand in candidates:
+        for key in cand:
+            if not (key.isupper() and key in values):
+                raise KeyError(f"unknown config key: {key}")
+    return candidates
+
+
 def parse_gws(spec):
     lo, _, hi = str(spec).partition("-")
     return list(range(int(lo), int(hi or lo) + 1))
@@ -59,26 +69,31 @@ def score_window_starts(gws, horizon):
 
 
 def project_gw(target_gw, horizon, overrides, inputs):
-    elements, fixtures, short, history_capped, _ = season_replay.build_live_engine_inputs(
+    elements, fixtures, short, history_capped, dropped_ids = season_replay.build_live_engine_inputs(
         target_gw, horizon, inputs["bootstrap"], inputs["fixtures"], inputs["history_df"],
         inputs["snapshots_df"], match_df=inputs["match_df"],
     )
     match_capped = season_replay.cap_match_history(inputs["match_df"], target_gw)
+    # The manual knowledge file is today's judgement (signings, injuries learned
+    # later), so a replay of an earlier GW runs without it: as-of, not hindsight.
     orig = (projections.load_latest_player_gw_history, minutes_model.load_minutes_history,
-            fixture_difficulty.load_match_history)
+            fixture_difficulty.load_match_history, fixture_difficulty.load_knowledge_discount)
     projections.load_latest_player_gw_history = lambda *a, **k: history_capped
     minutes_model.load_minutes_history = lambda *a, **k: history_capped
     fixture_difficulty.load_match_history = lambda *a, **k: match_capped
+    fixture_difficulty.load_knowledge_discount = lambda *a, **k: {}
     try:
         with config_overrides(overrides):
-            return projections.project_elements_next_gws(
+            proj = projections.project_elements_next_gws(
                 elements=elements, fixtures=fixtures, teams_short_map=short,
                 gw_start=int(target_gw), horizon_gws=int(horizon),
                 finished_gw_max=int(target_gw) - 1,
             )
     finally:
         (projections.load_latest_player_gw_history, minutes_model.load_minutes_history,
-         fixture_difficulty.load_match_history) = orig
+         fixture_difficulty.load_match_history, fixture_difficulty.load_knowledge_discount) = orig
+    proj.attrs["dropped_ids"] = list(dropped_ids)
+    return proj
 
 
 def replay_frames(gws, horizon, overrides, inputs):
@@ -101,6 +116,7 @@ def replay_frames(gws, horizon, overrides, inputs):
         ).reset_index()
         frame = pred.merge(act, on="player_id", how="inner")
         frame["gw"] = start
+        frame["dropped_n"] = len(proj.attrs.get("dropped_ids", []))
         frames.append(frame)
     return frames
 
@@ -163,12 +179,13 @@ def main():
                          "model_xpts (needs a model_xpts column in the snapshots CSV)")
     args = ap.parse_args()
 
+    grid = validate_grid(parse_grid(args.grid))
     inputs = _load_inputs(args.snapshots_csv)
     if args.parity_gw is not None:
         s = parity_stats(project_gw(args.parity_gw, 1, {}, inputs), inputs["snapshots_df"], args.parity_gw)
         print(f"Parity GW{args.parity_gw}: n {s['n']}  mean |replay - stored| {s['mae']:.3f}  corr {s['corr']:.3f}\n")
     tune, hold = parse_gws(args.tune_gws), parse_gws(args.holdout_gws)
-    candidates = [{}] + [c for c in parse_grid(args.grid) if c]
+    candidates = [{}] + [c for c in grid if c]
     pd.set_option("display.width", 220)
 
     results = []
@@ -196,7 +213,8 @@ def main():
               f"hold-out MAE {h_mae:.3f} band bias {h_bias:.3f}")
         for f in r["tune_frames"] + hold_frames:
             _, g_mae, g_bias = _summary([f])
-            print(f"  GW{int(f['gw'].iloc[0])}: MAE {g_mae:.3f} band bias {g_bias:.3f}")
+            print(f"  GW{int(f['gw'].iloc[0])}: MAE {g_mae:.3f} band bias {g_bias:.3f} "
+                  f"(players without a snapshot row, dropped: {int(f['dropped_n'].iloc[0])})")
         print(table.round(3).to_string(index=False))
         print()
 

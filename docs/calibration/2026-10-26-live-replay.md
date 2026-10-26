@@ -38,6 +38,20 @@ Blend 0.5 / 0.6 / 0.7: MAE 1.916 / 1.915 / 1.922 over GW6–38. A tie, as in eve
 - **The xG weight (0.5–0.7) and fixture strength don't matter** within the tested ranges. `PROJ_FDR_STRENGTH` only moves the output half of the blend, about 30% of a projection at 0.7, so a flat result means this knob is weak, not that fixtures don't matter.
 - **A correction to the earlier analysis:** "cheap regular starters are under-projected" was partly an artefact of looking only at players who played 60+ minutes. Across everyone with a fixture, cheap players' bias is close to zero; the model hedges minutes risk, so it is low when they play and high when they are benched.
 
+## As-of rerun after review (knowledge file off, 2026-10-26)
+
+The first run used today's `knowledge_discount.json` for every replayed GW, which encodes facts learned after GW3–4. The replay now runs without it. The price-pull comparison, rerun as-of:
+
+| Price pull (`PROJ_SHRINKAGE_GAMES`) | 1-GW tune MAE | 1-GW tune band bias | 5-GW MAE | 5-GW band bias | MID £8m+ bias, 5-GW |
+|---|---|---|---|---|---|
+| 5 (before) | 1.223 | 0.299 | 4.94 | 1.53 | — |
+| **2.5 (shipped)** | **1.216** | **0.294** | **4.81** | **1.37** | +7.1 |
+| 0 | 1.201 | 0.288 | 4.52 | 0.89 | +8.8 |
+
+Same conclusion as above. Players without a snapshot row for a GW are dropped from that GW, never defaulted: 15 at GW3, 10 at GW4, 1–2 from GW5 on (new and late-registered players).
+
+Parity note: GW8's stored projections were made with the price pull at 5, so `--parity-gw 8` now needs `--grid "PROJ_SHRINKAGE_GAMES=5"`-style overrides on the parity call, or a GW produced by the shipped version, to read near zero again.
+
 ## Options
 
 1. **Ship shrinkage 0** (price pull off): best accuracy, slightly worse on premium midfielders.

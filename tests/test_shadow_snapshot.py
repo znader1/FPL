@@ -71,3 +71,9 @@ def test_closed_deadline_writes_nothing(monkeypatch):
     monkeypatch.setattr(ss, "refresh_local_data", lambda: {"season": "2026-27", "gw": 9, "deadline_open": False})
     assert ss.main() == 0
     assert sent == []
+
+
+def test_bad_override_key_fails_the_step_loudly(monkeypatch):
+    monkeypatch.setattr(config, "PROJ_SHADOW_OVERRIDES", {"NOT_A_KEY": 1})
+    monkeypatch.setattr(ss, "refresh_local_data", _boom)
+    assert ss.main() == 1

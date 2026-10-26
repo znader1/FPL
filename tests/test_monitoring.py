@@ -23,13 +23,11 @@ def test_rollback_when_shadow_mae_clearly_lower():
     assert rollback_verdict(live, shadow, 3) == "rollback"
 
 
-def test_keep_when_shadow_only_slightly_better_and_bias_not_better():
+def test_uniform_errors_roll_back_only_beyond_the_margins():
     live = _frames({9: 1.000, 10: 1.000, 11: 1.000})
-    shadow = _frames({9: 0.996, 10: 0.996, 11: 0.996})   # 0.4% lower, but |bias| 0.996 < 1.0
-    # Same-sign bias: shadow's band bias (0.996) is smaller, so the bias rule fires.
-    assert rollback_verdict(live, shadow, 3) == "rollback"
-    worse_shadow = _frames({9: 1.004, 10: 1.004, 11: 1.004})
-    assert rollback_verdict(live, worse_shadow, 3) == "keep"
+    assert rollback_verdict(live, _frames({9: 0.996, 10: 0.996, 11: 0.996}), 3) == "keep"      # 0.4%: noise
+    assert rollback_verdict(live, _frames({9: 1.004, 10: 1.004, 11: 1.004}), 3) == "keep"
+    assert rollback_verdict(live, _frames({9: 0.985, 10: 0.985, 11: 0.985}), 3) == "rollback"  # 1.5%
 
 
 def test_frames_from_snapshots_uses_the_named_column_and_skips_unfinished_gws():
@@ -57,3 +55,40 @@ def test_history_defines_the_fixture_population():
     hist = pd.DataFrame([{"gw": 9, "player_id": 2, "gw_fixture_count": 1}])
     f = frames_from_snapshots(rows, "model_xpts", hist)[0]
     assert bool(f["had_fixture"].iloc[0]) is True   # benched, but his team played: counted
+
+
+def _mixed(err_pos, err_neg, gw):
+    """Half the rows over-predict by err_pos, half under-predict by err_neg:
+    MAE and |bias| move independently."""
+    rows = [{"player_id": i, "position": "DEF", "price_m": 4.5, "xpts": 2.0 + err_pos, "actual": 2.0,
+             "minutes": 90, "had_fixture": True, "gw": gw} for i in range(25)]
+    rows += [{"player_id": 100 + i, "position": "DEF", "price_m": 4.5, "xpts": 2.0 - err_neg, "actual": 2.0,
+              "minutes": 90, "had_fixture": True, "gw": gw} for i in range(25)]
+    return pd.DataFrame(rows)
+
+
+def test_keep_when_shadow_mae_only_slightly_lower_and_bias_not_better():
+    live = [_mixed(1.0, 0.8, g) for g in (9, 10, 11)]      # MAE 0.9, bias +0.1
+    shadow = [_mixed(1.3, 0.492, g) for g in (9, 10, 11)]  # MAE 0.896 (0.4% lower), bias +0.404
+    assert rollback_verdict(live, shadow, 3) == "keep"
+
+
+def test_bias_noise_inside_the_margin_does_not_roll_back():
+    live = [_mixed(1.0, 0.8, g) for g in (9, 10, 11)]      # bias +0.100
+    shadow = [_mixed(1.0, 0.8018, g) for g in (9, 10, 11)]  # bias +0.0991: 0.9% better, MAE ~equal
+    assert rollback_verdict(live, shadow, 3) == "keep"
+
+
+def test_shadow_verdicts_group_by_previous_version():
+    from src.monitoring import shadow_verdicts
+    rows = []
+    for ver, err in (("v1", 0.5), ("v2", 2.0)):
+        for gw in (9, 10, 11):
+            for i in range(25):
+                rows.append({"gw": gw, "player_id": i, "pos": "DEF", "price_m": 4.5, "model_xpts": 2.0,
+                             "runner_xpts": 2.0 + 1.0, "shadow_xpts": 2.0 + err,
+                             "shadow_model_version": ver, "actual_points": 2, "actual_minutes": 90})
+    out = shadow_verdicts(pd.DataFrame(rows))
+    assert set(out) == {"v1", "v2"}
+    assert out["v1"]["verdict"] == "rollback"   # previous model v1 was clearly better
+    assert out["v2"]["verdict"] == "keep"

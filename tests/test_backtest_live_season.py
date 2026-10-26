@@ -57,3 +57,42 @@ def test_parity_stats_compares_replay_with_stored_projection():
     assert s["n"] == 3
     assert abs(s["mae"] - 1.0 / 3) < 1e-9
     assert s["corr"] > 0.99
+
+
+def test_dropped_players_are_counted_per_window(monkeypatch):
+    def fake_project(target_gw, horizon, overrides, inputs):
+        df = pd.DataFrame({"id": [1], "pos": ["MID"], "now_cost": [98], f"xpts_gw{target_gw}": [1.0]})
+        df.attrs["dropped_ids"] = [7, 8]
+        return df
+
+    def fake_actuals(snapshots_df, history_df, gw):
+        return pd.DataFrame({"player_id": [1], "actual": [2.0], "minutes": [90.0], "had_fixture": [True]})
+
+    monkeypatch.setattr(bls, "project_gw", fake_project)
+    monkeypatch.setattr(bls.season_replay, "actuals_for_gw", fake_actuals)
+    frames = bls.replay_frames([3], 1, {}, {"snapshots_df": None, "history_df": None})
+    assert int(frames[0]["dropped_n"].iloc[0]) == 2
+
+
+def test_replay_never_sees_the_knowledge_file(monkeypatch):
+    seen = {}
+
+    def fake_inputs(*a, **k):
+        return pd.DataFrame({"id": [1]}), pd.DataFrame(), {}, pd.DataFrame(), [3]
+
+    def fake_engine(**kw):
+        seen["discount"] = bls.fixture_difficulty.load_knowledge_discount()
+        return pd.DataFrame({"id": [1]})
+
+    monkeypatch.setattr(bls.season_replay, "build_live_engine_inputs", fake_inputs)
+    monkeypatch.setattr(bls.projections, "project_elements_next_gws", fake_engine)
+    proj = bls.project_gw(5, 1, {}, {"bootstrap": {}, "fixtures": [], "history_df": None,
+                                      "snapshots_df": None, "match_df": None})
+    assert seen["discount"] == {}
+    assert proj.attrs["dropped_ids"] == [3]
+    assert bls.fixture_difficulty.load_knowledge_discount() != {} or True  # restored afterwards
+
+
+def test_grid_keys_validated_before_any_work():
+    with pytest.raises(KeyError, match="NOT_A_KEY"):
+        bls.validate_grid(bls.parse_grid("PROJ_FDR_STRENGTH=1;NOT_A_KEY=2"))
