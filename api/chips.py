@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query
 from api.chat import _build_context_for_entry
 from src import config, fpl_client, transfer_planner
 from src.chip_advisor import build_chip_plan
+from src.squad_builder import squad_budget_breakdown
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -182,6 +183,47 @@ def build_chip_signals(bootstrap: dict, current_gw: int, model_horizon: int,
     }
 
 
+def _wildcard_preset_squads(ctx):
+    """{candidate GW: the Balanced preset's 15} for every candidate whose whole
+    wildcard window fits inside the projection frame, so the planner's verdict
+    scores the squad the drafts page shows. Never fails the plan: any error →
+    None and the planner falls back to its pure-xPts squad."""
+    from api import wildcard as wc_module
+    from api.main import get_bootstrap_cached
+
+    try:
+        proj = ctx["proj"]
+        horizon = int(config.CHIP_WILDCARD_DEFAULT_HORIZON_GWS)
+        projected = sorted(int(c[len("xpts_gw"):]) for c in proj.columns
+                           if c.startswith("xpts_gw") and c[len("xpts_gw"):].isdigit())
+        if not projected:
+            return None
+        last = projected[-1]
+        # The drafts page's budget (FPL entry value = selling prices + bank), so the
+        # banner's number describes the squad "See the squad" opens.
+        entry_history = ctx.get("entry_history") or {}
+        if entry_history.get("value"):
+            budget = float(squad_budget_breakdown(entry_history, None, None)["budget_m"])
+        else:
+            squad_value = float(pd.to_numeric(ctx["squad"].get("price_m"), errors="coerce").fillna(0).sum())
+            budget = squad_value + float(ctx.get("bank_m") or 0.0)
+        bootstrap = get_bootstrap_cached()
+        out = {}
+        for gw in sorted(int(g) for g in ctx["gw_projections"]):
+            # Windows past the frame are truncated to the GWs projected, the same
+            # window score_wildcard scores, so every candidate uses one optimizer.
+            h = min(horizon, last - gw + 1)
+            if h < 1:
+                continue
+            ids = wc_module.preset_squad_ids(proj, bootstrap, gw, h, budget, config.CHIP_PLAN_WC_PRESET)
+            if ids:
+                out[gw] = ids
+        return out
+    except Exception as e:  # noqa: BLE001 — the preset squads must never fail the plan
+        logger.warning("wildcard preset squads unavailable: %s", e)
+        return None
+
+
 def _build_plan_response(entry_id: int, current_gw: int, model_horizon: int):
     ctx = _build_context_for_entry(entry_id, current_gw, horizon=model_horizon)
 
@@ -228,6 +270,8 @@ def _build_plan_response(entry_id: int, current_gw: int, model_horizon: int):
         signals = {}
         logger.warning("chip strategy signals unavailable: %s", e)
 
+    wc_squads = _wildcard_preset_squads(ctx)
+
     plan = build_chip_plan(
         squad=ctx["squad"],
         current_gw=current_gw,
@@ -237,6 +281,7 @@ def _build_plan_response(entry_id: int, current_gw: int, model_horizon: int):
         fixtures=ctx.get("fixtures"),
         transfer_plan=transfer_plan,
         horizon_gws=model_horizon,
+        wc_squads=wc_squads,
         **{k: signals.get(k) for k in SIGNAL_KEYS},
     )
     return {"entry_id": entry_id, **plan}

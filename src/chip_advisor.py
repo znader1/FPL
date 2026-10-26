@@ -95,6 +95,8 @@ class ChipRecommendation:
     pmf_share: float = 0.0
     # False for a bench-4 sum: RETURN_AT/HAUL_AT/BLANK_AT are per-player.
     pmf_thresholds: bool = True
+    # Wildcard only: the GWs the uplift was scored over ([first, last]).
+    window_gws: list[int] | None = None
 
     def to_dict(self) -> dict:
         out = {
@@ -757,13 +759,33 @@ def score_free_hit(
     return recs
 
 
+def plan_squads_by_gw(start_ids, plan):
+    """{gw: squad ids held that GW} from a transfer plan's entries, applied in GW order."""
+    squad = {int(i) for i in start_ids}
+    out = {}
+    for entry in sorted(plan or [], key=lambda e: int(e["gw"])):
+        for mv in entry.get("moves") or []:
+            squad.discard(int(mv["sell"]["id"]))
+            squad.add(int(mv["buy"]["id"]))
+        out[int(entry["gw"])] = set(squad)
+    return out
+
+
+def _plan_squad_for(gw, plan_squads, default_ids):
+    """The squad held in `gw`: the latest plan entry at or before it, else the own squad."""
+    earlier = [g for g in plan_squads if g <= int(gw)]
+    return plan_squads[max(earlier)] if earlier else default_ids
+
+
 def score_wildcard(
     squad: pd.DataFrame,
     gw_projections: dict[int, pd.DataFrame],
     candidate_gws: list[int],
     horizon: int = 4,
-    transfer_plan_net_gain: float = 0.0,
     budget_m: float | None = None,
+    wc_squads: dict[int, set[int]] | None = None,
+    plan_squads: dict[int, set[int]] | None = None,
+    plan_hits_by_gw: dict[int, float] | None = None,
 ) -> list[ChipRecommendation]:
     """
     WC value = cumulative xPts gain over next `horizon` GWs from replacing the
@@ -791,16 +813,34 @@ def score_wildcard(
         if not future_gws:
             continue
 
-        # Your squad's own total across the horizon — never clamped.
+        # The no-chip side: the squad you would actually hold each GW — your own
+        # squad, moved along by the transfer plan when there is one — scored like
+        # the wildcard side (best XI per GW, never clamped), minus the plan's hits
+        # inside the window. Window-matched by construction.
+        default_ids = set(pd.to_numeric(squad["player_id"], errors="coerce").dropna().astype(int))
         normal_total = 0.0
         for fgw in future_gws:
             market = gw_projections[fgw]
-            squad_with_xpts = squad.merge(
-                market[["player_id", "xpts"]], on="player_id", how="left"
-            )
-            squad_with_xpts["xpts"] = squad_with_xpts["xpts"].fillna(0)
-            normal_xi = _pick_best_xi(squad_with_xpts)
+            if plan_squads:
+                ids = _plan_squad_for(fgw, plan_squads, default_ids)
+                held = market[market["player_id"].isin(ids)][["player_id", "pos", "xpts"]].copy()
+                # Players the plan would buy are hypothetical, like the wildcard
+                # side's, so they get the same outlier clamp; players already
+                # owned stay unclamped as before.
+                clipped = _clip_market_xpts(market, "xpts").set_index("player_id")["xpts"]
+                bought = ~held["player_id"].isin(default_ids)
+                held.loc[bought, "xpts"] = held.loc[bought, "player_id"].map(clipped).values
+                held["xpts"] = held["xpts"].fillna(0)
+                normal_xi = _pick_best_xi(held)
+            else:
+                squad_with_xpts = squad.merge(
+                    market[["player_id", "xpts"]], on="player_id", how="left"
+                )
+                squad_with_xpts["xpts"] = squad_with_xpts["xpts"].fillna(0)
+                normal_xi = _pick_best_xi(squad_with_xpts)
             normal_total += float(normal_xi["xpts"].sum())
+        plan_hits = sum(float((plan_hits_by_gw or {}).get(g, 0.0)) for g in future_gws)
+        normal_total -= plan_hits
 
         # Build xpts_horizon: each candidate player's clamp-protected xPts
         # summed across the horizon window, keyed on player_id.
@@ -818,32 +858,43 @@ def score_wildcard(
 
         wc_total = None
         fallback_reason = None
-        try:
-            # Same schema bridge as score_free_hit: rename id, factorize team
-            # labels for a stable team-cap grouping key (not the real FPL id).
-            market_for_optimizer = base_market.rename(columns={"player_id": "id"}).copy()
-            if "team" in market_for_optimizer.columns:
-                market_for_optimizer["team"] = pd.factorize(market_for_optimizer["team"])[0]
-            built = _optimizer.build_chip_squad(
-                market_for_optimizer, score_col="xpts_horizon", budget_m=budget_m
-            )
-            if built.get("ok") and built.get("squad_df") is not None:
-                wc_squad_ids = set(
-                    pd.to_numeric(built["squad_df"]["player_id"], errors="coerce")
-                    .dropna().astype(int).tolist()
+        preset_missing = wc_squads is not None and gw not in wc_squads
+        if wc_squads is not None and gw in wc_squads:
+            # The preset draft the user can open on the drafts page.
+            wc_total = 0.0
+            for fgw in future_gws:
+                clipped = _clip_market_xpts(gw_projections[fgw], "xpts")
+                week_squad = clipped[clipped["player_id"].isin(wc_squads[gw])]
+                if week_squad.empty:
+                    continue
+                wc_total += float(_pick_best_xi(week_squad)["xpts"].sum())
+        else:
+            try:
+                # Same schema bridge as score_free_hit: rename id, factorize team
+                # labels for a stable team-cap grouping key (not the real FPL id).
+                market_for_optimizer = base_market.rename(columns={"player_id": "id"}).copy()
+                if "team" in market_for_optimizer.columns:
+                    market_for_optimizer["team"] = pd.factorize(market_for_optimizer["team"])[0]
+                built = _optimizer.build_chip_squad(
+                    market_for_optimizer, score_col="xpts_horizon", budget_m=budget_m
                 )
-                wc_total = 0.0
-                for fgw in future_gws:
-                    clipped = _clip_market_xpts(gw_projections[fgw], "xpts")
-                    week_squad = clipped[clipped["player_id"].isin(wc_squad_ids)]
-                    if week_squad.empty:
-                        continue
-                    wc_xi = _pick_best_xi(week_squad)
-                    wc_total += float(wc_xi["xpts"].sum())
-            else:
-                fallback_reason = built.get("reason", "optimizer returned not-ok")
-        except Exception as e:  # noqa: BLE001 - degrade to unbudgeted proxy
-            fallback_reason = str(e)
+                if built.get("ok") and built.get("squad_df") is not None:
+                    wc_squad_ids = set(
+                        pd.to_numeric(built["squad_df"]["player_id"], errors="coerce")
+                        .dropna().astype(int).tolist()
+                    )
+                    wc_total = 0.0
+                    for fgw in future_gws:
+                        clipped = _clip_market_xpts(gw_projections[fgw], "xpts")
+                        week_squad = clipped[clipped["player_id"].isin(wc_squad_ids)]
+                        if week_squad.empty:
+                            continue
+                        wc_xi = _pick_best_xi(week_squad)
+                        wc_total += float(wc_xi["xpts"].sum())
+                else:
+                    fallback_reason = built.get("reason", "optimizer returned not-ok")
+            except Exception as e:  # noqa: BLE001 - degrade to unbudgeted proxy
+                fallback_reason = str(e)
 
         fallback_used = wc_total is None
         if fallback_used:
@@ -858,23 +909,18 @@ def score_wildcard(
                 wc_total += float(wc_xi["xpts"].sum())
 
         valid_count = len(future_gws)
-        uplift = max(0, wc_total - normal_total)
+        uplift = max(0.0, float(wc_total - normal_total))
 
-        # The no-chip baseline isn't a frozen squad — the horizon transfer plan
-        # already improves it. Wildcard EV is net of that improvement.
-        plan_gain = max(0.0, float(transfer_plan_net_gain))
-        uplift = max(0.0, uplift - plan_gain)
-
+        squad_label = "Your squad with planned transfers" if plan_squads else "Your squad"
+        wc_label = "Wildcard draft" if (wc_squads is not None and gw in wc_squads) else "Optimal WC squad"
         reasoning = [
-            f"Your squad projected over next {valid_count} GWs: {normal_total:.0f} xPts",
-            f"Optimal WC squad over next {valid_count} GWs: {wc_total:.0f} xPts"
-            + (" [unbudgeted proxy — optimizer fallback]" if fallback_used else " (budget-constrained)"),
+            f"{squad_label} projected over next {valid_count} GWs: {normal_total:.0f} xPts"
+            + (f" (after {plan_hits:.0f} pts of hits)" if plan_hits > 0 else ""),
+            f"{wc_label} over next {valid_count} GWs: {wc_total:.0f} xPts"
+            + (" [unbudgeted proxy — optimizer fallback]" if fallback_used else " (budget-constrained)")
+            + (" [pure-xPts squad — preset draft unavailable]" if preset_missing and not fallback_used else ""),
             f"WC uplift: +{uplift:.0f} xPts over horizon",
         ]
-        if plan_gain > 0:
-            reasoning.append(
-                f"Net of +{plan_gain:.0f} xPts the normal transfer plan already captures"
-            )
         if uplift > 30:
             reasoning.append("Large gap to optimal — squad needs reset")
 
@@ -889,6 +935,7 @@ def score_wildcard(
             confidence=0.5 + min(0.4, uplift / 60),
             reasoning=reasoning,
             risks=risks,
+            window_gws=[int(future_gws[0]), int(future_gws[-1])],
         ))
     return recs
 
@@ -908,6 +955,9 @@ def recommend_chips(
     team_difficulty_by_gw: dict[int, dict[str, float]] | None = None,
     player_priors: dict[int, dict] | None = None,
     euro_by_gw: dict[int, dict[str, dict]] | None = None,
+    wc_squads: dict[int, set[int]] | None = None,
+    plan_squads: dict[int, set[int]] | None = None,
+    plan_hits_by_gw: dict[int, float] | None = None,
 ) -> list[ChipRecommendation]:
     """
     Main entry point. Returns ranked list of (chip, gw, value, reasoning) for
@@ -942,8 +992,12 @@ def recommend_chips(
         all_recs.extend(score_wildcard(
             squad, gw_projections, candidate_gws,
             horizon=int(config.CHIP_WILDCARD_DEFAULT_HORIZON_GWS),
-            transfer_plan_net_gain=transfer_plan_net_gain,
             budget_m=bank_m,
+            # transfer_plan_net_gain is no longer subtracted: the no-chip side is
+            # the squad the plan would hold each GW (plan_squads), window-matched.
+            wc_squads=wc_squads,
+            plan_squads=plan_squads,
+            plan_hits_by_gw=plan_hits_by_gw,
         ))
 
     if breaks:
@@ -999,14 +1053,20 @@ def _season_prior(chip, half):
 
 
 def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon, half,
-                    transfer_plan_net_gain=0.0, structural_gw=None, stress=None, current_gw=None):
+                    transfer_plan_net_gain=0.0, structural_gw=None, stress=None, current_gw=None,
+                    window_gws=None):
     """Plain-language "why is this chip on hold" sentence for one outlook or
     recommendation row. Raises on a missing/unexpected field — callers use
     `_safe_chip_guidance` so a gap never breaks the payload."""
     prior = _season_prior(chip, half)
+    # Wildcard gains are scored over a window against the planned transfers: say so.
+    span = ""
+    if chip == "wildcard" and window_gws:
+        a, b = int(window_gws[0]), int(window_gws[-1])
+        span = f" over GW{a}–{b} vs your planned transfers" if b != a else f" in GW{a} vs your planned transfers"
 
     if status == "play":
-        text = f"Play it in GW{event_id}: +{ev_gain:.1f} pts over the bar of {bar:.0f}."
+        text = f"Play it in GW{event_id}: +{ev_gain:.1f} pts{span + ',' if span else ''} over the bar of {bar:.0f}."
         if distribution and "p_beats_bar" in distribution:
             text += f" {round(distribution['p_beats_bar'] * 100)}% chance it beats the bar."
         return text
@@ -1031,14 +1091,14 @@ def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon, 
         # "re-check later" would be wrong, the decision is now. Say that the gain is
         # real but under the bar, and what would change the call.
         text = (f"This is the week. GW{event_id} is the best wildcard week in the window at "
-                f"+{ev_gain:.1f} pts, but that is under the {bar:.0f}-pt bar")
+                f"+{ev_gain:.1f} pts{span}, but that is under the {bar:.0f}-pt bar")
         if distribution and "p_beats_bar" in distribution:
             text += f" ({round(distribution['p_beats_bar'] * 100)}% chance to beat it)"
         text += ". Keep it unless you want the full rebuild now; your free transfers cover the gain. Best use: "
         text += f"{prior.split(';')[0]}."
         return text
 
-    text = f"Hold for now. GW{event_id} is the best week so far (+{ev_gain:.1f} pts"
+    text = f"Hold for now. GW{event_id} is the best week so far (+{ev_gain:.1f} pts{span}"
     if distribution and "p_beats_bar" in distribution:
         text += f", {round(distribution['p_beats_bar'] * 100)}% chance to beat the {bar:.0f}-pt bar"
     text += f"). Best use: {prior}."
@@ -1074,6 +1134,7 @@ def build_chip_plan(
     cup_clashes: dict[int, dict] | None = None,
     events: list[dict] | None = None,
     team_labels: dict[int, str] | None = None,
+    wc_squads: dict[int, set[int]] | None = None,
 ) -> dict:
     """Assemble the full chip plan payload: model-zone EV recommendations,
     structural provisional windows, next-GW nudge, transfer context, and
@@ -1095,6 +1156,10 @@ def build_chip_plan(
     windows = chip_windows(chips_played, current_gw)
     remaining = [c for c, w in windows.items() if w["available"]]
     plan_net_gain = float((transfer_plan or {}).get("total_net_gain", 0.0) or 0.0)
+    plan_entries = (transfer_plan or {}).get("plan") or []
+    plan_squads = (plan_squads_by_gw(squad["player_id"].astype(int).tolist(), plan_entries)
+                   if plan_entries else None)
+    plan_hits_by_gw = {int(e["gw"]): float(e.get("hit_cost") or 0.0) for e in plan_entries}
 
     squad_value = float(pd.to_numeric(squad.get("price_m"), errors="coerce").fillna(0).sum())
     budget_m = squad_value + float(itb_m or 0.0)
@@ -1115,6 +1180,9 @@ def build_chip_plan(
         bank_m=budget_m,
         transfer_plan_net_gain=plan_net_gain,
         breaks=breaks,
+        wc_squads=wc_squads,
+        plan_squads=plan_squads,
+        plan_hits_by_gw=plan_hits_by_gw,
         xgi_per90=xgi_per90,
         team_difficulty_by_gw=team_difficulty_by_gw,
         player_priors=player_priors,
@@ -1215,7 +1283,8 @@ def build_chip_plan(
             ev_gain=outlook_row["ev_gain"], bar=outlook_row["bar"],
             distribution=distribution, horizon=horizon, half=windows[chip]["half"],
             transfer_plan_net_gain=plan_net_gain,
-            current_gw=(min(gw_projections) if gw_projections else None))
+            current_gw=(min(gw_projections) if gw_projections else None),
+            window_gws=best.window_gws)
         outlook.append(outlook_row)
         if best.expected_value < bar:
             continue  # hold — nothing in the model zone clears the bar
@@ -1223,7 +1292,8 @@ def build_chip_plan(
         outlook_row["guidance"] = _safe_chip_guidance(
             chip, status="play", event_id=outlook_row["event_id"],
             ev_gain=outlook_row["ev_gain"], bar=outlook_row["bar"],
-            distribution=distribution, horizon=horizon, half=windows[chip]["half"])
+            distribution=distribution, horizon=horizon, half=windows[chip]["half"],
+            window_gws=best.window_gws)
         rec = {
             "chip": chip,
             "event_id": int(best.gw),
@@ -1261,6 +1331,8 @@ def build_chip_plan(
                          "wait_for_team_news": bool(breaks and current_gw in breaks)}
                 if distribution is not None and "p_beats_bar" in distribution:
                     nudge["p_beats_bar"] = distribution["p_beats_bar"]
+                if chip == "wildcard" and best.window_gws:
+                    nudge["window_gws"] = list(best.window_gws)
 
     # Structural zone: announced DGWs/BGWs beyond the model horizon, up to expiry.
     recommended_chips = {r["chip"] for r in recommendations}
