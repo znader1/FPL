@@ -51,41 +51,65 @@ def _striker(status, chance):
 
 def test_striker_out_cuts_attack_and_teammates():
     els, shares = _striker("s", None)
-    missing = av.team_missing(shares, els, 5)
+    missing = av.team_missing(shares, els, first_gw=True)
     assert abs(missing[1]["attack"] - 0.30) < 1e-9
     rated = av.apply_to_ratings({1: {"attack": 1.0, "defense": 1.0}, 2: {"attack": 1.0, "defense": 1.0}}, missing)
     assert abs(rated[1]["attack"] - (1 - config.AVAIL_ATTACK_IMPACT * 0.30)) < 1e-9
     assert rated[2] == {"attack": 1.0, "defense": 1.0}
-    mult = av.teammate_multiplier(shares, els, missing, 5)
+    mult = av.teammate_multiplier(shares, els, missing)
     assert abs(mult.loc[8] - (1 - config.AVAIL_TEAMMATE_IMPACT * 0.30)) < 1e-9
 
 
-def test_doubt_covers_one_gw_of_the_horizon():
+def test_doubt_counts_only_in_the_first_gw():
     els, shares = _striker("d", 50)
-    missing = av.team_missing(shares, els, 5)
-    assert abs(missing[1]["attack"] - 0.30 * 0.5 * 0.2) < 1e-9
+    by_gw = av.missing_by_gw(shares, els, [9, 10, 11])
+    assert abs(by_gw[9][1]["attack"] - 0.30 * 0.5) < 1e-9
+    assert 1 not in by_gw[10] and 1 not in by_gw[11]
+
+
+def test_injury_counts_in_every_gw():
+    els, shares = _striker("i", None)
+    by_gw = av.missing_by_gw(shares, els, [9, 10, 11])
+    assert all(abs(by_gw[g][1]["attack"] - 0.30) < 1e-9 for g in (9, 10, 11))
+
+
+def test_available_with_a_low_chance_counts_like_a_doubt():
+    els, shares = _striker("a", 75)
+    by_gw = av.missing_by_gw(shares, els, [9, 10])
+    assert abs(by_gw[9][1]["attack"] - 0.30 * 0.25) < 1e-9 and 1 not in by_gw[10]
+
+
+def test_mover_does_not_dock_his_old_club():
+    els, shares = _striker("i", None)
+    els.loc[els["id"] == 9, "team"] = 2          # his share was earned at team 1
+    assert av.team_missing(shares, els, first_gw=True) == {}
+
+
+def test_departed_player_is_not_an_absence():
+    els, shares = _striker("u", None)
+    assert av.team_missing(shares, els, first_gw=True) == {}
 
 
 def test_floor_holds_with_several_out():
     els = _elements([(9, 1, 4, "i", None), (8, 1, 3, "i", None), (7, 1, 3, "i", None), (2, 1, 2, "a", None)])
     shares = av.team_shares(_matches(TEAM1), 9)
     els = pd.concat([els, _elements([(6, 1, 3, "a", None)])])
-    mult = av.teammate_multiplier(shares, els, av.team_missing(shares, els, 5), 5)
+    mult = av.teammate_multiplier(shares, els, av.team_missing(shares, els, first_gw=True))
     assert abs(mult.loc[6] - config.AVAIL_TEAMMATE_FLOOR) < 1e-9
 
 
 def test_no_history_team_unchanged():
     els = _elements([(50, 3, 4, "i", None), (51, 3, 3, "a", None)])
     shares = av.team_shares(_matches(TEAM1), 9)
-    missing = av.team_missing(shares, els, 5)
+    missing = av.team_missing(shares, els, first_gw=True)
     assert 3 not in missing
     assert av.apply_to_ratings({3: {"attack": 1.1, "defense": 0.9}}, missing)[3] == {"attack": 1.1, "defense": 0.9}
-    assert av.teammate_multiplier(shares, els, missing, 5).loc[51] == 1.0
+    assert av.teammate_multiplier(shares, els, missing).loc[51] == 1.0
 
 
 def test_out_player_ignores_own_share():
     els, shares = _striker("s", None)
-    mult = av.teammate_multiplier(shares, els, av.team_missing(shares, els, 5), 5)
+    mult = av.teammate_multiplier(shares, els, av.team_missing(shares, els, first_gw=True))
     assert mult.loc[9] == 1.0
 
 

@@ -39,7 +39,7 @@ def _matches():
     return pd.DataFrame(rows)
 
 
-FIXTURES = pd.DataFrame([(9, 1, 2, 3, 3)], columns=["event", "team_h", "team_a", "team_h_difficulty", "team_a_difficulty"])
+FIXTURES = pd.DataFrame([(9, 1, 2, 3, 3), (10, 2, 1, 3, 3), (11, 1, 2, 3, 3)], columns=["event", "team_h", "team_a", "team_h_difficulty", "team_a_difficulty"])
 SHORT = {1: "AAA", 2: "BBB"}
 
 
@@ -49,11 +49,13 @@ def patched(monkeypatch):
     yield
 
 
-def _project(striker_status, **overrides):
+def _project(striker_status, horizon=1, chance=None, **overrides):
+    els = _elements(striker_status)
+    els.loc[els["id"] == 9, "chance_of_playing_next_round"] = chance
     with config_overrides(overrides):
         return projections.project_elements_next_gws(
-            elements=_elements(striker_status), fixtures=FIXTURES, teams_short_map=SHORT,
-            gw_start=9, horizon_gws=1).set_index("id")
+            elements=els, fixtures=FIXTURES, teams_short_map=SHORT,
+            gw_start=9, horizon_gws=horizon).set_index("id")
 
 
 def test_disabled_never_touches_projections(patched, monkeypatch):
@@ -102,3 +104,29 @@ def test_failure_falls_back(patched, monkeypatch):
     out = _project("s")
     assert (out["avail_teammate_mult"] == 1.0).all()
     assert out["xpts_gw9"].notna().all()
+
+
+def test_first_gw_projection_does_not_depend_on_the_horizon(patched):
+    base = {"PROJ_DIFFICULTY_SOURCE": "xg_ratings", "PROJ_MODEL_BLEND_WEIGHT": 0.5}
+    one = _project("d", horizon=1, chance=50, **base)
+    three = _project("d", horizon=3, chance=50, **base)
+    assert abs(one.loc[8, "xpts_gw9"] - three.loc[8, "xpts_gw9"]) < 1e-9
+    assert one.loc[8, "avail_teammate_mult"] < 1.0                 # the doubt bites in GW9
+
+
+def test_ticker_ratings_follow_long_term_absences(monkeypatch):
+    from api import main as m
+    monkeypatch.setattr(fixture_difficulty, "load_match_history", lambda *a, **k: _matches())
+    els = _elements("i").to_dict("records")
+    monkeypatch.setattr(m, "get_bootstrap_cached", lambda: {
+        "elements": els, "events": [{"id": 9, "is_next": True}],
+        "teams": [{"id": 1, "short_name": "AAA"}, {"id": 2, "short_name": "BBB"}]})
+    m._team_ratings_cache.update({"ts": 0.0, "data": None})
+    with config_overrides({"AVAIL_ENABLED": True}):
+        on = m.get_team_ratings_cached(SHORT)
+    m._team_ratings_cache.update({"ts": 0.0, "data": None})
+    with config_overrides({"AVAIL_ENABLED": False}):
+        off = m.get_team_ratings_cached(SHORT)
+    m._team_ratings_cache.update({"ts": 0.0, "data": None})
+    assert on[1]["attack"] < off[1]["attack"]
+    assert on[2]["attack"] == off[2]["attack"]

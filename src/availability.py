@@ -8,8 +8,8 @@ share of his team's recent output says how much the team loses without him.
 * defence share = for keepers and defenders, his minutes / the team's keeper +
   defender minutes over the same window.
 
-Missing share per team = Σ share × (1 − play probability) × out fraction, where a
-doubt (status ``d``) covers one GW of the horizon and any other absence all of it.
+Missing share per team and GW = Σ share × (1 − play probability), where a doubt
+counts only in the first GW (see ``_missing_rows``).
 """
 from __future__ import annotations
 
@@ -59,23 +59,40 @@ def team_shares(match_df, gw_start):
     return pd.DataFrame(out, columns=cols)
 
 
-def _missing_rows(shares, elements, horizon_gws):
-    """shares joined to each player's missing fraction (1 − p) × out fraction."""
+DOUBT_STATUSES = {"d"}
+GONE_STATUSES = {"u"}   # left the club / not registered: his old club's xG already lacks him
+
+
+def _missing_rows(shares, elements, first_gw):
+    """shares joined to each player's missing fraction for one GW.
+
+    A doubt (``d``, or ``a`` with a published chance below 100) is a next-GW
+    question: it counts (1 − p) in the first GW and nothing after. Injured /
+    suspended / unavailable (``i``/``s``/``n``) count in every GW. A departed
+    player (``u``) and a share earned at another club count nothing.
+    """
+    cols = ["element", "team_id", "attack_share", "defence_share", "missing"]
     if shares is None or shares.empty:
-        return pd.DataFrame(columns=["element", "team_id", "attack_share", "defence_share", "missing"])
+        return pd.DataFrame(columns=cols)
+    ids = pd.to_numeric(elements["id"], errors="coerce").astype(int)
     p = play_probability(elements)
-    status = pd.Series(elements["status"].astype(str).str.lower().values,
-                       index=pd.to_numeric(elements["id"], errors="coerce").astype(int))
-    d = shares.copy()
-    d = d[d["element"].isin(p.index)]
+    status = pd.Series(elements["status"].astype(str).str.lower().values, index=ids.values)
+    team = pd.Series(pd.to_numeric(elements["team"], errors="coerce").values, index=ids.values)
+    chance = pd.Series(pd.to_numeric(elements["chance_of_playing_next_round"], errors="coerce").values,
+                       index=ids.values)
+    d = shares[shares["element"].isin(p.index)].copy()
+    d = d[d["element"].map(team) == d["team_id"]]
+    st = d["element"].map(status)
+    d = d[~st.isin(GONE_STATUSES)]
+    st = d["element"].map(status)
+    doubt = st.isin(DOUBT_STATUSES) | ((st == "a") & (d["element"].map(chance) < 100))
     gone = 1.0 - d["element"].map(p)
-    out_fraction = d["element"].map(status).map(lambda s: 1.0 / max(1, int(horizon_gws)) if s == "d" else 1.0)
-    d["missing"] = (gone * out_fraction).fillna(0.0)
-    return d
+    d["missing"] = (gone.where(~doubt, gone if first_gw else 0.0)).fillna(0.0)
+    return d[cols]
 
 
-def team_missing(shares, elements, horizon_gws):
-    d = _missing_rows(shares, elements, horizon_gws)
+def team_missing(shares, elements, first_gw=True):
+    d = _missing_rows(shares, elements, first_gw)
     out = {}
     for team, g in d.groupby("team_id"):
         attack = float((g["attack_share"] * g["missing"]).sum())
@@ -83,6 +100,14 @@ def team_missing(shares, elements, horizon_gws):
         if attack > 0 or defence > 0:
             out[int(team)] = {"attack": attack, "defence": defence}
     return out
+
+
+def missing_by_gw(shares, elements, gws):
+    """{gw: team_missing} — the first GW carries the doubts, later GWs don't."""
+    gws = [int(g) for g in gws]
+    first = team_missing(shares, elements, first_gw=True)
+    rest = team_missing(shares, elements, first_gw=False) if len(gws) > 1 else {}
+    return {g: (first if i == 0 else rest) for i, g in enumerate(gws)}
 
 
 def apply_to_ratings(ratings, missing):
@@ -104,10 +129,10 @@ def apply_to_ratings(ratings, missing):
     return out
 
 
-def teammate_multiplier(shares, elements, missing, horizon_gws):
+def teammate_multiplier(shares, elements, missing, first_gw=True):
     ids = pd.to_numeric(elements["id"], errors="coerce").astype(int)
     mult = pd.Series(1.0, index=ids.values)
-    d = _missing_rows(shares, elements, horizon_gws)
+    d = _missing_rows(shares, elements, first_gw)
     own = dict(zip(d["element"], d["attack_share"] * d["missing"])) if not d.empty else {}
     teams = pd.to_numeric(elements["team"], errors="coerce").values
     etype = pd.to_numeric(elements["element_type"], errors="coerce").values
