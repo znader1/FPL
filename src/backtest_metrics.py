@@ -85,3 +85,68 @@ def top_n_precision(frames, n=10):
         ta = set(d.nlargest(n, "actual")["player_id"])
         vals.append(len(tp & ta) / n)
     return float(sum(vals) / len(vals))
+
+
+# ---------------------------------------------------------------- calibration
+# Frames for these carry: player_id, position, price_m, xpts, actual, minutes,
+# had_fixture. Population = player-GWs whose team had a fixture (benched and
+# zero-minute rows included, since projections carry minutes risk); the *_app
+# columns repeat the numbers over appearances only (minutes > 0).
+
+PRICE_BANDS = ("<6", "6-8", "8+")
+BAND_BIAS_MIN_N = 20
+
+
+def price_band(price_m):
+    p = float(price_m)
+    if p < 6.0:
+        return "<6"
+    if p < 8.0:
+        return "6-8"
+    return "8+"
+
+
+def _cell_stats(g):
+    err = g["xpts"] - g["actual"]
+    app = g[g["minutes"] > 0]
+    app_err = app["xpts"] - app["actual"]
+    spearman = None
+    if len(g) >= 3:
+        corr = g["xpts"].rank().corr(g["actual"].rank())
+        spearman = None if pd.isna(corr) else float(corr)
+    return {
+        "n": int(len(g)),
+        "mae": float(err.abs().mean()),
+        "bias": float(err.mean()),
+        "spearman": spearman,
+        "n_app": int(len(app)),
+        "mae_app": float(app_err.abs().mean()) if len(app) else None,
+        "bias_app": float(app_err.mean()) if len(app) else None,
+    }
+
+
+def calibration_table(frames):
+    parts = [f for f in frames if f is not None and not f.empty]
+    cols = ["pos", "band", "n", "mae", "bias", "spearman", "mae_app", "bias_app", "n_app"]
+    if not parts:
+        return pd.DataFrame(columns=cols)
+    d = pd.concat(parts, ignore_index=True)
+    d = d[d["had_fixture"].astype(bool)].copy()
+    if d.empty:
+        return pd.DataFrame(columns=cols)
+    for c in ("xpts", "actual", "minutes", "price_m"):
+        d[c] = pd.to_numeric(d[c], errors="coerce").fillna(0.0)
+    d["band"] = d["price_m"].map(price_band)
+    rows = []
+    for (pos, band), g in d.groupby(["position", "band"]):
+        rows.append({"pos": str(pos), "band": band, **_cell_stats(g)})
+    rows.append({"pos": "ALL", "band": "ALL", **_cell_stats(d)})
+    return pd.DataFrame(rows)[cols]
+
+
+def band_bias(table, min_n=BAND_BIAS_MIN_N):
+    """Mean |bias| over (pos, band) cells with n >= min_n, excluding ALL."""
+    t = table[(table["pos"] != "ALL") & (table["n"] >= min_n)]
+    if t.empty:
+        return 0.0
+    return float(t["bias"].abs().mean())

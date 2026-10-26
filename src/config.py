@@ -138,6 +138,7 @@ PROJ_INJURY_FUTURE_GW_FADE = 0.50        # [untested] Future GW injury discount 
 PROJ_NEUTRAL_TEAM_PPG = 1.5  # [untested]
 PROJ_HOME_MULT_HOME = 1.06  # [untested]
 PROJ_HOME_MULT_AWAY = 0.94  # [untested]
+PROJ_FDR_STRENGTH = 1.0  # [untested] scales how far the baseline leg's fixture-difficulty multiplier swings from 1.0; 1.0 = today. Does not touch the xG leg (ratings/venue).
 PROJ_OPP_FORM_FACTOR = 0.12  # [untested]
 PROJ_OPP_FORM_MIN = 0.86  # [untested]
 PROJ_OPP_FORM_MAX = 1.14  # [untested]
@@ -233,7 +234,7 @@ TRANSFER_PLANNER_RED_FLAG_MAX_CHANCE = 0.0  # [untested]
 # transfer planner chases him instead of rolling. Shrink each player's blended
 # baseline toward slope[element_type] × price_m, weighted by finished
 # gameweeks; fades as the season accumulates evidence. 0 disables.
-PROJ_SHRINKAGE_GAMES = 5.0  # [untested]
+PROJ_SHRINKAGE_GAMES = 2.5  # [tuned] was 5.0. Live-season replay 2026-10-26 (docs/calibration/2026-10-26-live-replay.md; GW8 parity 0.026 mean |diff|, corr 0.999): as-of rerun (knowledge file off): 1-GW tune MAE 1.223 -> 1.216, 5-GW MAE 4.94 -> 4.81, 5-GW band bias 1.53 -> 1.37; MID £8m+ bias roughly unchanged (0 would cut more error but worsen it). User chose the half step; previous value runs in shadow (PROJ_SHADOW_OVERRIDES)
 PROJ_PRICE_PRIOR_SLOPE = {1: 0.55, 2: 0.50, 3: 0.45, 4: 0.42}  # [untested] element_type -> prior ppg per £1m
 
 # First-choice penalty takers are worth ~a penalty every 3 games on top of
@@ -756,6 +757,14 @@ ODDS_TEAM_ALIASES = {}       # [operational] extra {fpl_name: odds_api_name} fix
 # wildcard/transfer problem the 1-GW MAE does not measure. Do not raise past
 # 0.8 (degrades); revisit with a horizon-aware backtest.
 PROJ_MODEL_BLEND_WEIGHT = 0.7  # [untested] (directional sweep only) 2026-10-22 sweep (2025-26 GW6-17, 1-GW MAE): 0.5=1.892, 0.7=1.895, 0.85=1.911 — tie; 0.7 chosen so fixture/underlying outweighs recent points (user call); was 0.5 [tuned]
+# Monitoring (2026-10-26 calibration spec, part 6). Bump PROJ_MODEL_VERSION on every
+# projection change; when a change ships, PROJ_SHADOW_OVERRIDES holds the previous
+# model's values of exactly the keys that changed, and scripts/shadow_snapshot.py
+# (GitHub snapshot job) computes that previous model next to the current one so
+# scripts/monitor_report.py can judge both on the same weeks.
+PROJ_MODEL_VERSION = "2026-10-26.shrink25"  # [operational]
+PROJ_SHADOW_MODEL_VERSION = "2026-10-22.blend70"  # [operational]
+PROJ_SHADOW_OVERRIDES = {"PROJ_SHRINKAGE_GAMES": 5.0}  # [operational]
 
 # --- LLM specialist agents (api/chat.py) ---
 # Inject the reflection agent's learned strategy rules (src/agent_memory

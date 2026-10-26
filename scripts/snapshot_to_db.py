@@ -22,9 +22,10 @@ def snapshot_rows(payload, now_utc):
         return []
     season, gw = season_of(payload), int(payload["next_gw"])
     blend = payload.get("blend_weight")
+    version = payload.get("model_version")
     rows = []
     for p in payload.get("players", []):
-        rows.append({
+        row = {
             "season": season, "gw": gw, "player_id": int(p["player_id"]),
             "web_name": p.get("web_name"), "pos": p.get("pos"),
             "team_short": p.get("team_short"), "price_m": p.get("price_m"),
@@ -32,7 +33,12 @@ def snapshot_rows(payload, now_utc):
             "chance": p.get("chance"), "fpl_ep_next": p.get("fpl_ep_next"),
             "model_xpts": p.get("model_xpts"), "model_blend_weight": blend,
             "captured_at": now_utc.isoformat(),
-        })
+        }
+        # Only when the API reports it: the column exists once the 2026-10-26
+        # migration is applied, and an older API must still write cleanly.
+        if version is not None:
+            row["model_version"] = version
+        rows.append(row)
     return rows
 
 

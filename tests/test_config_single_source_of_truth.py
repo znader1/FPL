@@ -69,7 +69,7 @@ def test_every_config_reference_exists_so_deleting_a_param_fails_loudly():
     # config.py. Each previously resolved to the config value; pin that so a
     # future edit can't quietly restore the fallback number instead.
     ("PROJ_MODEL_BLEND_WEIGHT", 0.7),          # fallback was 0.0 - would disable the xG blend; 0.5 -> 0.7 on 2026-10-22 (see config comment)
-    ("PROJ_SHRINKAGE_GAMES", 5.0),             # fallback was 0.0 - would disable early-season shrinkage
+    ("PROJ_SHRINKAGE_GAMES", 2.5),             # fallback was 0.0 - would disable early-season shrinkage (5.0 until the 2026-10-26 replay)
     ("PROJ_PENALTY_TAKER_UPLIFT", 0.45),       # fallback was 0.0
     ("PROJ_GK_FIXTURE_DAMP", 0.5),             # fallback was 1.0
     ("PROJ_EP_NEXT_BLEND_WEIGHT", 0.5),        # fallback was 0.45
@@ -86,3 +86,12 @@ def test_every_config_reference_exists_so_deleting_a_param_fails_loudly():
 ])
 def test_parameters_whose_old_fallback_disagreed_keep_the_config_value(name, expected):
     assert getattr(config, name) == expected
+
+
+def test_shadow_overrides_name_real_config_keys_and_a_distinct_version():
+    values = vars(config)
+    for key in config.PROJ_SHADOW_OVERRIDES:
+        assert key.isupper() and key in values, key
+    if config.PROJ_SHADOW_OVERRIDES:
+        assert config.PROJ_SHADOW_MODEL_VERSION
+        assert config.PROJ_SHADOW_MODEL_VERSION != config.PROJ_MODEL_VERSION
