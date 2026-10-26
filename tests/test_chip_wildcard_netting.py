@@ -90,7 +90,7 @@ def test_chips_route_nets_against_the_headline_plan_with_preset_squads(monkeypat
                          **{f"xpts_gw{g}": [2.0] * 15 for g in range(5, 13)}})
     ctx = {"proj": proj, "squad": own[["player_id", "name", "pos", "team", "price_m"]],
            "gw_projections": {g: own for g in range(5, 13)}, "bank_m": 0.5, "free_transfers": 1,
-           "teams_short_map": {}}
+           "teams_short_map": {}, "entry_history": {"value": 1004, "bank": 4}}
     monkeypatch.setattr(chips, "_build_context_for_entry", lambda *a, **k: ctx)
     seen = {}
 
@@ -113,7 +113,39 @@ def test_chips_route_nets_against_the_headline_plan_with_preset_squads(monkeypat
     monkeypatch.setattr(chips, "build_chip_plan", fake_build)
     chips._build_plan_response(123, 5, 8)
     assert seen["plan_kwargs"]["allow_hits"] is False
-    # 5-GW windows that fit inside GW5-12: starts 5..8, Balanced, budget = squad value + bank.
-    assert [c[0] for c in calls] == [5, 6, 7, 8]
-    assert {c[3] for c in calls} == {"balanced"} and abs(calls[0][2] - 75.5) < 1e-9
-    assert set(seen["wc_squads"]) == {5, 6, 7, 8}
+    # Every candidate gets a Balanced draft; windows past the frame are truncated
+    # to the GWs projected, matching the window score_wildcard scores.
+    assert [(c[0], c[1]) for c in calls] == [(5, 5), (6, 5), (7, 5), (8, 5), (9, 4), (10, 3), (11, 2), (12, 1)]
+    # Budget = the drafts page's: FPL entry value (selling prices + bank), not market prices.
+    assert {c[3] for c in calls} == {"balanced"} and abs(calls[0][2] - 100.4) < 1e-9
+    assert set(seen["wc_squads"]) == set(range(5, 13))
+
+
+def test_plan_bought_players_are_clamped_like_the_wildcard_side():
+    own, proj = _market_with_stars()
+    for g in GWS:
+        m = proj[g].copy()
+        m.loc[m["player_id"] == 108, "xpts"] = 20.0          # outlier, above the MID clamp
+        proj[g] = m
+    squad = own[["player_id", "name", "pos", "team", "price_m"]]
+    stars = set(range(101, 116))
+    base = score_wildcard(squad, proj, [5], horizon=4, wc_squads={5: stars})[0].expected_value
+    squads = plan_squads_by_gw(set(range(1, 16)), [_move(5, 8, 108)])
+    planned = score_wildcard(squad, proj, [5], horizon=4, wc_squads={5: stars}, plan_squads=squads)[0].expected_value
+    clamp = config.CHIP_PLAN_XPTS_CLAMP_BY_POS["MID"]
+    # The bought outlier counts at the clamp on the plan side too: (clamp - 2) a GW, not (20 - 2).
+    assert abs((base - planned) - (clamp - 2.0) * 4) < 1e-6
+
+
+def test_wildcard_guidance_names_the_window(monkeypatch):
+    own, proj = _market_with_stars()
+    monkeypatch.setattr(config, "CHIP_PLAN_MIN_EV", {**config.CHIP_PLAN_MIN_EV, "wildcard": 1.0})
+    plan = build_chip_plan(
+        squad=own[["player_id", "name", "pos", "team", "price_m"]], current_gw=5,
+        gw_projections=proj, chips_played=[{"name": c, "event": 1} for c in ("freehit", "bboost", "3xc")],
+        horizon_gws=4, wc_squads={g: set(range(101, 116)) for g in GWS},
+    )
+    rec = next(r for r in plan["recommendations"] if r["chip"] == "wildcard")
+    assert "over GW5–8 vs your planned transfers" in rec["guidance"]
+    row = next(r for r in plan["outlook"] if r["chip"] == "wildcard")
+    assert "over GW5–8 vs your planned transfers" in row["guidance"]

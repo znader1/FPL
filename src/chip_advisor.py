@@ -824,6 +824,12 @@ def score_wildcard(
             if plan_squads:
                 ids = _plan_squad_for(fgw, plan_squads, default_ids)
                 held = market[market["player_id"].isin(ids)][["player_id", "pos", "xpts"]].copy()
+                # Players the plan would buy are hypothetical, like the wildcard
+                # side's, so they get the same outlier clamp; players already
+                # owned stay unclamped as before.
+                clipped = _clip_market_xpts(market, "xpts").set_index("player_id")["xpts"]
+                bought = ~held["player_id"].isin(default_ids)
+                held.loc[bought, "xpts"] = held.loc[bought, "player_id"].map(clipped).values
                 held["xpts"] = held["xpts"].fillna(0)
                 normal_xi = _pick_best_xi(held)
             else:
@@ -1047,14 +1053,20 @@ def _season_prior(chip, half):
 
 
 def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon, half,
-                    transfer_plan_net_gain=0.0, structural_gw=None, stress=None, current_gw=None):
+                    transfer_plan_net_gain=0.0, structural_gw=None, stress=None, current_gw=None,
+                    window_gws=None):
     """Plain-language "why is this chip on hold" sentence for one outlook or
     recommendation row. Raises on a missing/unexpected field — callers use
     `_safe_chip_guidance` so a gap never breaks the payload."""
     prior = _season_prior(chip, half)
+    # Wildcard gains are scored over a window against the planned transfers: say so.
+    span = ""
+    if chip == "wildcard" and window_gws:
+        a, b = int(window_gws[0]), int(window_gws[-1])
+        span = f" over GW{a}–{b} vs your planned transfers" if b != a else f" in GW{a} vs your planned transfers"
 
     if status == "play":
-        text = f"Play it in GW{event_id}: +{ev_gain:.1f} pts over the bar of {bar:.0f}."
+        text = f"Play it in GW{event_id}: +{ev_gain:.1f} pts{span + ',' if span else ''} over the bar of {bar:.0f}."
         if distribution and "p_beats_bar" in distribution:
             text += f" {round(distribution['p_beats_bar'] * 100)}% chance it beats the bar."
         return text
@@ -1079,14 +1091,14 @@ def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon, 
         # "re-check later" would be wrong, the decision is now. Say that the gain is
         # real but under the bar, and what would change the call.
         text = (f"This is the week. GW{event_id} is the best wildcard week in the window at "
-                f"+{ev_gain:.1f} pts, but that is under the {bar:.0f}-pt bar")
+                f"+{ev_gain:.1f} pts{span}, but that is under the {bar:.0f}-pt bar")
         if distribution and "p_beats_bar" in distribution:
             text += f" ({round(distribution['p_beats_bar'] * 100)}% chance to beat it)"
         text += ". Keep it unless you want the full rebuild now; your free transfers cover the gain. Best use: "
         text += f"{prior.split(';')[0]}."
         return text
 
-    text = f"Hold for now. GW{event_id} is the best week so far (+{ev_gain:.1f} pts"
+    text = f"Hold for now. GW{event_id} is the best week so far (+{ev_gain:.1f} pts{span}"
     if distribution and "p_beats_bar" in distribution:
         text += f", {round(distribution['p_beats_bar'] * 100)}% chance to beat the {bar:.0f}-pt bar"
     text += f"). Best use: {prior}."
@@ -1271,7 +1283,8 @@ def build_chip_plan(
             ev_gain=outlook_row["ev_gain"], bar=outlook_row["bar"],
             distribution=distribution, horizon=horizon, half=windows[chip]["half"],
             transfer_plan_net_gain=plan_net_gain,
-            current_gw=(min(gw_projections) if gw_projections else None))
+            current_gw=(min(gw_projections) if gw_projections else None),
+            window_gws=best.window_gws)
         outlook.append(outlook_row)
         if best.expected_value < bar:
             continue  # hold — nothing in the model zone clears the bar
@@ -1279,7 +1292,8 @@ def build_chip_plan(
         outlook_row["guidance"] = _safe_chip_guidance(
             chip, status="play", event_id=outlook_row["event_id"],
             ev_gain=outlook_row["ev_gain"], bar=outlook_row["bar"],
-            distribution=distribution, horizon=horizon, half=windows[chip]["half"])
+            distribution=distribution, horizon=horizon, half=windows[chip]["half"],
+            window_gws=best.window_gws)
         rec = {
             "chip": chip,
             "event_id": int(best.gw),

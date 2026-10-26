@@ -359,10 +359,12 @@ CHIP_PLAN_MIN_EV = {            # below this, "hold" beats playing the chip
     # against the squad the headline transfer plan would hold each GW, over the same
     # 5-GW window, scored on the Balanced preset draft — the old 120 stopgap (set when
     # the baseline was a hits-allowed 8-GW walk) became unreachable. Live GW9 runs
-    # (scripts in the session scratchpad, not committed): ordinary squad 5645321 peaks
-    # at +16.6 (GW9) and ~5 later; the same squad with its 5 best players ruled out
-    # +77.8; entry 107342 +44.0. 40 = 8 pts a GW over the window: above ordinary weeks,
-    # well below a broken squad. The expiry ramp still lowers it towards GW19.
+    # (scripts in the session scratchpad, not committed; drafts-page budget, plan buys
+    # clamped): ordinary squad 5645321 peaks at +16.8 (GW9) and ~0-6 later; the same
+    # squad with its 5 best players ruled out +77.8; entry 107342 +49.6. 40 = 8 pts a
+    # GW over the window: above ordinary weeks, well below a broken squad. The expiry
+    # ramp still lowers it towards GW19 (32/24/16/8/0 over GW15-19) — revisit against
+    # chip_plan_snapshots after 2-3 GWs.
     "wildcard": 40.0,  # [tuned] was 120.0
 }  # [untested]
 CHIP_PLAN_EXPIRY_RAMP_GWS = 5   # [untested] threshold decays linearly to 0 over the last N GWs

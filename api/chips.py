@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query
 from api.chat import _build_context_for_entry
 from src import config, fpl_client, transfer_planner
 from src.chip_advisor import build_chip_plan
+from src.squad_builder import squad_budget_breakdown
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -198,14 +199,23 @@ def _wildcard_preset_squads(ctx):
         if not projected:
             return None
         last = projected[-1]
-        squad_value = float(pd.to_numeric(ctx["squad"].get("price_m"), errors="coerce").fillna(0).sum())
-        budget = squad_value + float(ctx.get("bank_m") or 0.0)
+        # The drafts page's budget (FPL entry value = selling prices + bank), so the
+        # banner's number describes the squad "See the squad" opens.
+        entry_history = ctx.get("entry_history") or {}
+        if entry_history.get("value"):
+            budget = float(squad_budget_breakdown(entry_history, None, None)["budget_m"])
+        else:
+            squad_value = float(pd.to_numeric(ctx["squad"].get("price_m"), errors="coerce").fillna(0).sum())
+            budget = squad_value + float(ctx.get("bank_m") or 0.0)
         bootstrap = get_bootstrap_cached()
         out = {}
         for gw in sorted(int(g) for g in ctx["gw_projections"]):
-            if gw + horizon - 1 > last:
+            # Windows past the frame are truncated to the GWs projected, the same
+            # window score_wildcard scores, so every candidate uses one optimizer.
+            h = min(horizon, last - gw + 1)
+            if h < 1:
                 continue
-            ids = wc_module.preset_squad_ids(proj, bootstrap, gw, horizon, budget, config.CHIP_PLAN_WC_PRESET)
+            ids = wc_module.preset_squad_ids(proj, bootstrap, gw, h, budget, config.CHIP_PLAN_WC_PRESET)
             if ids:
                 out[gw] = ids
         return out

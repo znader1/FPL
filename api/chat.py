@@ -252,6 +252,7 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
         "fixtures": fixtures,
         "teams_short_map": teams_short_map,
         "breaks": breaks,
+        "entry_history": entry_history,
     }
 
 
