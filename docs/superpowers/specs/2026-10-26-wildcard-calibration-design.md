@@ -91,6 +91,14 @@ The baseline plan uses the headline-plan settings (no hits, free-transfer-bounde
 
 Add a model version to every snapshot row (`player_gw_snapshots` gains a column filled by `scripts/snapshot_to_db.py` from a version string the API reports). After each GW's actuals are filled, a report gives per-version MAE, bias and rank correlation by position and price band, plus captain-pick hit rate. Output goes to the internal admin surface or a script the user can run; no user-facing page.
 
+## Calls made by the designer (check these)
+
+- **Which squad the "play it" verdict measures.** `chip_advisor.score_wildcard` builds its own pure-xPts squad, not a preset draft. The verdict should measure the Balanced preset draft (the default preset), built through `add_wildcard_scores` and the preset builder, so the banner's number describes a squad the user can open and the captaincy fix reaches the verdict.
+- **Banner button.** The banner reuses `ChipNudgeCard` when the nudge chip is the wildcard; its button navigates to the three-squad wildcard page. It never commits the chip or changes the persisted chip strategy (previews must not leak into the plan). `WildcardCard` and its pitch-preview toggle are removed. Nudges for other chips keep today's card.
+- **Calibration population and metrics.** All player-GWs where the player's team had a fixture (benched and zero-minute included, because projections carry minutes risk), with an appearances-only breakdown alongside. Report both 1-GW error and 5-GW sums, since the wildcard consumes 5-GW sums. "Not worse" means overall 1-GW MAE within 1% of the current model.
+- **Last season.** Last season cannot be replayed with full parity: the historical source has no `ep_next` or availability. It may be used as directional evidence only, labelled non-parity, never as the deciding test.
+- **Baseline headline flag.** Part 4 flips `CHIP_PLAN_BASELINE_HEADLINE_SETTINGS` on, overriding its "wait for the parity harness" note. The headline settings are what the user is shown, so the baseline should match them now.
+
 ## Left to the builder
 
 - The exact replay harness design, as long as it uses production code paths and config with no future leak.
