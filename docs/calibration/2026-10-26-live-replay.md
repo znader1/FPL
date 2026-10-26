@@ -50,7 +50,7 @@ The first run used today's `knowledge_discount.json` for every replayed GW, whic
 
 Same conclusion as above. Players without a snapshot row for a GW are dropped from that GW, never defaulted: 15 at GW3, 10 at GW4, 1–2 from GW5 on (new and late-registered players).
 
-Parity note: GW8's stored projections were made with the price pull at 5, so `--parity-gw 8` now needs `--grid "PROJ_SHRINKAGE_GAMES=5"`-style overrides on the parity call, or a GW produced by the shipped version, to read near zero again.
+Parity note: GW8's stored projections were made with the price pull at 5 (and the knowledge file on), so `--parity-gw 8` no longer reads near zero. Check parity on the first GW whose snapshot carries `model_version` `2026-10-26.shrink25`, with the knowledge file in place.
 
 ## Options
 
