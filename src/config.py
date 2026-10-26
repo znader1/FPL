@@ -234,7 +234,7 @@ TRANSFER_PLANNER_RED_FLAG_MAX_CHANCE = 0.0  # [untested]
 # transfer planner chases him instead of rolling. Shrink each player's blended
 # baseline toward slope[element_type] × price_m, weighted by finished
 # gameweeks; fades as the season accumulates evidence. 0 disables.
-PROJ_SHRINKAGE_GAMES = 5.0  # [untested]
+PROJ_SHRINKAGE_GAMES = 2.5  # [tuned] was 5.0. Live-season replay 2026-10-26 (docs/calibration/2026-10-26-live-replay.md; GW8 parity 0.026 mean |diff|, corr 0.999): 1-GW tune MAE 1.226 -> 1.215, 5-GW MAE 4.95 -> 4.83, band bias 1.51 -> 1.35; MID £8m+ bias roughly unchanged (0 would cut more error but worsen it). User chose the half step; previous value runs in shadow (PROJ_SHADOW_OVERRIDES)
 PROJ_PRICE_PRIOR_SLOPE = {1: 0.55, 2: 0.50, 3: 0.45, 4: 0.42}  # [untested] element_type -> prior ppg per £1m
 
 # First-choice penalty takers are worth ~a penalty every 3 games on top of
@@ -762,9 +762,9 @@ PROJ_MODEL_BLEND_WEIGHT = 0.7  # [untested] (directional sweep only) 2026-10-22 
 # model's values of exactly the keys that changed, and scripts/shadow_snapshot.py
 # (GitHub snapshot job) computes that previous model next to the current one so
 # scripts/monitor_report.py can judge both on the same weeks.
-PROJ_MODEL_VERSION = "2026-10-22.blend70"  # [operational]
-PROJ_SHADOW_MODEL_VERSION = None  # [operational]
-PROJ_SHADOW_OVERRIDES = {}  # [operational]
+PROJ_MODEL_VERSION = "2026-10-26.shrink25"  # [operational]
+PROJ_SHADOW_MODEL_VERSION = "2026-10-22.blend70"  # [operational]
+PROJ_SHADOW_OVERRIDES = {"PROJ_SHRINKAGE_GAMES": 5.0}  # [operational]
 
 # --- LLM specialist agents (api/chat.py) ---
 # Inject the reflection agent's learned strategy rules (src/agent_memory
