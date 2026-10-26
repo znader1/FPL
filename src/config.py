@@ -600,6 +600,21 @@ FDR_HOME_XG_MULT = 1.10              # [untested] home attacking boost when proj
 FDR_AWAY_XG_MULT = 0.92              # [untested] away attacking penalty
 FDR_RATING_MIN = 0.50                # [untested] clamp on attack/defense rating multipliers
 FDR_RATING_MAX = 1.80  # [untested]
+
+# --- Availability-adjusted team strength (2026-10-26 calibration spec, part 2) ---
+# A doubtful or missing key player weakens his team by his share of its recent
+# output: attack by (xG + xA) share, defence by keeper/defender minutes share.
+# That lowers his team's ratings (opponents' fixtures get easier) and, because a
+# player's own team attack is baked into his per-90 rates, a teammate multiplier
+# on the other MID/FWD players' final xPts. No history can backtest it; it ships
+# with the previous model in shadow (plan 1's rollback rule).
+AVAIL_ENABLED = True  # [flag]
+AVAIL_SHARE_WINDOW_MATCHES = 6  # [untested] team matches the output shares are measured over
+AVAIL_ATTACK_IMPACT = 0.6  # [untested] share of a missing player's attacking output the team loses (replacements cover the rest)
+AVAIL_DEF_IMPACT = 0.3  # [untested] defence-rating increase (weaker) per unit of missing defensive minutes share
+AVAIL_TEAMMATE_IMPACT = 0.5  # [untested] teammates' xPts drop per unit of missing attacking share
+AVAIL_TEAMMATE_FLOOR = 0.85  # [untested] teammate multiplier never goes below this, however many are out
+AVAIL_DOUBT_DEFAULT_CHANCE = 0.5  # [untested] play probability for a doubtful player with no published chance
 FDR_LEAGUE_AVG_XG_FALLBACK = 1.40    # [untested] per-team per-match league-average xG when data is thin
 FDR_KNOWLEDGE_DISCOUNT_PATH = "data/models/knowledge_discount.json"  # [operational]
 # Player-level knowledge (news/injury) for the squad picker.
