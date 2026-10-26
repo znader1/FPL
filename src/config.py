@@ -757,6 +757,14 @@ ODDS_TEAM_ALIASES = {}       # [operational] extra {fpl_name: odds_api_name} fix
 # wildcard/transfer problem the 1-GW MAE does not measure. Do not raise past
 # 0.8 (degrades); revisit with a horizon-aware backtest.
 PROJ_MODEL_BLEND_WEIGHT = 0.7  # [untested] (directional sweep only) 2026-10-22 sweep (2025-26 GW6-17, 1-GW MAE): 0.5=1.892, 0.7=1.895, 0.85=1.911 — tie; 0.7 chosen so fixture/underlying outweighs recent points (user call); was 0.5 [tuned]
+# Monitoring (2026-10-26 calibration spec, part 6). Bump PROJ_MODEL_VERSION on every
+# projection change; when a change ships, PROJ_SHADOW_OVERRIDES holds the previous
+# model's values of exactly the keys that changed, and scripts/shadow_snapshot.py
+# (GitHub snapshot job) computes that previous model next to the current one so
+# scripts/monitor_report.py can judge both on the same weeks.
+PROJ_MODEL_VERSION = "2026-10-22.blend70"  # [operational]
+PROJ_SHADOW_MODEL_VERSION = None  # [operational]
+PROJ_SHADOW_OVERRIDES = {}  # [operational]
 
 # --- LLM specialist agents (api/chat.py) ---
 # Inject the reflection agent's learned strategy rules (src/agent_memory

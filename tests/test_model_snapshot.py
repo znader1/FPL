@@ -1,3 +1,4 @@
+from src import config
 import pandas as pd
 from fastapi.testclient import TestClient
 
@@ -59,6 +60,7 @@ def test_model_snapshot_payload_shape(monkeypatch):
     assert body["season"] == "2026-27"
     assert body["deadline_utc"].startswith("2026-08-28")
     assert isinstance(body["blend_weight"], float)
+    assert body["model_version"] == config.PROJ_MODEL_VERSION
     assert body["finished_gws"] == [1]
     p = body["players"][0]
     assert p["player_id"] == 480

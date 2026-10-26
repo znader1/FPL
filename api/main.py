@@ -2040,6 +2040,7 @@ def build_model_snapshot():
         "next_gw": gw,
         "deadline_utc": next_ev.get("deadline_time"),
         "blend_weight": float(config.PROJ_MODEL_BLEND_WEIGHT),
+        "model_version": config.PROJ_MODEL_VERSION,
         "finished_gws": sorted({e for e in finished if e}),
         "players": players,
     }
