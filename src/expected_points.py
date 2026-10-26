@@ -34,7 +34,7 @@ except Exception:  # pragma: no cover - flat script usage
 
 
 def build_ratings(asof=None, match_df=None, teams_short_map=None,
-                  base_dir="data/processed/fpl", knowledge_path=None):
+                  base_dir="data/processed/fpl", knowledge_path=None, missing=None):
     """Team attack/defense ratings with the knowledge discount applied."""
     if match_df is None:
         match_df = fixture_difficulty.load_match_history(base_dir=base_dir)
@@ -45,6 +45,9 @@ def build_ratings(asof=None, match_df=None, teams_short_map=None,
     ratings = fixture_difficulty.apply_knowledge_discount(
         ratings, teams_short_map=teams_short_map, path=knowledge_path
     )
+    if missing:
+        from src import availability
+        ratings = availability.apply_to_ratings(ratings, missing)
     return ratings
 
 
@@ -59,6 +62,7 @@ def build_expected_points(
     base_dir="data/processed/fpl",
     asof=None,
     knowledge_path=None,
+    missing=None,
 ):
     """
     Build the ``xpts_model_*`` table over ``[gw_start, gw_start + horizon - 1]``.
@@ -100,6 +104,11 @@ def build_expected_points(
     ratings = fixture_difficulty.apply_knowledge_discount(
         ratings, teams_short_map=teams_short_map, path=knowledge_path
     )
+    if missing:
+        # Who is available this window (calibration spec part 2): a missing key
+        # player weakens his team's attack / defence for opponents' outlooks.
+        from src import availability
+        ratings = availability.apply_to_ratings(ratings, missing)
 
     out = pd.DataFrame({"id": pd.to_numeric(elements["id"], errors="coerce")})
     out = out[out["id"].notna()].copy()

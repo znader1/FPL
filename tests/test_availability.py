@@ -87,3 +87,10 @@ def test_out_player_ignores_own_share():
     els, shares = _striker("s", None)
     mult = av.teammate_multiplier(shares, els, av.team_missing(shares, els, 5), 5)
     assert mult.loc[9] == 1.0
+
+
+def test_ratings_with_non_team_entries_pass_through():
+    ratings = {1: {"attack": 1.0, "defense": 1.0}, "_league_avg_xg": 1.4}
+    out = av.apply_to_ratings(ratings, {1: {"attack": 0.5, "defence": 0.0}})
+    assert out["_league_avg_xg"] == 1.4
+    assert out[1]["attack"] < 1.0

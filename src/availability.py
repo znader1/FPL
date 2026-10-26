@@ -89,6 +89,9 @@ def apply_to_ratings(ratings, missing):
     lo, hi = float(config.FDR_RATING_MIN), float(config.FDR_RATING_MAX)
     out = {}
     for team, r in (ratings or {}).items():
+        if not isinstance(r, dict):
+            out[team] = r          # league-level entries (averages, meta) pass through
+            continue
         r = dict(r)
         try:
             miss = (missing or {}).get(int(team))

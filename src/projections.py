@@ -95,7 +95,7 @@ def resolve_market_difficulty(names_by_id):
         return {}
 
 
-def resolve_projection_difficulty_ratings(teams_short_map):
+def resolve_projection_difficulty_ratings(teams_short_map, missing=None):
     """Build the xG ratings for the projections difficulty source, or None.
 
     Reuses the same loaders the blend leg patches in backtests, so the
@@ -107,7 +107,11 @@ def resolve_projection_difficulty_ratings(teams_short_map):
         match_df = _fd.load_match_history()
         team_xg = _fd.build_team_match_xg(match_df)
         ratings = _fd.resolve_team_ratings(team_xg, teams_short_map=teams_short_map)
-        return _fd.apply_knowledge_discount(ratings, teams_short_map=teams_short_map)
+        ratings = _fd.apply_knowledge_discount(ratings, teams_short_map=teams_short_map)
+        if missing:
+            from src import availability as _av
+            ratings = _av.apply_to_ratings(ratings, missing)
+        return ratings
     except Exception:
         return None
 
@@ -674,9 +678,22 @@ def project_elements_next_gws(
     # multiplier (and the published diff_avg_gw{n}) come from our own xG
     # attack/defence ratings instead of FPL's official FDR. Fail-soft: no
     # usable ratings → the legacy FPL-FDR path below runs unchanged.
+    # Availability-adjusted strength (calibration spec part 2): computed once,
+    # fail-soft — any error leaves today's projections untouched.
+    avail_shares, avail_missing = None, None
+    if config.AVAIL_ENABLED:
+        try:
+            from . import availability as _av
+            from src import fixture_difficulty as _fd_av
+            avail_shares = _av.team_shares(_fd_av.load_match_history(), gw_start)
+            avail_missing = _av.team_missing(avail_shares, df, horizon_gws)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("availability adjustment skipped: %s", exc)
+            avail_shares, avail_missing = None, None
+
     diff_source = str(config.PROJ_DIFFICULTY_SOURCE)
     xg_diff_ratings = (
-        resolve_projection_difficulty_ratings(teams_short_map)
+        resolve_projection_difficulty_ratings(teams_short_map, missing=avail_missing)
         if diff_source == "xg_ratings" else None
     )
 
@@ -850,11 +867,33 @@ def project_elements_next_gws(
             from . import expected_points as _xg_model
 
             model_df = _xg_model.build_expected_points(
-                df, fixtures, teams_short_map, gw_start, horizon_gws
+                df, fixtures, teams_short_map, gw_start, horizon_gws, missing=avail_missing
             )
             df = _xg_model.blend_into_projections(df, model_df, blend_weight, gws)
         except Exception:
             pass
+
+    # Teammates of a missing attacker lose output his own per-90 rates can't see
+    # (a player's own team attack is baked into them), so scale their final xPts.
+    df["avail_teammate_mult"] = 1.0
+    if avail_missing:
+        try:
+            from . import availability as _av
+            mult = _av.teammate_multiplier(avail_shares, df, avail_missing, horizon_gws)
+            m = pd.to_numeric(df["id"], errors="coerce").map(mult).fillna(1.0).astype(float)
+            df["avail_teammate_mult"] = m.values
+            if (m != 1.0).any():
+                for gw in gws:
+                    col = f"xpts_gw{gw}"
+                    if col in df.columns:
+                        df[col] = pd.to_numeric(df[col], errors="coerce") * m.values
+                df["xpts_horizon"] = sum(
+                    pd.to_numeric(df[f"xpts_gw{gw}"], errors="coerce").fillna(0.0)
+                    for gw in gws if f"xpts_gw{gw}" in df.columns
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("teammate availability multiplier skipped: %s", exc)
+            df["avail_teammate_mult"] = 1.0
 
     keep_base = [
         "id",
@@ -914,6 +953,7 @@ def project_elements_next_gws(
             ]
         )
     keep.append("xpts_horizon")
+    keep.append("avail_teammate_mult")
     if "xpts_model_horizon" in df.columns:
         keep.append("xpts_model_horizon")
     # Component probabilities and the points distribution from the xG model, for
