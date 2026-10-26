@@ -17,6 +17,7 @@
 - Banner copy, exactly: `Play your wildcard this week · about +{N} pts over GW{a}–{b} vs your planned transfers`, with N = `Math.round(ev_gain)` and the button label `See the squad`.
 - Chip names stay canonical (`wildcard | free_hit | bench_boost | triple_captain`); the frontend never maps chip names.
 - Frontend work happens in a new worktree from `origin/main` (`6d6d075`); the shared checkout at `/Users/ziadnader/05_Projects/Tech/FPL-Assistant-Front/fpl-decision-hub` (on `feature/command-center`) is never switched. Backend in `/Users/ziadnader/05_Projects/Tech/FPL-Assistant/worktrees/wildcard-calibration`.
+- `.venv/bin/python` in every command means `/Users/ziadnader/05_Projects/Tech/FPL-Assistant/FPL/.venv/bin/python` (the worktree has no venv of its own); run commands from the worktree root. Frontend commands run from the frontend worktree root.
 - One PR per repo; security review on each diff before its PR. The backend PR merges before the frontend one (the frontend reads the new optional `window_gws`, so an older backend still renders).
 
 ## Review Focus
@@ -78,13 +79,14 @@
 - Config: `CHIP_PLAN_BASELINE_HEADLINE_SETTINGS = True  # [flag] spec 2026-10-26 overrides the wait-for-parity note`; `CHIP_PLAN_WC_PRESET = "balanced"  # [operational]`; `CHIP_PLAN_MIN_EV["wildcard"]` recalibrated in Step 5.
 - Produces:
   - `build_chip_plan(..., wc_squads: dict[int, set[int]] | None = None)` passes through `recommend_chips(..., wc_squads=...)` to `score_wildcard(..., wc_squads=..., plan_gain_by_gw: dict[int, float] | None = None)`.
-  - `score_wildcard`: the wildcard side uses `wc_squads[gw]` when present (best XI per future GW from that squad, as today), else today's pure-xPts build with `" [pure-xPts squad — preset draft unavailable]"` appended to the reasoning line. The netted plan gain is `sum(plan_gain_by_gw.get(g, 0.0) for g in future_gws)`, replacing the whole-plan `transfer_plan_net_gain`.
-  - `plan_gain_by_gw` is built in `build_chip_plan` from `transfer_plan["plan"]` entries (`{"gw": g, "net_gain": x}`).
+  - `score_wildcard`: the wildcard side uses `wc_squads[gw]` when present (best XI per future GW from that squad, as today), else today's pure-xPts build with `" [pure-xPts squad — preset draft unavailable]"` appended to the reasoning line.
+  - **The baseline side is the plan's own squad, scored like the other two.** Each plan entry's `net_gain` is the horizon-total gain of that GW's moves (`m["gain"]` is computed over the remaining horizon), so summing entries by GW would double-count and cut off gains. Instead, `plan_squads_by_gw(start_ids: set[int], plan: list[dict]) -> dict[int, set[int]]` (new, pure, in `src/chip_advisor.py`) applies each entry's `moves[*]["sell"]["id"] → ["buy"]["id"]` in GW order and returns the squad held in each GW. The baseline total for a wildcard window is the best-XI xPts of that GW's plan squad in each `future_gw` (same `_pick_best_xi`, same unclamped market as "your squad" today), minus the plan's `hit_cost` for GWs inside the window. Uplift = wildcard total − baseline total; `transfer_plan_net_gain` is no longer subtracted. GWs past the plan's last entry keep the last plan squad.
   - `api/chips.py` builds `wc_squads` for every candidate GW in the model zone with `preset_squad_ids(ctx["proj"], bootstrap, g, config.CHIP_WILDCARD_DEFAULT_HORIZON_GWS, budget, config.CHIP_PLAN_WC_PRESET)`, where the budget is the squad value + bank already computed for the plan. A failure for one GW leaves that key out, and so does a candidate GW whose 5-GW window runs past the last `xpts_gw*` column in `ctx["proj"]` (the preset scores would read missing GWs as 0).
   - Wildcard nudge gains `window_gws: [g, g + horizon - 1]`.
 
 - [ ] **Step 1: Write the failing tests**
-  - `test_plan_gain_is_window_matched`: plan gains `{9: 3, 10: 2, 15: 50}`, wildcard window 9–13 → netted gain 5, not 55.
+  - `test_plan_squads_follow_moves_in_order`: start {1..15}, GW9 sells 3 buys 30, GW11 sells 30 buys 31 → GW9–10 squads hold 30, GW11+ hold 31, never both.
+  - `test_baseline_is_plan_squad_xi_over_the_window`: a market where the plan's GW9 buy scores 10 each GW and the seller 2 → over a 5-GW window the baseline beats the frozen squad by exactly 5 × 8 minus any hit cost in the window, and a big move planned for GW15 (outside the window) changes nothing.
   - `test_wc_squad_from_preset_is_used`: given `wc_squads={9: ids}`, the wildcard total is computed from those ids (a squad of known xPts gives the expected total).
   - `test_missing_preset_squad_falls_back_and_says_so`.
   - `test_wildcard_nudge_carries_window`: a wildcard rec for the current GW above the floor → `nudge["window_gws"] == [9, 13]`.
@@ -109,12 +111,13 @@
 
 **Interfaces:**
 - Consumes: backend nudge `window_gws?: [number, number]`.
-- Produces: `ChipNudge.window_gws?: [number, number]`. `ChipNudgeCard` for `nudge.chip === "wildcard"` renders the exact copy from Global Constraints and a `See the squad` link to `/app/wildcard` (React Router `Link`); it never calls `onApplyChip`. Other chips render as today.
+- Produces: `ChipNudge.window_gws?: [number, number]`. In `Index.tsx` the nudge block also hides the wildcard nudge when `plan?.chip === "wildcard"` (today that check lived in `showWildcardCard`, which is removed). `ChipNudgeCard` for `nudge.chip === "wildcard"` renders the exact copy from Global Constraints and a `See the squad` link to `/app/wildcard` (React Router `Link`); it never calls `onApplyChip`. Other chips render as today.
 
 - [ ] **Step 1: Write the failing tests** (`// @vitest-environment jsdom`, wrap in `MemoryRouter`)
   - `renders the wildcard verdict in plain words`: nudge `{chip: "wildcard", event_id: 9, ev_gain: 14.3, window_gws: [9, 13]}` → text `Play your wildcard this week · about +14 pts over GW9–13 vs your planned transfers`; link `See the squad` has `href="/app/wildcard"`.
   - `the wildcard link never applies the chip`: clicking it does not call `onApplyChip`.
   - `falls back without window_gws`: → `… about +14 pts over the next 5 GWs vs your planned transfers`.
+  - `no wildcard banner once the plan plays it`: extract the Index gate as `showChipNudge(nudge, chipStrategy, planChip): boolean` in `src/lib/planFlow.ts` and test it: wildcard nudge with `planChip === "wildcard"` → false; with `planChip === "none"` → true; a triple-captain nudge with `chipStrategy === "triple_captain"` → false.
   - `other chips unchanged`: a triple-captain nudge still shows `Apply chip` and calls `onApplyChip("triple_captain")`.
 - [ ] **Step 2: Run to verify they fail** — `npx vitest run src/components/ChipNudgeCard.test.tsx`.
 - [ ] **Step 3: Implement** the type, the card, and the removals in `Index.tsx` and `planFlow.ts`; delete `WildcardCard` and its test. The Chip step's `Compare three wildcard squads` link stays.

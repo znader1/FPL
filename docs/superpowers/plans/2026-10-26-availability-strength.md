@@ -18,6 +18,7 @@
 - Ratings stay within `FDR_RATING_MIN..FDR_RATING_MAX` after adjustment.
 - No future leak: shares use only matches with `event < gw_start`; availability comes from the elements frame passed in (the replay feeds as-of status).
 - Ships without a backtest (no history can test it), with the previous model in shadow and plan 1's rollback rule.
+- `.venv/bin/python` in every command means `/Users/ziadnader/05_Projects/Tech/FPL-Assistant/FPL/.venv/bin/python` (the worktree has no venv of its own); run commands from the worktree root.
 
 ## Review Focus
 
@@ -73,7 +74,7 @@
   - In `project_elements_next_gws`, when `config.AVAIL_ENABLED`: compute `shares` from `fixture_difficulty.load_match_history()` (the loader the backtests already patch, so replays stay leak-safe), then `missing`, and pass `missing` to both rating builders. After the model blend, multiply every `xpts_gw{g}` by `teammate_multiplier`, recompute `xpts_horizon` the same way the function already does, and add an output column `avail_teammate_mult` (1.0 when disabled). Any exception in the availability path logs a warning and falls back to unadjusted projections.
 
 - [ ] **Step 1: Write the failing tests** with a small synthetic market and match history (reuse `tests/wildcard_market_fixture.py` patterns; monkeypatch `fixture_difficulty.load_match_history`):
-  - `test_disabled_never_touches_projections`: under `config_overrides({"AVAIL_ENABLED": False})`, monkeypatch every `availability` function to raise; projections still return, `avail_teammate_mult` is all 1.0, and `xpts_gw*` equal a second disabled run.
+  - `test_disabled_never_touches_projections`: under `config_overrides({"AVAIL_ENABLED": False})`, wrap every `availability` function in a spy; assert each spy's call count is 0 (a raising stub would be swallowed by the fallback and prove nothing), `avail_teammate_mult` is all 1.0, and `xpts_gw*` equal a second disabled run.
   - `test_striker_out_lowers_teammates_and_raises_opponent_defenders`: striker status `s` → his MID teammate's `xpts_gw{N}` falls, and a defender of the GW opponent gains.
   - `test_failure_falls_back`: monkeypatch `availability.team_shares` to raise → projections still return, `avail_teammate_mult` all 1.0.
 - [ ] **Step 2: Run to verify they fail.**
