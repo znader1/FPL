@@ -64,6 +64,7 @@ Full analysis tables: session scratchpad `an/findings_gw9.md` (not committed; th
 - **Monitoring is internal for now.**
 - **Banner, option A:** silent on ordinary weeks; the wildcard sits in the Chip step with the other chips. A banner appears only when the chip planner recommends playing the wildcard this GW, worded like "Play your wildcard this week · about +14 pts over GW9–13 vs your planned transfers", with a button to the draft. The "Compare three wildcard squads" link stays reachable from the Chip step.
 - **Availability affects opponents too:** a weakened team is an easier fixture for the other side.
+- **Backtest, then ship, then monitor.** Projection changes (parts 1 and 2) are tested on past weeks first. The results are shown to the user in plain terms (what changed for which kinds of players, and by how much) before anything ships. After shipping, the following gameweeks are monitored against the previous model on the same weeks.
 
 ## The parts
 
@@ -89,7 +90,7 @@ The baseline plan uses the headline-plan settings (no hits, free-transfer-bounde
 
 ### 6. Monitoring
 
-Add a model version to every snapshot row (`player_gw_snapshots` gains a column filled by `scripts/snapshot_to_db.py` from a version string the API reports). After each GW's actuals are filled, a report gives per-version MAE, bias and rank correlation by position and price band, plus captain-pick hit rate. Output goes to the internal admin surface or a script the user can run; no user-facing page.
+Add a model version to every snapshot row (`player_gw_snapshots` gains a column filled by `scripts/snapshot_to_db.py` from a version string the API reports). Each time a projection change ships, the previous model keeps being computed in shadow and its predictions are stored next to the live ones for the same GWs, so both are judged on identical weeks. After each GW's actuals are filled, a report gives per-version MAE, bias and rank correlation by position and price band, plus captain-pick hit rate. Output goes to the internal admin surface or a script the user can run; no user-facing page.
 
 ## Calls made by the designer (check these)
 
@@ -98,6 +99,9 @@ Add a model version to every snapshot row (`player_gw_snapshots` gains a column 
 - **Calibration population and metrics.** All player-GWs where the player's team had a fixture (benched and zero-minute included, because projections carry minutes risk), with an appearances-only breakdown alongside. Report both 1-GW error and 5-GW sums, since the wildcard consumes 5-GW sums. "Not worse" means overall 1-GW MAE within 1% of the current model.
 - **Last season.** Last season cannot be replayed with full parity: the historical source has no `ep_next` or availability. It may be used as directional evidence only, labelled non-parity, never as the deciding test.
 - **Baseline headline flag.** Part 4 flips `CHIP_PLAN_BASELINE_HEADLINE_SETTINGS` on, overriding its "wait for the parity harness" note. The headline settings are what the user is shown, so the baseline should match them now.
+
+- **Rollback rule.** After three finished GWs, a shipped projection change is rolled back if the shadowed previous model beats it on overall 1-GW MAE by more than 1%, or if the price-band bias it was meant to fix is worse. The shadow then stops.
+- **Availability (part 2) ships without a backtest.** No history can test it. It ships with the previous model in shadow and the same rollback rule.
 
 ## Left to the builder
 
