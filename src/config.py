@@ -777,9 +777,9 @@ PROJ_MODEL_BLEND_WEIGHT = 0.7  # [untested] (directional sweep only) 2026-10-22 
 # model's values of exactly the keys that changed, and scripts/shadow_snapshot.py
 # (GitHub snapshot job) computes that previous model next to the current one so
 # scripts/monitor_report.py can judge both on the same weeks.
-PROJ_MODEL_VERSION = "2026-10-26.shrink25"  # [operational]
+PROJ_MODEL_VERSION = "2026-10-26.shrink25+avail1"  # [operational]
 PROJ_SHADOW_MODEL_VERSION = "2026-10-22.blend70"  # [operational]
-PROJ_SHADOW_OVERRIDES = {"PROJ_SHRINKAGE_GAMES": 5.0}  # [operational]
+PROJ_SHADOW_OVERRIDES = {"PROJ_SHRINKAGE_GAMES": 5.0, "AVAIL_ENABLED": False}  # [operational] the pre-calibration model: price pull 5 and no availability adjustment, judged together against both changes
 
 # --- LLM specialist agents (api/chat.py) ---
 # Inject the reflection agent's learned strategy rules (src/agent_memory
