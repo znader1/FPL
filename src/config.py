@@ -600,6 +600,21 @@ FDR_HOME_XG_MULT = 1.10              # [untested] home attacking boost when proj
 FDR_AWAY_XG_MULT = 0.92              # [untested] away attacking penalty
 FDR_RATING_MIN = 0.50                # [untested] clamp on attack/defense rating multipliers
 FDR_RATING_MAX = 1.80  # [untested]
+
+# --- Availability-adjusted team strength (2026-10-26 calibration spec, part 2) ---
+# A doubtful or missing key player weakens his team by his share of its recent
+# output: attack by (xG + xA) share, defence by keeper/defender minutes share.
+# That lowers his team's ratings (opponents' fixtures get easier) and, because a
+# player's own team attack is baked into his per-90 rates, a teammate multiplier
+# on the other MID/FWD players' final xPts. No history can backtest it; it ships
+# with the previous model in shadow (plan 1's rollback rule).
+AVAIL_ENABLED = True  # [flag]
+AVAIL_SHARE_WINDOW_MATCHES = 6  # [untested] team matches the output shares are measured over
+AVAIL_ATTACK_IMPACT = 0.6  # [untested] share of a missing player's attacking output the team loses (replacements cover the rest)
+AVAIL_DEF_IMPACT = 0.3  # [untested] defence-rating increase (weaker) per unit of missing defensive minutes share
+AVAIL_TEAMMATE_IMPACT = 0.5  # [untested] teammates' xPts drop per unit of missing attacking share
+AVAIL_TEAMMATE_FLOOR = 0.85  # [untested] teammate multiplier never goes below this, however many are out
+AVAIL_DOUBT_DEFAULT_CHANCE = 0.5  # [untested] play probability for a doubtful player with no published chance
 FDR_LEAGUE_AVG_XG_FALLBACK = 1.40    # [untested] per-team per-match league-average xG when data is thin
 FDR_KNOWLEDGE_DISCOUNT_PATH = "data/models/knowledge_discount.json"  # [operational]
 # Player-level knowledge (news/injury) for the squad picker.
@@ -762,9 +777,9 @@ PROJ_MODEL_BLEND_WEIGHT = 0.7  # [untested] (directional sweep only) 2026-10-22 
 # model's values of exactly the keys that changed, and scripts/shadow_snapshot.py
 # (GitHub snapshot job) computes that previous model next to the current one so
 # scripts/monitor_report.py can judge both on the same weeks.
-PROJ_MODEL_VERSION = "2026-10-26.shrink25"  # [operational]
+PROJ_MODEL_VERSION = "2026-10-26.shrink25+avail1"  # [operational]
 PROJ_SHADOW_MODEL_VERSION = "2026-10-22.blend70"  # [operational]
-PROJ_SHADOW_OVERRIDES = {"PROJ_SHRINKAGE_GAMES": 5.0}  # [operational]
+PROJ_SHADOW_OVERRIDES = {"PROJ_SHRINKAGE_GAMES": 5.0, "AVAIL_ENABLED": False}  # [operational] the pre-calibration model: price pull 5 and no availability adjustment, judged together against both changes
 
 # --- LLM specialist agents (api/chat.py) ---
 # Inject the reflection agent's learned strategy rules (src/agent_memory

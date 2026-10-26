@@ -96,6 +96,10 @@ All loaders return empty frames when data is missing → model degrades graceful
 
 `scripts/backtest_*.py` + `src/backtest_adapter.py` / `backtest_data.py` / `backtest_metrics.py`. Pure metrics (MAE, captain hit-rate/regret, top-N precision) and an A/B runner that patches both history loaders with **no future leak** and uses real per-GW starts when present. Used to prove/reject model changes before they ship.
 
+### Availability-adjusted team strength (2026-10-26)
+
+`src/availability.py`, behind `AVAIL_ENABLED` (on). A doubtful or missing player weakens his team by his share of its recent output (attack: xG + xA share over the last `AVAIL_SHARE_WINDOW_MATCHES` team matches; defence: keeper/defender minutes share), scaled by (1 − play probability) and, for a doubt (`d`), by one GW of the horizon. That adjusts the team's attack/defence ratings after the knowledge discount in both rating builders (projection difficulty + xG model), which moves opponents' clean-sheet and attacking outlooks, and applies a teammate multiplier to the team's other MID/FWD final xPts (`avail_teammate_mult`, floor `AVAIL_TEAMMATE_FLOOR`), because a player's own team attack is baked into his per-90 rates. Fail-soft: any error leaves projections unadjusted. All `AVAIL_*` impacts are `[untested]`; it shipped with the previous model in shadow.
+
 ### Monitoring + live-season replay (2026-10-26)
 
 - **Replay** (`scripts/backtest_live_season.py`, `src/season_replay.py`): replays this season's finished GWs through the production projection code from the stored pre-deadline snapshots (export `player_gw_snapshots` to `data/replay/*.csv`), patching the three history loaders per GW. `--parity-gw N` compares the replay with the stored `model_xpts` (GW8: 0.026 mean |diff|). Ranks candidates by price-band bias with a 1% MAE gate. Results: `docs/calibration/`.

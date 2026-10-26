@@ -109,7 +109,7 @@ def test_market_difficulty_blends_first_gw_only(monkeypatch):
     monkeypatch.setattr(config, "ODDS_DIFFICULTY_BLEND_WEIGHT", 0.5, raising=False)
     # xG ratings say difficulty 3.0 for team 1 in both GWs
     monkeypatch.setattr(projections, "resolve_projection_difficulty_ratings",
-                        lambda tsm: {"_league": 1.4, 1: {"attack": 1.0, "defense": 1.0},
+                        lambda tsm, **k: {"_league": 1.4, 1: {"attack": 1.0, "defense": 1.0},
                                      2: {"attack": 1.0, "defense": 1.0}})
     monkeypatch.setattr(projections, "xg_team_difficulty_for_gw",
                         lambda ratings, fixtures, gw: {1: 3.0, 2: 3.0})
@@ -139,7 +139,7 @@ def test_no_market_data_leaves_difficulty_unchanged(monkeypatch):
 
     monkeypatch.setattr(config, "PROJ_DIFFICULTY_SOURCE", "xg_ratings", raising=False)
     monkeypatch.setattr(projections, "resolve_projection_difficulty_ratings",
-                        lambda tsm: {"_league": 1.4, 1: {"attack": 1.0, "defense": 1.0},
+                        lambda tsm, **k: {"_league": 1.4, 1: {"attack": 1.0, "defense": 1.0},
                                      2: {"attack": 1.0, "defense": 1.0}})
     monkeypatch.setattr(projections, "xg_team_difficulty_for_gw",
                         lambda ratings, fixtures, gw: {1: 3.0, 2: 3.0})

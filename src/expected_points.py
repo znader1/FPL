@@ -59,6 +59,7 @@ def build_expected_points(
     base_dir="data/processed/fpl",
     asof=None,
     knowledge_path=None,
+    missing_by_gw=None,
 ):
     """
     Build the ``xpts_model_*`` table over ``[gw_start, gw_start + horizon - 1]``.
@@ -100,6 +101,14 @@ def build_expected_points(
     ratings = fixture_difficulty.apply_knowledge_discount(
         ratings, teams_short_map=teams_short_map, path=knowledge_path
     )
+    # Who is available each GW (calibration spec part 2): a missing key player
+    # weakens his team's attack / defence for opponents' outlooks that GW.
+    ratings_by_gw = {}
+    if missing_by_gw:
+        from src import availability
+        for g, miss in missing_by_gw.items():
+            if miss:
+                ratings_by_gw[int(g)] = availability.apply_to_ratings(ratings, miss)
 
     out = pd.DataFrame({"id": pd.to_numeric(elements["id"], errors="coerce")})
     out = out[out["id"].notna()].copy()
@@ -134,7 +143,7 @@ def build_expected_points(
         dc_rates = dc_memo[key]
         mins = minutes_model.minutes_projection(elements, minutes_history, gw)
         ep = output_model.expected_points(
-            elements, fixtures, ratings, player_rates, mins, gw, dc_rates=dc_rates)
+            elements, fixtures, ratings_by_gw.get(int(gw), ratings), player_rates, mins, gw, dc_rates=dc_rates)
 
         col = f"xpts_model_gw{gw}"
         if ep is None or ep.empty:
