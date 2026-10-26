@@ -138,6 +138,7 @@ PROJ_INJURY_FUTURE_GW_FADE = 0.50        # [untested] Future GW injury discount 
 PROJ_NEUTRAL_TEAM_PPG = 1.5  # [untested]
 PROJ_HOME_MULT_HOME = 1.06  # [untested]
 PROJ_HOME_MULT_AWAY = 0.94  # [untested]
+PROJ_FDR_STRENGTH = 1.0  # [untested] scales how far the baseline leg's fixture-difficulty multiplier swings from 1.0; 1.0 = today. Does not touch the xG leg (ratings/venue).
 PROJ_OPP_FORM_FACTOR = 0.12  # [untested]
 PROJ_OPP_FORM_MIN = 0.86  # [untested]
 PROJ_OPP_FORM_MAX = 1.14  # [untested]
