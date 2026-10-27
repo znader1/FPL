@@ -147,3 +147,54 @@ def test_placebo_excludes_keys_and_gk():
             _row(4, 1, 1, 30, 0.0)]
     df = pd.DataFrame(rows)
     assert key_absence.select_placebo(df, {1: [2]}) == {1: 3}
+
+
+# --- Task 4: team effect ----------------------------------------------------
+
+RATINGS = {
+    "_league": 1.4,
+    1: {"attack": 1.0, "defense": 1.0},
+    2: {"attack": 1.0, "defense": 0.6},   # tight
+    3: {"attack": 1.0, "defense": 1.4},   # leaky
+}
+
+
+def _buckets(rows):
+    return pd.DataFrame(rows, columns=["team_id", "fixture", "event", "was_home",
+                                       "team_xg_for", "bucket", "key_xg"])
+
+
+def test_ratio_controls_for_opponent():
+    from src import fixture_difficulty as fd
+    leaky_exp, _ = fd.expected_xg_for_fixture(RATINGS, 1, 3, True)
+    tight_exp, _ = fd.expected_xg_for_fixture(RATINGS, 1, 2, True)
+    fixtures = [_fx(1, 1, 3), _fx(2, 1, 2)]
+    b = _buckets([
+        (1, 1, 1, True, leaky_exp, "present", 0.0),   # vs leaky, key scored nothing himself
+        (1, 2, 2, True, tight_exp, "absent", 0.0),    # vs tight
+    ])
+    out = key_absence.attach_expected(b, RATINGS, fixtures)
+    assert out["opp_id"].tolist() == [3, 2]
+    eff = key_absence.team_effect(out)
+    assert out["team_xg_for"].iloc[1] < out["team_xg_for"].iloc[0]   # raw xG lower when absent
+    assert abs(eff["teammates_effect"] - 1.0) < 1e-6
+
+
+def test_n_absent_zero_gives_nan_effect_not_error():
+    b = key_absence.attach_expected(
+        _buckets([(1, 1, 1, True, 1.4, "present", 0.3)]), RATINGS, [_fx(1, 1, 2)])
+    eff = key_absence.team_effect(b)
+    assert eff["n_absent"] == 0 and eff["n_present"] == 1
+    assert math.isnan(eff["teammates_effect"]) and math.isnan(eff["team_effect"])
+
+
+def test_teammates_effect_ignores_key_players_own_xg():
+    fixtures = [_fx(1, 1, 2), _fx(2, 1, 2)]
+    b = _buckets([
+        (1, 1, 1, True, 2.0, "present", 1.0),   # key made 1.0, teammates 1.0
+        (1, 2, 2, True, 1.0, "absent", 0.0),    # teammates still 1.0
+    ])
+    eff = key_absence.team_effect(key_absence.attach_expected(b, RATINGS, fixtures))
+    assert abs(eff["teammates_effect"] - 1.0) < 1e-9
+    assert eff["team_effect"] < 1.0
+    assert eff["n_benched"] == 0

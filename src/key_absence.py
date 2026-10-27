@@ -197,3 +197,66 @@ def select_placebo(df, key):
         if not g.empty:
             out[int(team_id)] = int(g["element"].iloc[0])
     return out
+
+
+# ---------------------------------------------------------------------------
+# Team effect with fixture expectation
+# ---------------------------------------------------------------------------
+
+def attach_expected(buckets, ratings, fixtures):
+    """
+    Add ``opp_id``, ``expected_for`` (opponent-defence and venue controlled,
+    via ``fixture_difficulty.expected_xg_for_fixture``), ``team_ratio`` and
+    ``teammates_ratio`` (team xG minus the key player's own, over expected).
+    """
+    from src import fixture_difficulty as fd
+
+    out = buckets.copy()
+    if out.empty:
+        for c in ("opp_id", "expected_for", "team_ratio", "teammates_ratio"):
+            out[c] = pd.Series(dtype="float64")
+        return out
+    pair = {}
+    for fx in fixtures or []:
+        fid = pd.to_numeric(fx.get("id"), errors="coerce")
+        if pd.notna(fid):
+            pair[int(fid)] = (fx.get("team_h"), fx.get("team_a"))
+    opp, exp = [], []
+    for tid, fid, home in zip(out["team_id"], out["fixture"], out["was_home"]):
+        h, a = pair.get(int(fid), (None, None))
+        o = a if (h is not None and int(h) == int(tid)) else h
+        o = int(o) if o is not None else None
+        opp.append(o)
+        e, _ = fd.expected_xg_for_fixture(ratings, int(tid), o, bool(home))
+        exp.append(e)
+    out["opp_id"] = opp
+    out["expected_for"] = exp
+    denom = out["expected_for"].where(out["expected_for"] > 0)
+    out["team_ratio"] = out["team_xg_for"] / denom
+    out["teammates_ratio"] = (out["team_xg_for"] - out["key_xg"]) / denom
+    return out
+
+
+def team_effect(buckets):
+    """Bucket means and absent/present effects; NaN effect when a bucket is empty."""
+    def _mean(col, bucket):
+        s = buckets.loc[buckets["bucket"] == bucket, col]
+        return float(s.mean()) if len(s) else float("nan")
+
+    def _ratio(a, b):
+        return a / b if (b == b and a == a and b != 0) else float("nan")
+
+    n = buckets["bucket"].value_counts() if not buckets.empty else {}
+    tr_p, tr_a = _mean("team_ratio", "present"), _mean("team_ratio", "absent")
+    tm_p, tm_a = _mean("teammates_ratio", "present"), _mean("teammates_ratio", "absent")
+    return {
+        "n_present": int(n.get("present", 0)),
+        "n_absent": int(n.get("absent", 0)),
+        "n_benched": int(n.get("benched", 0)),
+        "team_ratio_present": tr_p, "team_ratio_absent": tr_a,
+        "teammates_ratio_present": tm_p, "teammates_ratio_absent": tm_a,
+        "team_effect": _ratio(tr_a, tr_p),
+        "teammates_effect": _ratio(tm_a, tm_p),
+        "xg_for_present": _mean("team_xg_for", "present"),
+        "xg_for_absent": _mean("team_xg_for", "absent"),
+    }
