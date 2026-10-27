@@ -95,3 +95,51 @@ def team_fixture_sets(df, min_rows=MIN_ROWS_PER_TEAM_FIXTURE):
     )
     agg = agg[agg["n"] >= int(min_rows)]
     return agg[cols].sort_values(["team_id", "fixture"]).reset_index(drop=True)
+
+
+def presence_buckets(df, team_fx, team_id, player_id):
+    """
+    The team's played fixtures (from ``team_fixture_sets``) tagged by the key
+    player's status: ``present`` (started), ``benched`` (played, no start),
+    ``absent`` (zero minutes or no row at all -- the live-history producer
+    omits non-players). Only fixtures between the player's first and last
+    appearance for this club are kept, so a mid-season signing or sale is
+    not read as an injury absence. Adds ``bucket`` and ``key_xg``.
+    """
+    cols = ["team_id", "fixture", "event", "was_home", "team_xg_for", "bucket", "key_xg"]
+    team_id = int(team_id)
+    player_id = int(player_id)
+    fx = team_fx[team_fx["team_id"] == team_id].copy()
+    if fx.empty:
+        return pd.DataFrame(columns=cols)
+
+    mine = df[(df["element"] == player_id) & (df["team_id"] == team_id)]
+    played = mine[mine["minutes"] > 0]
+    if played.empty:
+        return pd.DataFrame(columns=cols)
+    order = fx.sort_values(["event", "fixture"])[["fixture"]].reset_index(drop=True)
+    order["pos"] = range(len(order))
+    pos_of = dict(zip(order["fixture"], order["pos"]))
+    appear = [pos_of[f] for f in played["fixture"] if f in pos_of]
+    if not appear:
+        return pd.DataFrame(columns=cols)
+    lo, hi = min(appear), max(appear)
+    fx = fx[fx["fixture"].map(pos_of).between(lo, hi)].copy()
+
+    by_fixture = mine.set_index("fixture")
+    buckets, key_xg = [], []
+    for f in fx["fixture"]:
+        if f in by_fixture.index:
+            r = by_fixture.loc[f]
+            mins = float(r["minutes"])
+            if mins <= 0:
+                buckets.append("absent"); key_xg.append(0.0)
+            elif float(r["starts"]) >= 1:
+                buckets.append("present"); key_xg.append(float(r["expected_goals"]))
+            else:
+                buckets.append("benched"); key_xg.append(float(r["expected_goals"]))
+        else:
+            buckets.append("absent"); key_xg.append(0.0)
+    fx["bucket"] = buckets
+    fx["key_xg"] = key_xg
+    return fx[cols].sort_values(["event", "fixture"]).reset_index(drop=True)
