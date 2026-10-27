@@ -269,3 +269,78 @@ def test_sold_player_fixtures_after_move_excluded():
     df = pd.DataFrame(rows)
     out = key_absence.presence_buckets(df, key_absence.team_fixture_sets(df), team_id=1, player_id=10)
     assert out["fixture"].tolist() == [1]
+
+
+# --- Task 6: signals, overrides, run_analysis -----------------------------
+
+def _boot(elements, teams=None):
+    teams = teams or [{"id": 1, "short_name": "CHE"}, {"id": 2, "short_name": "ARS"}]
+    return {"elements": elements, "teams": teams}
+
+
+def _el(pid, team, code, name, etype=3, now_cost=60, threat=100, creativity=50,
+        minutes=900, total_points=40):
+    return {"id": pid, "team": team, "code": code, "web_name": name, "element_type": etype,
+            "now_cost": now_cost, "threat": str(threat), "creativity": str(creativity),
+            "minutes": minutes, "total_points": total_points}
+
+
+def test_build_signals_joins_last_season_on_code():
+    boot = _boot([_el(10, 1, 777, "Palmer", total_points=40), _el(11, 1, 888, "Nobody", total_points=10)])
+    df = pd.DataFrame([_row(10, 1, 1, 90, 0.5), _row(10, 1, 2, 90, 0.5), _row(11, 1, 1, 90, 0.0)])
+    last_boot = _boot([_el(99, 1, 777, "Palmer")])   # id reissued: 99 last season
+    last_df = pd.DataFrame([_row(99, 1, f, 90, 0.2) for f in range(1, 13)]).assign(total_points=6)
+    sig = key_absence.build_signals(df, boot, last_df, last_boot)
+    p = sig[sig["player_id"] == 10].iloc[0]
+    assert p["this_ppg"] == 20.0                    # 40 pts / 2 appearances
+    assert abs(p["last_ppg"] - 6.0) < 1e-9          # 12 apps of 6
+    assert math.isnan(sig[sig["player_id"] == 11].iloc[0]["last_ppg"])
+    assert p["threat"] == 100.0 and p["now_cost"] == 60 and p["team_id"] == 1
+
+
+def test_build_signals_from_history_uses_file_columns():
+    raw = pd.DataFrame([
+        dict(_row(10, 1, 1, 90, 0.5), threat=30.0, creativity=10.0, value=70, total_points=8),
+        dict(_row(10, 1, 2, 90, 0.5), threat=20.0, creativity=10.0, value=72, total_points=2),
+    ])
+    sig = key_absence.build_signals_from_history(raw)
+    p = sig.iloc[0]
+    assert p["threat"] == 50.0 and p["creativity"] == 20.0 and p["now_cost"] == 72
+    assert p["this_ppg"] == 5.0 and p["minutes"] == 180 and math.isnan(p["last_ppg"])
+
+
+def test_parse_overrides_accent_insensitive_and_errors():
+    boot = _boot([_el(10, 1, 1, "João Pedro"), _el(11, 1, 2, "Palmer"), _el(20, 2, 3, "Saka")])
+    short = {1: "CHE", 2: "ARS"}
+    assert key_absence.parse_overrides("CHE:Joao Pedro,Palmer;ARS:Saka", boot, short) == {1: [10, 11], 2: [20]}
+    assert key_absence.parse_overrides(None, boot, short) == {}
+    with pytest.raises(ValueError, match="CHE.*Nobody"):
+        key_absence.parse_overrides("CHE:Nobody", boot, short)
+
+
+def test_run_analysis_end_to_end_synthetic():
+    rows, fixtures = [], []
+    fid = 0
+    for f in (1, 2, 3, 4):
+        fid += 1
+        fixtures.append(_fx(fid, 1, 2, event=f))
+        rows += _team_block(1, fid, start=1000 * fid, event=f)
+        rows += _team_block(2, fid, start=1000 * fid + 50, event=f)
+        if f <= 2:
+            rows.append(_row(10, 1, fid, 90, 0.6, event=f))   # key on team 1 absent for 3,4
+        rows.append(_row(20, 2, fid, 90, 0.3, event=f))        # key on team 2 always present
+    df = pd.DataFrame(rows)
+    ratings = {"_league": 1.4, 1: {"attack": 1.0, "defense": 1.0}, 2: {"attack": 1.0, "defense": 1.0}}
+    key = {1: [10], 2: [20]}
+    placebo = {1: 1001, 2: 1051}
+    names = {10: "Key1", 20: "Key2", 1001: "P1", 1051: "P2"}
+    res = key_absence.run_analysis(df, fixtures, ratings, key, placebo, {1: "CHE", 2: "ARS"}, names)
+    assert len(res["team_rows"]) == 2
+    r1 = next(r for r in res["team_rows"] if r["player_id"] == 10)
+    assert r1["team_short"] == "CHE" and r1["player_name"] == "Key1"
+    assert r1["n_present"] == 2 and r1["n_absent"] == 2
+    assert "shrunk_teammates_effect" in r1
+    assert res["key_pool"]["pairs"] == 1
+    assert len(res["placebo_rows"]) == 2
+    assert isinstance(res["decision"], tuple)
+    assert all("team_short" in t and "key_player_name" in t for t in res["teammate_rows"])

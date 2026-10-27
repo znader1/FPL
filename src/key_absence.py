@@ -368,3 +368,145 @@ def decision(key_pool, placebo_pool, bar=DECISION_BAR):
            f"{'placebo outside interval' if outside else 'placebo inside interval'}, "
            f"{'below' if below else 'not below'} bar {bar:.2f}")
     return ok, why
+
+
+# ---------------------------------------------------------------------------
+# Selection signals, overrides, orchestration
+# ---------------------------------------------------------------------------
+
+LAST_SEASON_MIN_APPS = 10
+
+
+def _appearances(df):
+    """Appearances with minutes per player (element -> count)."""
+    if df is None or df.empty:
+        return {}
+    return df[df["minutes"] > 0].groupby("element").size().to_dict()
+
+
+def build_signals(df, bootstrap, last_season_df=None, last_bootstrap=None):
+    """
+    One row per player for ``select_key_players``: bootstrap rates/price,
+    this-season ppg from the history frame, last-season ppg joined on the
+    stable bootstrap ``code`` (element ids are reissued each season).
+    """
+    apps = _appearances(df)
+    last_ppg_by_code = {}
+    if last_season_df is not None and not last_season_df.empty and last_bootstrap:
+        code_of = {int(e["id"]): e.get("code") for e in last_bootstrap.get("elements", [])}
+        played = last_season_df[last_season_df["minutes"] > 0]
+        pts = pd.to_numeric(played.get("total_points"), errors="coerce").fillna(0.0)
+        g = played.assign(_pts=pts).groupby("element")["_pts"].agg(["sum", "size"])
+        for eid, r in g.iterrows():
+            if r["size"] >= LAST_SEASON_MIN_APPS and code_of.get(int(eid)) is not None:
+                last_ppg_by_code[code_of[int(eid)]] = float(r["sum"] / r["size"])
+    rows = []
+    for e in bootstrap.get("elements", []):
+        pid = int(e["id"])
+        n = apps.get(pid, 0)
+        tp = float(pd.to_numeric(e.get("total_points"), errors="coerce") or 0.0)
+        rows.append({
+            "player_id": pid, "team_id": int(e["team"]), "element_type": int(e["element_type"]),
+            "minutes": float(pd.to_numeric(e.get("minutes"), errors="coerce") or 0.0),
+            "threat": float(pd.to_numeric(e.get("threat"), errors="coerce") or 0.0),
+            "creativity": float(pd.to_numeric(e.get("creativity"), errors="coerce") or 0.0),
+            "now_cost": float(pd.to_numeric(e.get("now_cost"), errors="coerce") or 0.0),
+            "last_ppg": last_ppg_by_code.get(e.get("code"), float("nan")),
+            "this_ppg": tp / n if n else float("nan"),
+        })
+    return pd.DataFrame(rows)
+
+
+def build_signals_from_history(df_raw):
+    """
+    Signals for a season with no bootstrap on hand (the 2025-26 file carries
+    ``threat``, ``creativity``, ``value`` and ``total_points`` per match).
+    Season totals, identical treatment for every player; ``last_ppg`` NaN.
+    """
+    d = df_raw.copy()
+    for c in ("minutes", "threat", "creativity", "value", "total_points"):
+        d[c] = pd.to_numeric(d.get(c), errors="coerce").fillna(0.0)
+    ko = "kickoff_time" if "kickoff_time" in d.columns else "kickoff_time_x"
+    d = d.sort_values(ko) if ko in d.columns else d
+    played = d[d["minutes"] > 0]
+    g = d.groupby("element").agg(
+        team_id=("team_id", "last"), element_type=("element_type", "first"),
+        minutes=("minutes", "sum"), threat=("threat", "sum"), creativity=("creativity", "sum"),
+        now_cost=("value", "last"), total_points=("total_points", "sum"),
+    )
+    apps = played.groupby("element").size()
+    g["this_ppg"] = g["total_points"] / apps.reindex(g.index)
+    g["last_ppg"] = float("nan")
+    g = g.reset_index().rename(columns={"element": "player_id"})
+    g["team_id"] = g["team_id"].astype(int)
+    g["element_type"] = g["element_type"].astype(int)
+    return g[["player_id", "team_id", "element_type", "minutes", "threat", "creativity",
+              "now_cost", "last_ppg", "this_ppg"]]
+
+
+def _norm(s):
+    import unicodedata
+    s = unicodedata.normalize("NFKD", str(s))
+    return "".join(c for c in s if not unicodedata.combining(c)).strip().lower()
+
+
+def parse_overrides(spec, bootstrap, teams_short_map):
+    """``"CHE:João Pedro,Palmer;ARS:Saka"`` -> {team_id: [player ids]}; accent-insensitive."""
+    if not spec:
+        return {}
+    short_to_id = {str(v).upper(): int(k) for k, v in teams_short_map.items()}
+    by_team = {}
+    for e in bootstrap.get("elements", []):
+        by_team.setdefault(int(e["team"]), {})[_norm(e.get("web_name"))] = int(e["id"])
+    out = {}
+    for chunk in spec.split(";"):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        short, _, names = chunk.partition(":")
+        tid = short_to_id.get(short.strip().upper())
+        if tid is None:
+            raise ValueError(f"{short.strip()}: unknown team")
+        ids = []
+        for name in names.split(","):
+            pid = by_team.get(tid, {}).get(_norm(name))
+            if pid is None:
+                raise ValueError(f"{short.strip()}: no player named {name.strip()}")
+            ids.append(pid)
+        out[tid] = ids
+    return out
+
+
+def run_analysis(df, fixtures, ratings, key, placebo, teams_short_map, names):
+    """Everything per (team, key player) plus placebo, pools, shrinkage, decision."""
+    team_fx = team_fixture_sets(df)
+
+    def _one(team_id, pid):
+        b = attach_expected(presence_buckets(df, team_fx, team_id, pid), ratings, fixtures)
+        eff = team_effect(b)
+        eff.update({"team_id": int(team_id), "team_short": teams_short_map.get(int(team_id), str(team_id)),
+                    "player_id": int(pid), "player_name": names.get(int(pid), str(pid))})
+        return b, eff
+
+    team_rows, teammate_rows = [], []
+    for team_id, pids in key.items():
+        for pid in pids:
+            b, eff = _one(team_id, pid)
+            team_rows.append(eff)
+            tm = teammate_rates(df, b, team_id, pid)
+            for r in tm.to_dict("records"):
+                r.update({"team_id": int(team_id), "team_short": eff["team_short"],
+                          "key_player_id": int(pid), "key_player_name": eff["player_name"],
+                          "teammate_name": names.get(int(r["teammate_id"]), str(r["teammate_id"]))})
+                teammate_rows.append(r)
+    placebo_rows = [_one(t, p)[1] for t, p in placebo.items()]
+
+    key_pool = pool_effects(team_rows)
+    placebo_pool = pool_effects(placebo_rows)
+    for r in team_rows:
+        r["shrunk_teammates_effect"] = shrink(r["teammates_effect"], r["n_absent"], key_pool["effect"])
+    return {
+        "team_rows": team_rows, "teammate_rows": teammate_rows, "placebo_rows": placebo_rows,
+        "key_pool": key_pool, "placebo_pool": placebo_pool,
+        "decision": decision(key_pool, placebo_pool),
+    }
