@@ -143,3 +143,57 @@ def presence_buckets(df, team_fx, team_id, player_id):
     fx["bucket"] = buckets
     fx["key_xg"] = key_xg
     return fx[cols].sort_values(["event", "fixture"]).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Selection
+# ---------------------------------------------------------------------------
+
+SELECTION_MIN_MINUTES = 270.0
+GOALKEEPER = 1
+
+
+def select_key_players(signals, top=3, min_minutes=SELECTION_MIN_MINUTES, overrides=None):
+    """
+    Top ``top`` outfield players per team by rank-sum of threat/90,
+    creativity/90, price, last-season ppg and this-season ppg (equal weights,
+    higher is better, NaN ranks last). Rates, not totals, so a player's own
+    absences cannot push him off the list; under ``min_minutes`` the two
+    rates are NaN and he competes on the other three. Ties break by minutes.
+    ``overrides[team_id]`` replaces that team's list verbatim.
+    """
+    out = {}
+    if signals is None or signals.empty:
+        return dict(overrides or {})
+    s = signals.copy()
+    for c in ("minutes", "threat", "creativity", "now_cost", "last_ppg", "this_ppg"):
+        s[c] = pd.to_numeric(s.get(c), errors="coerce")
+    s = s[pd.to_numeric(s["element_type"], errors="coerce") != GOALKEEPER]
+    mins = s["minutes"].fillna(0.0)
+    enough = mins >= float(min_minutes)
+    s["threat90"] = (s["threat"] / mins * 90.0).where(enough)
+    s["creativity90"] = (s["creativity"] / mins * 90.0).where(enough)
+    rank_cols = ["threat90", "creativity90", "now_cost", "last_ppg", "this_ppg"]
+    for team_id, g in s.groupby("team_id"):
+        score = sum(g[c].rank(ascending=False, na_option="bottom") for c in rank_cols)
+        g = g.assign(_score=score, _mins=mins.loc[g.index])
+        g = g.sort_values(["_score", "_mins"], ascending=[True, False])
+        out[int(team_id)] = [int(p) for p in g["player_id"].head(int(top))]
+    for team_id, players in (overrides or {}).items():
+        out[int(team_id)] = [int(p) for p in players]
+    return out
+
+
+def select_placebo(df, key):
+    """Per team: the outfield player with most minutes who is not a key player."""
+    out = {}
+    if df is None or df.empty:
+        return out
+    outfield = df[df["element_type"] != GOALKEEPER]
+    mins = outfield.groupby(["team_id", "element"])["minutes"].sum().reset_index()
+    for team_id, g in mins.groupby("team_id"):
+        banned = set(key.get(int(team_id), []))
+        g = g[~g["element"].isin(banned)].sort_values("minutes", ascending=False)
+        if not g.empty:
+            out[int(team_id)] = int(g["element"].iloc[0])
+    return out

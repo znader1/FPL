@@ -100,3 +100,50 @@ def test_moved_player_fixtures_before_first_appearance_excluded():
     df, team_fx = _three_fixture_frame([_row(10, 1, 3, 90, 0.5, event=3)])
     out = key_absence.presence_buckets(df, team_fx, team_id=1, player_id=10)
     assert out["fixture"].tolist() == [3]
+
+
+# --- Task 3: selection ------------------------------------------------------
+
+def _sig(pid, team, etype=3, minutes=900, threat=100.0, creativity=100.0,
+         now_cost=60, last_ppg=4.0, this_ppg=4.0):
+    return {"player_id": pid, "team_id": team, "element_type": etype, "minutes": minutes,
+            "threat": threat, "creativity": creativity, "now_cost": now_cost,
+            "last_ppg": last_ppg, "this_ppg": this_ppg}
+
+
+def test_select_excludes_gk_and_returns_top_n():
+    sig = pd.DataFrame([
+        _sig(1, 1, etype=1, threat=999, creativity=999, now_cost=99, last_ppg=9, this_ppg=9),
+        _sig(2, 1, threat=300), _sig(3, 1, threat=200), _sig(4, 1, threat=100), _sig(5, 1, threat=50),
+    ])
+    out = key_absence.select_key_players(sig, top=3)
+    assert out == {1: [2, 3, 4]}
+
+
+def test_select_rate_not_total():
+    # B has half the minutes and half the threat: same rate, must still rank above C.
+    sig = pd.DataFrame([
+        _sig(1, 1, minutes=900, threat=300, creativity=300),
+        _sig(2, 1, minutes=450, threat=150, creativity=150),
+        _sig(3, 1, minutes=900, threat=100, creativity=100),
+        _sig(4, 1, minutes=900, threat=10, creativity=10, now_cost=40, last_ppg=1, this_ppg=1),
+    ])
+    out = key_absence.select_key_players(sig, top=2)
+    assert out == {1: [1, 2]}
+
+
+def test_select_short_team_returns_what_it_has():
+    sig = pd.DataFrame([_sig(1, 1, etype=1), _sig(2, 1), _sig(3, 1)])
+    assert key_absence.select_key_players(sig, top=3) == {1: [2, 3]}
+
+
+def test_override_replaces_list():
+    sig = pd.DataFrame([_sig(2, 1, threat=300), _sig(3, 1), _sig(4, 1)])
+    assert key_absence.select_key_players(sig, top=3, overrides={1: [4]}) == {1: [4]}
+
+
+def test_placebo_excludes_keys_and_gk():
+    rows = [_row(1, 1, 1, 90, 0.0, etype=1), _row(2, 1, 1, 90, 0.0), _row(3, 1, 1, 60, 0.0),
+            _row(4, 1, 1, 30, 0.0)]
+    df = pd.DataFrame(rows)
+    assert key_absence.select_placebo(df, {1: [2]}) == {1: 3}
