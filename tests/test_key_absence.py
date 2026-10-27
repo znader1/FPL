@@ -198,3 +198,74 @@ def test_teammates_effect_ignores_key_players_own_xg():
     assert abs(eff["teammates_effect"] - 1.0) < 1e-9
     assert eff["team_effect"] < 1.0
     assert eff["n_benched"] == 0
+
+
+# --- Task 5: teammate rates, pooling, shrinkage, decision ------------------
+
+def test_teammate_rates_minutes_weighted():
+    rows = []
+    for f in (1, 2, 3, 4):
+        rows += _team_block(1, f, start=1000 * f, n=10)
+    # key player 10 present in 1,2; absent 3,4
+    rows += [_row(10, 1, 1, 90, 0.5, event=1), _row(10, 1, 2, 90, 0.5, event=2)]
+    # teammate 20: present 2x90 with xa 0.1; absent 10 min xa 1.0 + 170 min xa 0
+    rows += [_row(20, 1, 1, 90, 0.0, xa=0.1, event=1), _row(20, 1, 2, 90, 0.0, xa=0.1, event=2),
+             _row(20, 1, 3, 10, 0.0, xa=1.0, event=3), _row(20, 1, 4, 170, 0.0, xa=0.0, event=4)]
+    df = pd.DataFrame(rows)
+    team_fx = key_absence.team_fixture_sets(df)
+    b = key_absence.presence_buckets(df, team_fx, 1, 10)
+    out = key_absence.teammate_rates(df, b, 1, 10)
+    r = out[out["teammate_id"] == 20].iloc[0]
+    assert abs(r["xa90_present"] - 0.1) < 1e-9
+    assert abs(r["xa90_absent"] - 0.5) < 1e-9
+    assert abs(r["xa90_ratio"] - 5.0) < 1e-9
+    assert r["min_present"] == 180 and r["min_absent"] == 180
+
+
+def test_teammate_below_threshold_excluded():
+    rows = []
+    for f in (1, 2):
+        rows += _team_block(1, f, start=1000 * f, n=10)
+    rows += [_row(10, 1, 1, 90, 0.5, event=1)]
+    rows += [_row(20, 1, 1, 90, 0.0, event=1), _row(20, 1, 2, 90, 0.0, event=2)]  # 90 each: under 180
+    df = pd.DataFrame(rows)
+    b = key_absence.presence_buckets(df, key_absence.team_fixture_sets(df), 1, 10)
+    out = key_absence.teammate_rates(df, b, 1, 10)
+    assert 20 not in out["teammate_id"].tolist()
+
+
+def test_pool_weights_by_n_absent_and_skips_nan():
+    rows = [{"teammates_effect": 0.5, "n_absent": 1}, {"teammates_effect": 1.0, "n_absent": 3},
+            {"teammates_effect": float("nan"), "n_absent": 5}, {"teammates_effect": 9.0, "n_absent": 0}]
+    p = key_absence.pool_effects(rows)
+    assert abs(p["effect"] - 0.875) < 1e-9
+    assert p["n"] == 4 and p["pairs"] == 2
+    assert p["lo"] <= p["effect"] <= p["hi"]
+
+
+def test_shrink_formula():
+    assert key_absence.shrink(0.5, 4, 1.0) == 0.75
+    assert key_absence.shrink(float("nan"), 4, 1.0) == 1.0
+
+
+def test_decision_rule():
+    assert key_absence.decision({"effect": 0.85, "lo": 0.80, "hi": 0.90}, {"effect": 1.0})[0] is True
+    assert key_absence.decision({"effect": 0.85, "lo": 0.70, "hi": 1.05}, {"effect": 1.0})[0] is False
+    assert key_absence.decision({"effect": 0.97, "lo": 0.96, "hi": 0.98}, {"effect": 1.0})[0] is False
+
+
+def test_long_term_injury_after_last_appearance_counts_absent():
+    df, team_fx = _three_fixture_frame([_row(10, 1, 1, 90, 0.5, event=1)])
+    out = key_absence.presence_buckets(df, team_fx, team_id=1, player_id=10)
+    assert dict(zip(out["fixture"], out["bucket"])) == {1: "present", 2: "absent", 3: "absent"}
+
+
+def test_sold_player_fixtures_after_move_excluded():
+    rows = []
+    for f in (1, 2, 3):
+        rows += _team_block(1, f, start=1000 * f)
+    rows += _team_block(2, 4, start=4000)
+    rows += [_row(10, 1, 1, 90, 0.5, event=1), _row(10, 2, 4, 90, 0.5, event=4)]  # moved to team 2
+    df = pd.DataFrame(rows)
+    out = key_absence.presence_buckets(df, key_absence.team_fixture_sets(df), team_id=1, player_id=10)
+    assert out["fixture"].tolist() == [1]

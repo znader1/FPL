@@ -103,8 +103,10 @@ def presence_buckets(df, team_fx, team_id, player_id):
     player's status: ``present`` (started), ``benched`` (played, no start),
     ``absent`` (zero minutes or no row at all -- the live-history producer
     omits non-players). Only fixtures between the player's first and last
-    appearance for this club are kept, so a mid-season signing or sale is
-    not read as an injury absence. Adds ``bucket`` and ``key_xg``.
+    appearance for this club are kept (the upper bound only when he later
+    plays for another club), so a mid-season signing or sale is not read as
+    an injury absence while a season-ending injury still is. Adds ``bucket``
+    and ``key_xg``.
     """
     cols = ["team_id", "fixture", "event", "was_home", "team_xg_for", "bucket", "key_xg"]
     team_id = int(team_id)
@@ -123,8 +125,17 @@ def presence_buckets(df, team_fx, team_id, player_id):
     appear = [pos_of[f] for f in played["fixture"] if f in pos_of]
     if not appear:
         return pd.DataFrame(columns=cols)
-    lo, hi = min(appear), max(appear)
-    fx = fx[fx["fixture"].map(pos_of).between(lo, hi)].copy()
+    lo = min(appear)
+    # Upper bound only when the player later turns out for another club:
+    # a sale ends his window, a season-ending injury does not.
+    later_elsewhere = df[(df["element"] == player_id) & (df["team_id"] != team_id)
+                         & (df["minutes"] > 0)]
+    last_here = played["event"].max()
+    if not later_elsewhere.empty and later_elsewhere["event"].max() > last_here:
+        hi = max(appear)
+        fx = fx[fx["fixture"].map(pos_of).between(lo, hi)].copy()
+    else:
+        fx = fx[fx["fixture"].map(pos_of) >= lo].copy()
 
     by_fixture = mine.set_index("fixture")
     buckets, key_xg = [], []
@@ -260,3 +271,100 @@ def team_effect(buckets):
         "xg_for_present": _mean("team_xg_for", "present"),
         "xg_for_absent": _mean("team_xg_for", "absent"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Teammate rates, pooling, shrinkage, decision
+# ---------------------------------------------------------------------------
+
+TEAMMATE_MIN_MINUTES = 180.0
+SHRINK_K = 4.0
+BOOTSTRAP_DRAWS = 2000
+DECISION_BAR = 0.95
+
+
+def teammate_rates(df, buckets, team_id, player_id, min_minutes=TEAMMATE_MIN_MINUTES):
+    """
+    Minutes-weighted xG90 / xA90 of every other player on the team in the
+    key player's present vs absent fixtures; only teammates with at least
+    ``min_minutes`` in both buckets.
+    """
+    cols = ["teammate_id", "element_type", "min_present", "min_absent",
+            "xg90_present", "xg90_absent", "xa90_present", "xa90_absent",
+            "xg90_ratio", "xa90_ratio"]
+    if buckets is None or buckets.empty:
+        return pd.DataFrame(columns=cols)
+    bucket_of = dict(zip(buckets["fixture"], buckets["bucket"]))
+    mates = df[(df["team_id"] == int(team_id)) & (df["element"] != int(player_id))].copy()
+    mates["bucket"] = mates["fixture"].map(bucket_of)
+    mates = mates[mates["bucket"].isin(["present", "absent"])]
+    if mates.empty:
+        return pd.DataFrame(columns=cols)
+    agg = (mates.groupby(["element", "bucket"])
+           .agg(minutes=("minutes", "sum"), xg=("expected_goals", "sum"),
+                xa=("expected_assists", "sum"), element_type=("element_type", "first"))
+           .reset_index())
+    rows = []
+    for pid, g in agg.groupby("element"):
+        g = g.set_index("bucket")
+        if not {"present", "absent"}.issubset(g.index):
+            continue
+        p, a = g.loc["present"], g.loc["absent"]
+        if p["minutes"] < min_minutes or a["minutes"] < min_minutes:
+            continue
+        xg90_p, xg90_a = p["xg"] / p["minutes"] * 90.0, a["xg"] / a["minutes"] * 90.0
+        xa90_p, xa90_a = p["xa"] / p["minutes"] * 90.0, a["xa"] / a["minutes"] * 90.0
+        rows.append({
+            "teammate_id": int(pid), "element_type": int(p["element_type"]),
+            "min_present": float(p["minutes"]), "min_absent": float(a["minutes"]),
+            "xg90_present": xg90_p, "xg90_absent": xg90_a,
+            "xa90_present": xa90_p, "xa90_absent": xa90_a,
+            "xg90_ratio": xg90_a / xg90_p if xg90_p > 0 else float("nan"),
+            "xa90_ratio": xa90_a / xa90_p if xa90_p > 0 else float("nan"),
+        })
+    return pd.DataFrame(rows, columns=cols)
+
+
+def pool_effects(rows, key="teammates_effect", weight_key="n_absent",
+                 draws=BOOTSTRAP_DRAWS, seed=0):
+    """Weighted mean of ``key`` across (team, player) rows with a bootstrap 90% interval."""
+    import numpy as np
+
+    vals, wts = [], []
+    for r in rows:
+        v, w = r.get(key), r.get(weight_key, 0)
+        if v is None or v != v or not w or w <= 0:
+            continue
+        vals.append(float(v)); wts.append(float(w))
+    if not vals:
+        return {"effect": float("nan"), "n": 0.0, "lo": float("nan"), "hi": float("nan"), "pairs": 0}
+    v, w = np.asarray(vals), np.asarray(wts)
+    effect = float((v * w).sum() / w.sum())
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, len(v), size=(int(draws), len(v)))
+    boots = (v[idx] * w[idx]).sum(axis=1) / w[idx].sum(axis=1)
+    lo, hi = np.percentile(boots, [5, 95])
+    return {"effect": effect, "n": float(w.sum()), "lo": float(lo), "hi": float(hi), "pairs": len(v)}
+
+
+def shrink(raw, n, pooled, k=SHRINK_K):
+    """``(n*raw + k*pooled) / (n+k)``; a NaN raw counts as n = 0."""
+    if raw is None or raw != raw:
+        n = 0.0
+        raw = 0.0
+    return (float(n) * float(raw) + float(k) * float(pooled)) / (float(n) + float(k))
+
+
+def decision(key_pool, placebo_pool, bar=DECISION_BAR):
+    """Signal is real iff the placebo mean sits outside the key 90% interval and key effect < bar."""
+    eff, lo, hi = key_pool.get("effect"), key_pool.get("lo"), key_pool.get("hi")
+    plc = placebo_pool.get("effect")
+    if any(x is None or x != x for x in (eff, lo, hi, plc)):
+        return False, "insufficient data (NaN pooled effect)"
+    outside = not (lo <= plc <= hi)
+    below = eff < bar
+    ok = outside and below
+    why = (f"key pooled {eff:.3f} [{lo:.3f}, {hi:.3f}] vs placebo {plc:.3f}: "
+           f"{'placebo outside interval' if outside else 'placebo inside interval'}, "
+           f"{'below' if below else 'not below'} bar {bar:.2f}")
+    return ok, why
