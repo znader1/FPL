@@ -55,7 +55,8 @@ def _refresh(season, bootstrap, fixtures):
     if not missing:
         print("history already current")
         return
-    updated, added = live_history.append_events(existing, bootstrap, fixtures, missing)
+    # live_history wants the fixtures as a frame (same as /admin/refresh)
+    updated, added = live_history.append_events(existing, bootstrap, pd.DataFrame(fixtures), missing)
     if updated.empty:
         print("refresh returned no rows")
         return
