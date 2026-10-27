@@ -195,18 +195,30 @@ def select_key_players(signals, top=3, min_minutes=SELECTION_MIN_MINUTES, overri
     return out
 
 
-def select_placebo(df, key):
-    """Per team: the outfield player with most minutes who is not a key player."""
+PLACEBO_MIN_START_SHARE = 0.5
+
+
+def select_placebo(df, key, team_fx, min_start_share=PLACEBO_MIN_START_SHARE):
+    """
+    Per team: every outfield non-key player who started at least
+    ``min_start_share`` of the team's played fixtures. Pooled together they
+    give the placebo enough absences to compare against (one ever-present
+    centre-back per team did not).
+    """
     out = {}
-    if df is None or df.empty:
+    if df is None or df.empty or team_fx is None or team_fx.empty:
         return out
-    outfield = df[df["element_type"] != GOALKEEPER]
-    mins = outfield.groupby(["team_id", "element"])["minutes"].sum().reset_index()
-    for team_id, g in mins.groupby("team_id"):
+    played_n = team_fx.groupby("team_id")["fixture"].nunique()
+    outfield = df[(df["element_type"] != GOALKEEPER) & (df["starts"] >= 1) & (df["minutes"] > 0)]
+    starts = outfield.groupby(["team_id", "element"])["fixture"].nunique().reset_index(name="n_starts")
+    for team_id, g in starts.groupby("team_id"):
+        n = played_n.get(int(team_id), 0)
+        if not n:
+            continue
         banned = set(key.get(int(team_id), []))
-        g = g[~g["element"].isin(banned)].sort_values("minutes", ascending=False)
+        g = g[(~g["element"].isin(banned)) & (g["n_starts"] >= float(min_start_share) * n)]
         if not g.empty:
-            out[int(team_id)] = int(g["element"].iloc[0])
+            out[int(team_id)] = sorted(int(p) for p in g["element"])
     return out
 
 
@@ -499,7 +511,7 @@ def run_analysis(df, fixtures, ratings, key, placebo, teams_short_map, names):
                           "key_player_id": int(pid), "key_player_name": eff["player_name"],
                           "teammate_name": names.get(int(r["teammate_id"]), str(r["teammate_id"]))})
                 teammate_rows.append(r)
-    placebo_rows = [_one(t, p)[1] for t, p in placebo.items()]
+    placebo_rows = [_one(t, p)[1] for t, pids in placebo.items() for p in pids]
 
     key_pool = pool_effects(team_rows)
     placebo_pool = pool_effects(placebo_rows)
@@ -510,3 +522,75 @@ def run_analysis(df, fixtures, ratings, key, placebo, teams_short_map, names):
         "key_pool": key_pool, "placebo_pool": placebo_pool,
         "decision": decision(key_pool, placebo_pool),
     }
+
+
+# ---------------------------------------------------------------------------
+# Report
+# ---------------------------------------------------------------------------
+
+def _f(x, nd=3):
+    return "n/a" if x is None or x != x else f"{float(x):.{nd}f}"
+
+
+def render_report(result, season, key, names, teams_short_map, caveats):
+    """Markdown report in spec order: selection, pooled decision, per-team table, movers, caveats."""
+    kp, pp = result["key_pool"], result["placebo_pool"]
+    ok, why = result["decision"]
+    lines = [f"# Key-player absence analysis — {season}", ""]
+
+    lines += ["## Key players (top per team)", ""]
+    for tid in sorted(key, key=lambda t: teams_short_map.get(t, str(t))):
+        lines.append(f"- **{teams_short_map.get(tid, tid)}**: "
+                     + ", ".join(names.get(p, str(p)) for p in key[tid]))
+    lines.append("")
+
+    lines += ["## League pool: key players vs placebo", "",
+              "| | effect (teammates xG / expected) | 90% interval | n absent matches | pairs |",
+              "|---|---|---|---|---|",
+              f"| key players | {_f(kp['effect'])} | [{_f(kp['lo'])}, {_f(kp['hi'])}] | {kp['n']:.0f} | {kp['pairs']} |",
+              f"| placebo | {_f(pp['effect'])} | [{_f(pp['lo'])}, {_f(pp['hi'])}] | {pp['n']:.0f} | {pp['pairs']} |",
+              "", f"**Decision: {'PASS' if ok else 'FAIL'}** — {why}", "",
+              "Effect < 1 means teammates produce less xG (per expected, opponent/venue controlled) "
+              "when the key player is out. Phase 2 requires PASS on 2025-26.", ""]
+
+    lines += ["## Per team, per key player (sorted by shrunk effect)", "",
+              "| team | key player | present | absent | benched | teammates effect | shrunk | whole-team effect | xG/match present | xG/match absent |",
+              "|---|---|---|---|---|---|---|---|---|---|"]
+    rows = sorted(result["team_rows"], key=lambda r: (r["shrunk_teammates_effect"] != r["shrunk_teammates_effect"],
+                                                       r["shrunk_teammates_effect"]))
+    for r in rows:
+        lines.append(f"| {r['team_short']} | {r['player_name']} | {r['n_present']} | {r['n_absent']} | {r['n_benched']} | "
+                     f"{_f(r['teammates_effect'])} | {_f(r['shrunk_teammates_effect'])} | {_f(r['team_effect'])} | "
+                     f"{_f(r['xg_for_present'], 2)} | {_f(r['xg_for_absent'], 2)} |")
+    lines.append("")
+
+    lines += ["## Teammate movers (xG90+xA90 absent / present; ≥180 min both buckets)", ""]
+    by_key = {}
+    for t in result["teammate_rows"]:
+        by_key.setdefault((t["team_short"], t["key_player_name"]), []).append(t)
+    for (short, kname), ts in sorted(by_key.items()):
+        def _xgi_ratio(t):
+            p = t["xg90_present"] + t["xa90_present"]
+            a = t["xg90_absent"] + t["xa90_absent"]
+            return a / p if p > 0 else float("nan")
+        scored = [(t, _xgi_ratio(t)) for t in ts]
+        scored = [s for s in scored if s[1] == s[1]]
+        scored.sort(key=lambda s: s[1])
+        down = scored[:5]
+        up = list(reversed(scored[-5:]))
+        lines.append(f"### {short} without {kname}")
+        lines.append("")
+        lines.append("| teammate | min present | min absent | xGI90 present | xGI90 absent | ratio |")
+        lines.append("|---|---|---|---|---|---|")
+        seen = set()
+        for t, ratio in down + up:
+            if t["teammate_id"] in seen:
+                continue
+            seen.add(t["teammate_id"])
+            lines.append(f"| {t['teammate_name']} | {t['min_present']:.0f} | {t['min_absent']:.0f} | "
+                         f"{_f(t['xg90_present'] + t['xa90_present'], 2)} | "
+                         f"{_f(t['xg90_absent'] + t['xa90_absent'], 2)} | {_f(ratio, 2)} |")
+        lines.append("")
+
+    lines += ["## Caveats", ""] + [f"- {c}" for c in caveats] + [""]
+    return "\n".join(lines)

@@ -142,11 +142,18 @@ def test_override_replaces_list():
     assert key_absence.select_key_players(sig, top=3, overrides={1: [4]}) == {1: [4]}
 
 
-def test_placebo_excludes_keys_and_gk():
-    rows = [_row(1, 1, 1, 90, 0.0, etype=1), _row(2, 1, 1, 90, 0.0), _row(3, 1, 1, 60, 0.0),
-            _row(4, 1, 1, 30, 0.0)]
+def test_placebo_is_every_nonkey_regular_outfield_starter():
+    rows = []
+    for f in (1, 2, 3, 4):
+        rows += [_row(1, 1, f, 90, 0.0, etype=1, event=f),      # GK: excluded
+                 _row(2, 1, f, 90, 0.0, event=f),               # key: excluded
+                 _row(3, 1, f, 90, 0.0, event=f)]               # regular: placebo
+    rows += [_row(4, 1, 1, 90, 0.0, event=1)]                   # 1 start of 4: not regular
+    rows += [_row(5, 1, f, 90, 0.0, event=f) for f in (1, 2)]   # 2 of 4 = 50%: regular
     df = pd.DataFrame(rows)
-    assert key_absence.select_placebo(df, {1: [2]}) == {1: 3}
+    team_fx = pd.DataFrame({"team_id": [1] * 4, "fixture": [1, 2, 3, 4], "event": [1, 2, 3, 4],
+                            "was_home": True, "team_xg_for": 1.0})
+    assert key_absence.select_placebo(df, {1: [2]}, team_fx) == {1: [3, 5]}
 
 
 # --- Task 4: team effect ----------------------------------------------------
@@ -332,7 +339,7 @@ def test_run_analysis_end_to_end_synthetic():
     df = pd.DataFrame(rows)
     ratings = {"_league": 1.4, 1: {"attack": 1.0, "defense": 1.0}, 2: {"attack": 1.0, "defense": 1.0}}
     key = {1: [10], 2: [20]}
-    placebo = {1: 1001, 2: 1051}
+    placebo = {1: [1001], 2: [1051]}
     names = {10: "Key1", 20: "Key2", 1001: "P1", 1051: "P2"}
     res = key_absence.run_analysis(df, fixtures, ratings, key, placebo, {1: "CHE", 2: "ARS"}, names)
     assert len(res["team_rows"]) == 2
@@ -344,3 +351,29 @@ def test_run_analysis_end_to_end_synthetic():
     assert len(res["placebo_rows"]) == 2
     assert isinstance(res["decision"], tuple)
     assert all("team_short" in t and "key_player_name" in t for t in res["teammate_rows"])
+
+
+# --- Task 7: report ---------------------------------------------------------
+
+def test_render_report_contains_decision_and_team_row():
+    result = {
+        "team_rows": [{"team_id": 1, "team_short": "CHE", "player_id": 10, "player_name": "Joao Pedro",
+                       "n_present": 6, "n_absent": 2, "n_benched": 0,
+                       "teammates_effect": 0.62, "shrunk_teammates_effect": 0.80, "team_effect": 0.55,
+                       "teammates_ratio_present": 1.1, "teammates_ratio_absent": 0.7,
+                       "xg_for_present": 2.0, "xg_for_absent": 0.9}],
+        "teammate_rows": [{"team_short": "CHE", "key_player_name": "Joao Pedro", "teammate_name": "Palmer",
+                           "teammate_id": 11, "min_present": 540, "min_absent": 180,
+                           "xg90_present": 0.5, "xg90_absent": 0.2, "xa90_present": 0.3, "xa90_absent": 0.1,
+                           "xg90_ratio": 0.4, "xa90_ratio": 0.33}],
+        "placebo_rows": [],
+        "key_pool": {"effect": 0.88, "lo": 0.80, "hi": 0.95, "n": 40.0, "pairs": 30},
+        "placebo_pool": {"effect": 1.01, "lo": 0.9, "hi": 1.1, "n": 30.0, "pairs": 20},
+        "decision": (True, "key pooled 0.880 [0.800, 0.950] vs placebo 1.010: placebo outside interval, below bar 0.95"),
+    }
+    md = key_absence.render_report(result, "2026-27", {1: [10]}, {10: "Joao Pedro"}, {1: "CHE"},
+                                   ["absence is inferred"])
+    assert "placebo outside interval" in md
+    assert "| CHE | Joao Pedro | 6 | 2 | 0 |" in md
+    assert "Palmer" in md and "absence is inferred" in md
+    assert "PASS" in md
