@@ -346,7 +346,8 @@ def test_run_analysis_end_to_end_synthetic():
     r1 = next(r for r in res["team_rows"] if r["player_id"] == 10)
     assert r1["team_short"] == "CHE" and r1["player_name"] == "Key1"
     assert r1["n_present"] == 2 and r1["n_absent"] == 2
-    assert "shrunk_teammates_effect" in r1
+    assert "shrunk_team_effect" in r1 and "adjusted_teammates_effect" in r1
+    assert "key_xgi_pool" in res and "placebo_xgi_pool" in res
     assert res["key_pool"]["pairs"] == 1
     assert len(res["placebo_rows"]) == 2
     assert isinstance(res["decision"], tuple)
@@ -359,7 +360,8 @@ def test_render_report_contains_decision_and_team_row():
     result = {
         "team_rows": [{"team_id": 1, "team_short": "CHE", "player_id": 10, "player_name": "Joao Pedro",
                        "n_present": 6, "n_absent": 2, "n_benched": 0,
-                       "teammates_effect": 0.62, "shrunk_teammates_effect": 0.80, "team_effect": 0.55,
+                       "teammates_effect": 0.62, "adjusted_teammates_effect": 0.50, "key_share_present": 0.2,
+                       "shrunk_team_effect": 0.80, "team_effect": 0.55,
                        "teammates_ratio_present": 1.1, "teammates_ratio_absent": 0.7,
                        "xg_for_present": 2.0, "xg_for_absent": 0.9}],
         "teammate_rows": [{"team_short": "CHE", "key_player_name": "Joao Pedro", "teammate_name": "Palmer",
@@ -369,7 +371,9 @@ def test_render_report_contains_decision_and_team_row():
         "placebo_rows": [],
         "key_pool": {"effect": 0.88, "lo": 0.80, "hi": 0.95, "n": 40.0, "pairs": 30},
         "placebo_pool": {"effect": 1.01, "lo": 0.9, "hi": 1.1, "n": 30.0, "pairs": 20},
-        "decision": (True, "key pooled 0.880 [0.800, 0.950] vs placebo 1.010: placebo outside interval, below bar 0.95"),
+        "key_xgi_pool": {"effect": 0.9, "lo": 0.85, "hi": 0.95, "rows": 30},
+        "placebo_xgi_pool": {"effect": 1.0, "lo": 0.95, "hi": 1.05, "rows": 60},
+        "decision": (True, "key pooled 0.900 [0.850, 0.950] vs placebo 1.000: placebo outside interval, shift of 0.100 vs 0.05 needed"),
     }
     md = key_absence.render_report(result, "2026-27", {1: [10]}, {10: "Joao Pedro"}, {1: "CHE"},
                                    ["absence is inferred"])
@@ -377,3 +381,66 @@ def test_render_report_contains_decision_and_team_row():
     assert "| CHE | Joao Pedro | 6 | 2 | 0 |" in md
     assert "Palmer" in md and "absence is inferred" in md
     assert "PASS" in md
+
+
+# --- Fix pass after final review -------------------------------------------
+
+def test_departed_player_bounded_at_last_appearance():
+    df, team_fx = _three_fixture_frame([_row(10, 1, 1, 90, 0.5, event=1)])
+    out = key_absence.presence_buckets(df, team_fx, team_id=1, player_id=10, departed={10})
+    assert out["fixture"].tolist() == [1]
+
+
+def test_departed_ids_from_bootstrap_status_and_news():
+    boot = _boot([
+        dict(_el(1, 1, 1, "A"), status="u", news="Has joined Flamengo permanently."),
+        dict(_el(2, 1, 2, "B"), status="u", news="Has joined Paris FC on loan for the rest of the season."),
+        dict(_el(3, 1, 3, "C"), status="i", news="Hamstring injury - Expected back 12 Dec"),
+        dict(_el(4, 1, 4, "D"), status="u", news="Unavailable for personal reasons"),
+    ])
+    assert key_absence.departed_ids(boot) == {1, 2}
+
+
+def test_teammate_xgi_pool_is_ratio_of_weighted_means():
+    tm = [
+        {"xg90_present": 0.01, "xa90_present": 0.0, "xg90_absent": 0.5, "xa90_absent": 0.0,
+         "min_present": 900, "min_absent": 180},      # near-zero present: ratio 50 if averaged
+        {"xg90_present": 1.0, "xa90_present": 0.0, "xg90_absent": 0.5, "xa90_absent": 0.0,
+         "min_present": 900, "min_absent": 180},
+    ]
+    p = key_absence.teammate_xgi_pool(tm)
+    # weights equal (min of minutes = 180 each): (0.5+0.5)/(0.01+1.0)
+    assert abs(p["effect"] - 1.0 / 1.01) < 1e-9
+    assert p["rows"] == 2 and p["lo"] <= p["effect"] <= p["hi"]
+    assert math.isnan(key_absence.teammate_xgi_pool([])["effect"])
+
+
+def test_share_adjusted_teammates_effect():
+    fixtures = [_fx(1, 1, 2), _fx(2, 1, 2)]
+    b = _buckets([(1, 1, 1, True, 2.0, "present", 1.0),   # key share 0.5 when present
+                  (1, 2, 2, True, 2.0, "absent", 0.0)])   # replacement absorbs fully
+    eff = key_absence.team_effect(key_absence.attach_expected(b, RATINGS, fixtures))
+    assert abs(eff["key_share_present"] - 0.5) < 1e-9
+    assert abs(eff["teammates_effect"] - 2.0) < 1e-9          # mechanical inflation
+    assert abs(eff["adjusted_teammates_effect"] - 1.0) < 1e-9  # no effect once share removed
+
+
+def test_decision_is_two_sided_on_teammate_pool():
+    assert key_absence.decision({"effect": 1.10, "lo": 1.06, "hi": 1.15}, {"effect": 1.0})[0] is True
+    assert key_absence.decision({"effect": 0.97, "lo": 0.93, "hi": 0.99}, {"effect": 1.0})[0] is False
+    assert key_absence.decision({"effect": 0.90, "lo": 0.80, "hi": 1.02}, {"effect": 1.0})[0] is False
+
+
+def test_render_report_shows_reference_pools():
+    result = {"team_rows": [], "teammate_rows": [], "placebo_rows": [],
+              "key_pool": {"effect": 0.9, "lo": 0.8, "hi": 1.0, "n": 10.0, "pairs": 5},
+              "placebo_pool": {"effect": 1.0, "lo": 0.9, "hi": 1.1, "n": 10.0, "pairs": 5},
+              "key_xgi_pool": {"effect": 0.98, "lo": 0.9, "hi": 1.05, "rows": 30},
+              "placebo_xgi_pool": {"effect": 1.02, "lo": 0.95, "hi": 1.1, "rows": 60},
+              "decision": (False, "why")}
+    ref = {"season": "2025-26", "key_pool": {"effect": 0.942, "lo": 0.873, "hi": 1.013, "n": 277.0, "pairs": 49},
+           "placebo_pool": {"effect": 1.029, "lo": 0.98, "hi": 1.07, "n": 600.0, "pairs": 120},
+           "key_xgi_pool": {"effect": 0.979, "lo": 0.929, "hi": 1.032, "rows": 520},
+           "placebo_xgi_pool": {"effect": 1.016, "lo": 0.984, "hi": 1.05, "rows": 1204}}
+    md = key_absence.render_report(result, "2026-27", {}, {}, {}, [], reference=ref)
+    assert "2025-26 reference" in md and "0.942" in md and "0.979" in md

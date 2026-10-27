@@ -236,53 +236,83 @@ caveat in memory).
 - Report formatting.
 - Whether to cache the fixtures JSON next to the history file.
 
-## Result (2026-10-27, phase 1 run)
+## Result (2026-10-27, phase 1 run, after review fix pass)
 
 Reports: `docs/key_absence_2025-26_2026-10-27.md`, `docs/key_absence_2026-27_2026-10-27.md`.
-Effects are absent / present ratios of xG over fixture expectation (opponent
-defence + venue controlled). 90% bootstrap intervals over (team, key) pairs.
+Whole-team effect = absent / present ratio of team xG over fixture expectation
+(opponent defence + venue controlled). Per-teammate effect = the same
+teammate's xGI90 with vs without the key player (≥180 min in both), pooled
+as a ratio of minutes-weighted means. 90% bootstrap intervals.
+
+**Measurement correction found by running it.** The spec's "teammates-only"
+ratio (team xG minus the key player's own, over expected) equals
+`whole-team effect / (1 − key share)` whenever a replacement absorbs the
+absentee's share, so it is inflated for better players and could never
+produce an honest no (reviewer + advisor, independently). It is still
+reported, with a share-adjusted column, but the gate is now the
+per-teammate xGI90 pool, which is the quantity a phase-2 multiplier would
+scale. Players who left the league (bootstrap `u` + "joined"/"loan" news:
+Paquetá, Munetsi) are no longer counted absent for the rest of the season;
+that moved the 2025-26 whole-team pool from 0.965 to 0.942.
 
 | season | measure | key players | placebo (non-key regular starters) |
 |---|---|---|---|
-| 2025-26 (33 GWs) | teammates-only xG | 1.143 [1.071, 1.217], 306 absences, 51 pairs | 1.080 [1.033, 1.124], 624 absences, 129 pairs |
-| 2025-26 | whole-team xG | 0.965 [0.898, 1.032] | 1.029 [0.984, 1.070] |
-| 2026-27 (GW1-8) | teammates-only xG | 1.058 [0.848, 1.278], 26 absences, 18 pairs | 1.055, 116 absences, 64 pairs |
-| 2026-27 | whole-team xG | 0.899 [0.702, 1.110] | 1.021 [0.890, 1.167] |
+| 2025-26 (33 GWs) | whole-team xG | 0.942 [0.873, 1.013], 277 absences, 49 pairs | 1.029 [0.984, 1.070], 624 absences, 129 pairs |
+| 2025-26 | per-teammate xGI90 | 0.973 [0.923, 1.024], 497 teammate rows | 1.016 [0.984, 1.050], 1204 rows |
+| 2026-27 (GW1-8) | whole-team xG | 0.899 [0.702, 1.110], 26 absences, 18 pairs | 1.021 [0.890, 1.167], 116 absences |
+| 2026-27 | per-teammate xGI90 | 1.086 [0.716, 1.470], 37 rows | 0.932 [0.844, 1.021], 191 rows |
 
-**Decision: FAIL on 2025-26 (and on 2026-27).** League-wide, a top-3 key
-player's absence costs his team about 3.5% of whole-team xG over a full
-season, and the placebo interval overlaps. Teammates-only output *rises*
-when a key player is out (1.14) but so does it for placebo absences (1.08):
-whoever replaces an absentee absorbs most of his share. A league-wide
-"key player out" attack multiplier is not supported by the data.
-**Phase 2 as designed (pooled multiplier) is not unlocked.**
+**Decision: FAIL on 2025-26 (per-teammate gate: placebo inside the key
+interval, shift 0.027 < 0.05). 2026-27 is underpowered (26 absences), not
+evidence either way.**
 
-Largest per-team shrunk effects, 2026-27 (k = 4 toward the pool):
+Reading: over a full season a top-3 key player's absence costs his team
+about 6% of whole-team xG (placebo +3%), and the whole-team key interval
+just touches the placebo mean. But the players left on the pitch keep
+their own xGI90 almost unchanged (0.97 vs placebo 1.02). The absentee's
+share (15% on average for a top-3 pick, up to 38% for Isak) is mostly
+absorbed by whoever replaces him, i.e. the player the engine's minutes
+model promotes, not by the teammates the engine already projects. So:
 
-| team | key player | present | absent | teammates effect | shrunk | whole-team effect | xG/match present → absent |
+- A league-wide "key player out → scale teammates" multiplier is not
+  supported. Phase 2 as designed is **not unlocked**.
+- The engine already zeroes the absent player; the ~4% gap between key and
+  placebo on teammates is below the shift this analysis can resolve.
+
+Per-team, 2026-27, sorted by shrunk whole-team effect (k = 4 toward 0.899):
+
+| team | key player | present | absent | key share | whole-team effect | shrunk | xG/match present → absent |
 |---|---|---|---|---|---|---|---|
-| SUN | Brobbey | 6 | 2 | 0.266 | 0.794 | 0.186 | 1.78 → 0.40 |
-| CHE | João Pedro | 6 | 2 | 0.648 | 0.921 | 0.440 | 1.52 → 0.66 |
-| TOT | Sávio | 4 | 2 | 0.671 | 0.929 | 0.603 | 1.24 → 0.81 |
+| SUN | Brobbey | 6 | 2 | 0.30 | 0.186 | 0.661 | 1.78 → 0.40 |
+| CHE | João Pedro | 6 | 2 | 0.33 | 0.440 | 0.746 | 1.52 → 0.66 |
+| TOT | Sávio | 4 | 2 | 0.11 | 0.603 | 0.800 | 1.24 → 0.81 |
+| LIV | Isak | 7 | 1 | 0.38 | 0.586 | 0.836 | 1.61 → 0.95 |
 
-The Chelsea / João Pedro signal the owner saw is real in the two matches:
-whole-team xG fell to 44% of expectation and Rogers' xGI90 halved
-(0.52 → 0.24, 180 absent minutes). But two matches shrink to 0.92 against a
-pool that says ~1.0, and 2025-26 Chelsea without Palmer (11 absences)
-scored *more* (whole-team 1.04). Player-specific dependencies exist; a
-pooled league multiplier does not.
+Chelsea / João Pedro: in his two absences (GW5, GW8) whole-team xG was 44%
+of expectation; Rogers 0.52 → 0.24 xGI90 (180 absent min), Palmer 0.35 →
+0.29 (169 absent min, under the 180 threshold so not in the teammate
+table), Neto 0.41 → 0.22. Real in those two matches, but two matches shrink
+to 0.75, and 2025-26 Chelsea without Palmer (11 absences) scored *more*
+(whole-team 1.04). Player-specific dependencies exist; a pooled multiplier
+does not.
 
-What the data would support instead, if phase 2 is still wanted:
-- A per-(team, key player) multiplier only where `n_absent >= 6` and the
-  shrunk effect clears a bar, re-estimated each GW from this script. On
-  2026-27 no pair qualifies yet; on 2025-26 the candidates were AVL Sancho
-  (0.61, 9), EVE Ndiaye (0.66, 6), WHU Summerville (0.67, 5).
-- Teammate-level pairs (Rogers ↔ João Pedro) rather than team-level: the
-  teammate CSV already carries the rates.
+Candidates for a per-pair rule (`n_absent ≥ 6`, shrunk whole-team effect
+≤ 0.80), 2025-26: AVL Sancho (0.705, 9 absences), EVE Ndiaye (0.711, 6),
+EVE Dewsbury-Hall (0.784, 7). 2026-27: none qualifies yet. Re-run each GW.
 
-Known weaknesses of this run (deferred):
+Sensitivity: the verdict depends on the measure. On the whole-team pool
+after the departure fix, the spec's original one-sided rule (< 0.95,
+placebo outside interval) would PASS (0.942 [0.873, 1.013] vs 1.029).
+That measure includes the absentee's own share, which the engine already
+removes, so it overstates what phase 2 would change; it is reported, not
+gated on.
+
+Known weaknesses (deferred):
 - Key selection by rank-sum lets high-ppg defenders in (ARS Gabriel, NEW
   Botman/Hall, EVE Tarkowski, NFO Murillo). `--key-players` overrides; a
   MID/FWD-only or threat-weighted selection is a one-line change.
-- Palmer is missing from the Chelsea teammate table: under 180 absent
-  minutes alongside João Pedro's absences.
+- A key player who started but was substituted early counts as present.
+- No `--season` vs bootstrap-season check on `--refresh`.
+- Mean goals per bucket (spec §A, 2025-26 only) not implemented.
+- CSV is one wide row per (team, key player) plus placebo rows flagged
+  `placebo=True`, not one row per bucket.

@@ -73,6 +73,47 @@ def _ratings(df, season, teams_short_map):
                                    halflife_days=NO_DECAY_HALFLIFE_DAYS)
 
 
+def _analyse(season, bootstrap, fixtures, top, key_players_spec):
+    """Run the whole analysis for one season; returns (result, key, names, teams_short_map, df)."""
+    raw_df = pd.read_csv(_history_path(season))
+    df = key_absence.normalize_history(raw_df, fixtures)
+    teams_short_map = {int(t["id"]): t["short_name"] for t in bootstrap["teams"]}
+    names = {int(e["id"]): e["web_name"] for e in bootstrap["elements"]}
+    is_last = season == LAST_SEASON
+
+    if is_last:
+        signals = key_absence.build_signals_from_history(raw_df)
+    else:
+        last_raw = _raw_dir(LAST_SEASON)
+        last_path = _history_path(LAST_SEASON)
+        last_df = pd.read_csv(last_path) if last_path.exists() else None   # raw: element, minutes, total_points
+        if last_df is not None:
+            last_df["minutes"] = pd.to_numeric(last_df["minutes"], errors="coerce").fillna(0.0)
+        last_boot_path = last_raw / "bootstrap_static.json"
+        last_boot = _load_json(last_boot_path) if last_boot_path.exists() else None
+        signals = key_absence.build_signals(df, bootstrap, last_df, last_boot)
+
+    overrides = key_absence.parse_overrides(key_players_spec, bootstrap, teams_short_map)
+    key = key_absence.select_key_players(signals, top=top, overrides=overrides)
+    placebo = key_absence.select_placebo(df, key, key_absence.team_fixture_sets(df))
+    ratings = _ratings(df, season, teams_short_map)
+    departed = key_absence.departed_ids(bootstrap)
+    result = key_absence.run_analysis(df, fixtures, ratings, key, placebo, teams_short_map, names,
+                                      departed=departed)
+    return result, key, names, teams_short_map
+
+
+def _print_pools(season, result):
+    kp, pp = result["key_pool"], result["placebo_pool"]
+    kx, px = result["key_xgi_pool"], result["placebo_xgi_pool"]
+    ok, why = result["decision"]
+    print(f"{season}: whole-team key {kp['effect']:.3f} [{kp['lo']:.3f}, {kp['hi']:.3f}] n={kp['n']:.0f} "
+          f"| placebo {pp['effect']:.3f} [{pp['lo']:.3f}, {pp['hi']:.3f}] n={pp['n']:.0f}")
+    print(f"{season}: per-teammate xGI90 key {kx['effect']:.3f} [{kx['lo']:.3f}, {kx['hi']:.3f}] rows={kx['rows']} "
+          f"| placebo {px['effect']:.3f} [{px['lo']:.3f}, {px['hi']:.3f}] rows={px['rows']}")
+    print(f"{season}: {'PASS' if ok else 'FAIL'}: {why}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--season", required=True)
@@ -93,29 +134,15 @@ def main(argv=None):
         if args.refresh:
             _refresh(season, bootstrap, fixtures)
 
-    raw_df = pd.read_csv(_history_path(season))
-    df = key_absence.normalize_history(raw_df, fixtures)
-    teams_short_map = {int(t["id"]): t["short_name"] for t in bootstrap["teams"]}
-    names = {int(e["id"]): e["web_name"] for e in bootstrap["elements"]}
+    result, key, names, teams_short_map = _analyse(season, bootstrap, fixtures, args.top, args.key_players)
 
-    if is_last:
-        signals = key_absence.build_signals_from_history(raw_df)
-    else:
-        last_raw = _raw_dir(LAST_SEASON)
-        last_path = _history_path(LAST_SEASON)
-        last_df = pd.read_csv(last_path) if last_path.exists() else None   # raw: element, minutes, total_points
-        if last_df is not None:
-            last_df["minutes"] = pd.to_numeric(last_df["minutes"], errors="coerce").fillna(0.0)
-        last_boot_path = last_raw / "bootstrap_static.json"
-        last_boot = _load_json(last_boot_path) if last_boot_path.exists() else None
-        signals = key_absence.build_signals(df, bootstrap, last_df, last_boot)
-
-    overrides = key_absence.parse_overrides(args.key_players, bootstrap, teams_short_map)
-    key = key_absence.select_key_players(signals, top=args.top, overrides=overrides)
-    placebo = key_absence.select_placebo(df, key, key_absence.team_fixture_sets(df))
-    ratings = _ratings(df, season, teams_short_map)
-
-    result = key_absence.run_analysis(df, fixtures, ratings, key, placebo, teams_short_map, names)
+    reference = None
+    if not is_last and (_raw_dir(LAST_SEASON) / "bootstrap_static.json").exists():
+        ref_boot = _load_json(_raw_dir(LAST_SEASON) / "bootstrap_static.json")
+        ref_fx = _load_json(_raw_dir(LAST_SEASON) / "fixtures.json")
+        ref_result, *_ = _analyse(LAST_SEASON, ref_boot, ref_fx, args.top, None)
+        reference = {"season": LAST_SEASON, **{k: ref_result[k] for k in
+                     ("key_pool", "placebo_pool", "key_xgi_pool", "placebo_xgi_pool")}}
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -125,23 +152,27 @@ def main(argv=None):
 
     caveats = [
         "Absence is inferred: a key player with no row (or zero minutes) for a fixture his team played.",
-        "Transferred players are bounded to their first appearance for the club; the window closes only when they later play for another club.",
+        "A key player who started counts as present even if substituted early.",
+        "Transferred players are bounded to their first appearance for the club; the window closes when they "
+        "later play for another club or the bootstrap marks them unavailable with 'joined' / 'loan' news.",
         "Per-team n is small; read the shrunk column (toward the league pool, k=4) before the raw one.",
+        "Teammates-only ratio = whole-team effect / (1 - key share) when the replacement absorbs the share, so it "
+        "is inflated for better players; the share-adjusted column removes that.",
         "Expected xG controls for opponent defence and venue via the production ratings path "
         + ("(no carryover seed for 2025-26: live-only, no shrinkage)." if is_last else "(2025-26 seed + this season, no decay)."),
     ]
     if is_last:
         caveats.append("2025-26 selection uses season totals from the same matches (identical for every player, noted).")
-    report = key_absence.render_report(result, season, key, names, teams_short_map, caveats)
+    report = key_absence.render_report(result, season, key, names, teams_short_map, caveats, reference=reference)
     docs = Path(args.docs_dir)
     docs.mkdir(parents=True, exist_ok=True)
     report_path = docs / f"key_absence_{season}_{date.today().isoformat()}.md"
     report_path.write_text(report)
 
-    kp, pp = result["key_pool"], result["placebo_pool"]
-    ok, why = result["decision"]
-    print(f"{season}: key {kp['effect']:.3f} [{kp['lo']:.3f}, {kp['hi']:.3f}] n={kp['n']:.0f} pairs={kp['pairs']} "
-          f"| placebo {pp['effect']:.3f} n={pp['n']:.0f} | {'PASS' if ok else 'FAIL'}: {why}")
+    _print_pools(season, result)
+    if reference:
+        _print_pools(f"{LAST_SEASON} (reference)", {**reference, "decision": key_absence.decision(
+            reference["key_xgi_pool"], reference["placebo_xgi_pool"])})
     print(f"wrote {report_path}")
 
 

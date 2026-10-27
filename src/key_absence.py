@@ -97,15 +97,16 @@ def team_fixture_sets(df, min_rows=MIN_ROWS_PER_TEAM_FIXTURE):
     return agg[cols].sort_values(["team_id", "fixture"]).reset_index(drop=True)
 
 
-def presence_buckets(df, team_fx, team_id, player_id):
+def presence_buckets(df, team_fx, team_id, player_id, departed=None):
     """
     The team's played fixtures (from ``team_fixture_sets``) tagged by the key
     player's status: ``present`` (started), ``benched`` (played, no start),
     ``absent`` (zero minutes or no row at all -- the live-history producer
     omits non-players). Only fixtures between the player's first and last
     appearance for this club are kept (the upper bound only when he later
-    plays for another club), so a mid-season signing or sale is not read as
-    an injury absence while a season-ending injury still is. Adds ``bucket``
+    plays for another club, or is in ``departed`` -- left the league, see
+    ``departed_ids``), so a mid-season signing or sale is not read as an
+    injury absence while a season-ending injury still is. Adds ``bucket``
     and ``key_xg``.
     """
     cols = ["team_id", "fixture", "event", "was_home", "team_xg_for", "bucket", "key_xg"]
@@ -131,7 +132,8 @@ def presence_buckets(df, team_fx, team_id, player_id):
     later_elsewhere = df[(df["element"] == player_id) & (df["team_id"] != team_id)
                          & (df["minutes"] > 0)]
     last_here = played["event"].max()
-    if not later_elsewhere.empty and later_elsewhere["event"].max() > last_here:
+    moved = (not later_elsewhere.empty and later_elsewhere["event"].max() > last_here)
+    if moved or player_id in (departed or set()):
         hi = max(appear)
         fx = fx[fx["fixture"].map(pos_of).between(lo, hi)].copy()
     else:
@@ -272,14 +274,24 @@ def team_effect(buckets):
     n = buckets["bucket"].value_counts() if not buckets.empty else {}
     tr_p, tr_a = _mean("team_ratio", "present"), _mean("team_ratio", "absent")
     tm_p, tm_a = _mean("teammates_ratio", "present"), _mean("teammates_ratio", "absent")
+    pres = buckets[buckets["bucket"] == "present"] if not buckets.empty else buckets
+    tot = float(pres["team_xg_for"].sum()) if len(pres) else 0.0
+    share = float(pres["key_xg"].sum()) / tot if tot > 0 else float("nan")
+    tm_eff = _ratio(tm_a, tm_p)
     return {
+        # Share of team xG the key player makes himself when he starts. The
+        # teammates-only ratio equals team_effect / (1 - share) when the
+        # replacement absorbs his share, so it is inflated for better players;
+        # ``adjusted_teammates_effect`` removes that.
+        "key_share_present": share,
+        "adjusted_teammates_effect": tm_eff * (1.0 - share) if share == share else float("nan"),
         "n_present": int(n.get("present", 0)),
         "n_absent": int(n.get("absent", 0)),
         "n_benched": int(n.get("benched", 0)),
         "team_ratio_present": tr_p, "team_ratio_absent": tr_a,
         "teammates_ratio_present": tm_p, "teammates_ratio_absent": tm_a,
         "team_effect": _ratio(tr_a, tr_p),
-        "teammates_effect": _ratio(tm_a, tm_p),
+        "teammates_effect": tm_eff,
         "xg_for_present": _mean("team_xg_for", "present"),
         "xg_for_absent": _mean("team_xg_for", "absent"),
     }
@@ -359,6 +371,28 @@ def pool_effects(rows, key="teammates_effect", weight_key="n_absent",
     return {"effect": effect, "n": float(w.sum()), "lo": float(lo), "hi": float(hi), "pairs": len(v)}
 
 
+def teammate_xgi_pool(rows, draws=BOOTSTRAP_DRAWS, seed=0):
+    """
+    Pooled per-teammate xGI90 absent / present as a ratio of minutes-weighted
+    means (a mean of per-player ratios is Jensen-inflated by near-zero
+    present rates). Weight = min(minutes present, minutes absent).
+    """
+    import numpy as np
+
+    p = np.array([float(r["xg90_present"]) + float(r["xa90_present"]) for r in rows])
+    a = np.array([float(r["xg90_absent"]) + float(r["xa90_absent"]) for r in rows])
+    w = np.array([min(float(r["min_present"]), float(r["min_absent"])) for r in rows])
+    if len(p) == 0 or (p * w).sum() <= 0:
+        return {"effect": float("nan"), "lo": float("nan"), "hi": float("nan"), "rows": int(len(p))}
+    effect = float((a * w).sum() / (p * w).sum())
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, len(p), size=(int(draws), len(p)))
+    denom = (p[idx] * w[idx]).sum(axis=1)
+    boots = (a[idx] * w[idx]).sum(axis=1) / np.where(denom > 0, denom, np.nan)
+    lo, hi = np.nanpercentile(boots, [5, 95])
+    return {"effect": effect, "lo": float(lo), "hi": float(hi), "rows": int(len(p))}
+
+
 def shrink(raw, n, pooled, k=SHRINK_K):
     """``(n*raw + k*pooled) / (n+k)``; a NaN raw counts as n = 0."""
     if raw is None or raw != raw:
@@ -367,18 +401,25 @@ def shrink(raw, n, pooled, k=SHRINK_K):
     return (float(n) * float(raw) + float(k) * float(pooled)) / (float(n) + float(k))
 
 
-def decision(key_pool, placebo_pool, bar=DECISION_BAR):
-    """Signal is real iff the placebo mean sits outside the key 90% interval and key effect < bar."""
+DECISION_MIN_SHIFT = 0.05
+
+
+def decision(key_pool, placebo_pool, min_shift=DECISION_MIN_SHIFT):
+    """
+    Signal is real iff the placebo mean sits outside the key 90% interval
+    and the key effect is at least ``min_shift`` away from 1.0, in either
+    direction (an uplift to teammates is as actionable as a discount).
+    """
     eff, lo, hi = key_pool.get("effect"), key_pool.get("lo"), key_pool.get("hi")
     plc = placebo_pool.get("effect")
     if any(x is None or x != x for x in (eff, lo, hi, plc)):
         return False, "insufficient data (NaN pooled effect)"
     outside = not (lo <= plc <= hi)
-    below = eff < bar
-    ok = outside and below
+    shifted = abs(eff - 1.0) >= float(min_shift)
+    ok = outside and shifted
     why = (f"key pooled {eff:.3f} [{lo:.3f}, {hi:.3f}] vs placebo {plc:.3f}: "
            f"{'placebo outside interval' if outside else 'placebo inside interval'}, "
-           f"{'below' if below else 'not below'} bar {bar:.2f}")
+           f"{'shift' if shifted else 'no shift'} of {abs(eff - 1.0):.3f} vs {min_shift:.2f} needed")
     return ok, why
 
 
@@ -462,6 +503,21 @@ def _norm(s):
     return "".join(c for c in s if not unicodedata.combining(c)).strip().lower()
 
 
+DEPARTED_NEWS_MARKERS = ("joined", "loan")
+
+
+def departed_ids(bootstrap):
+    """Players who left the league: bootstrap status ``u`` with news saying joined / loan."""
+    out = set()
+    for e in (bootstrap or {}).get("elements", []) or []:
+        if str(e.get("status") or "") != "u":
+            continue
+        news = str(e.get("news") or "").lower()
+        if any(m in news for m in DEPARTED_NEWS_MARKERS):
+            out.add(int(e["id"]))
+    return out
+
+
 def parse_overrides(spec, bootstrap, teams_short_map):
     """``"CHE:João Pedro,Palmer;ARS:Saka"`` -> {team_id: [player ids]}; accent-insensitive."""
     if not spec:
@@ -489,12 +545,12 @@ def parse_overrides(spec, bootstrap, teams_short_map):
     return out
 
 
-def run_analysis(df, fixtures, ratings, key, placebo, teams_short_map, names):
+def run_analysis(df, fixtures, ratings, key, placebo, teams_short_map, names, departed=None):
     """Everything per (team, key player) plus placebo, pools, shrinkage, decision."""
     team_fx = team_fixture_sets(df)
 
     def _one(team_id, pid):
-        b = attach_expected(presence_buckets(df, team_fx, team_id, pid), ratings, fixtures)
+        b = attach_expected(presence_buckets(df, team_fx, team_id, pid, departed=departed), ratings, fixtures)
         eff = team_effect(b)
         eff.update({"team_id": int(team_id), "team_short": teams_short_map.get(int(team_id), str(team_id)),
                     "player_id": int(pid), "player_name": names.get(int(pid), str(pid))})
@@ -511,16 +567,25 @@ def run_analysis(df, fixtures, ratings, key, placebo, teams_short_map, names):
                           "key_player_id": int(pid), "key_player_name": eff["player_name"],
                           "teammate_name": names.get(int(r["teammate_id"]), str(r["teammate_id"]))})
                 teammate_rows.append(r)
-    placebo_rows = [_one(t, p)[1] for t, pids in placebo.items() for p in pids]
+    placebo_rows, placebo_teammates = [], []
+    for t, pids in placebo.items():
+        for p in pids:
+            b, eff = _one(t, p)
+            placebo_rows.append(eff)
+            placebo_teammates += teammate_rates(df, b, t, p).to_dict("records")
 
-    key_pool = pool_effects(team_rows)
-    placebo_pool = pool_effects(placebo_rows)
+    # Whole-team pools (opponent/venue controlled); the gate is the per-teammate pool.
+    key_pool = pool_effects(team_rows, key="team_effect")
+    placebo_pool = pool_effects(placebo_rows, key="team_effect")
+    key_xgi_pool = teammate_xgi_pool(teammate_rows)
+    placebo_xgi_pool = teammate_xgi_pool(placebo_teammates)
     for r in team_rows:
-        r["shrunk_teammates_effect"] = shrink(r["teammates_effect"], r["n_absent"], key_pool["effect"])
+        r["shrunk_team_effect"] = shrink(r["team_effect"], r["n_absent"], key_pool["effect"])
     return {
         "team_rows": team_rows, "teammate_rows": teammate_rows, "placebo_rows": placebo_rows,
         "key_pool": key_pool, "placebo_pool": placebo_pool,
-        "decision": decision(key_pool, placebo_pool),
+        "key_xgi_pool": key_xgi_pool, "placebo_xgi_pool": placebo_xgi_pool,
+        "decision": decision(key_xgi_pool, placebo_xgi_pool),
     }
 
 
@@ -532,9 +597,18 @@ def _f(x, nd=3):
     return "n/a" if x is None or x != x else f"{float(x):.{nd}f}"
 
 
-def render_report(result, season, key, names, teams_short_map, caveats):
-    """Markdown report in spec order: selection, pooled decision, per-team table, movers, caveats."""
-    kp, pp = result["key_pool"], result["placebo_pool"]
+def _pool_row(label, pool, n_key="n", n_label="absent matches"):
+    n = pool.get(n_key, pool.get("rows", 0))
+    return (f"| {label} | {_f(pool.get('effect'))} | [{_f(pool.get('lo'))}, {_f(pool.get('hi'))}] | "
+            f"{n:.0f} {n_label} | {pool.get('pairs', pool.get('rows', 0))} |")
+
+
+def render_report(result, season, key, names, teams_short_map, caveats, reference=None):
+    """
+    Markdown report: selection, pooled effects (whole-team and per-teammate,
+    key vs placebo, with the 2025-26 reference when given), decision, per-team
+    table, teammate movers, caveats.
+    """
     ok, why = result["decision"]
     lines = [f"# Key-player absence analysis — {season}", ""]
 
@@ -544,27 +618,39 @@ def render_report(result, season, key, names, teams_short_map, caveats):
                      + ", ".join(names.get(p, str(p)) for p in key[tid]))
     lines.append("")
 
-    lines += ["## League pool: key players vs placebo", "",
-              "| | effect (teammates xG / expected) | 90% interval | n absent matches | pairs |",
+    lines += ["## League pools: key players vs placebo", "",
+              "| | effect (absent / present) | 90% interval | n | pairs / players |",
               "|---|---|---|---|---|",
-              f"| key players | {_f(kp['effect'])} | [{_f(kp['lo'])}, {_f(kp['hi'])}] | {kp['n']:.0f} | {kp['pairs']} |",
-              f"| placebo | {_f(pp['effect'])} | [{_f(pp['lo'])}, {_f(pp['hi'])}] | {pp['n']:.0f} | {pp['pairs']} |",
-              "", f"**Decision: {'PASS' if ok else 'FAIL'}** — {why}", "",
-              "Effect < 1 means teammates produce less xG (per expected, opponent/venue controlled) "
-              "when the key player is out. Phase 2 requires PASS on 2025-26.", ""]
+              _pool_row("whole-team xG, key players", result["key_pool"]),
+              _pool_row("whole-team xG, placebo", result["placebo_pool"]),
+              _pool_row("per-teammate xGI90, key players", result["key_xgi_pool"], "rows", "teammate rows"),
+              _pool_row("per-teammate xGI90, placebo", result["placebo_xgi_pool"], "rows", "teammate rows")]
+    if reference:
+        rs = reference.get("season", "reference")
+        lines += [_pool_row(f"{rs} reference: whole-team, key", reference["key_pool"]),
+                  _pool_row(f"{rs} reference: whole-team, placebo", reference["placebo_pool"]),
+                  _pool_row(f"{rs} reference: per-teammate xGI90, key", reference["key_xgi_pool"], "rows", "teammate rows"),
+                  _pool_row(f"{rs} reference: per-teammate xGI90, placebo", reference["placebo_xgi_pool"], "rows", "teammate rows")]
+    lines += ["", f"**Decision (per-teammate xGI90 pool): {'PASS' if ok else 'FAIL'}** — {why}", "",
+              "Whole-team xG is over fixture expectation (opponent defence + venue controlled); it "
+              "includes the absent player's own share, so it drops mechanically. Per-teammate xGI90 is "
+              "the same player's rate with vs without the key player (≥180 min both), ratio of "
+              "minutes-weighted means: this is what a phase-2 multiplier would scale, so it gates.", ""]
 
-    lines += ["## Per team, per key player (sorted by shrunk effect)", "",
-              "| team | key player | present | absent | benched | teammates effect | shrunk | whole-team effect | xG/match present | xG/match absent |",
-              "|---|---|---|---|---|---|---|---|---|---|"]
-    rows = sorted(result["team_rows"], key=lambda r: (r["shrunk_teammates_effect"] != r["shrunk_teammates_effect"],
-                                                       r["shrunk_teammates_effect"]))
+    lines += ["## Per team, per key player (sorted by shrunk whole-team effect)", "",
+              "| team | key player | present | absent | benched | key share | whole-team effect | shrunk | "
+              "teammates-only | share-adjusted | xG/match present | xG/match absent |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    rows = sorted(result["team_rows"], key=lambda r: (r["shrunk_team_effect"] != r["shrunk_team_effect"],
+                                                       r["shrunk_team_effect"]))
     for r in rows:
         lines.append(f"| {r['team_short']} | {r['player_name']} | {r['n_present']} | {r['n_absent']} | {r['n_benched']} | "
-                     f"{_f(r['teammates_effect'])} | {_f(r['shrunk_teammates_effect'])} | {_f(r['team_effect'])} | "
+                     f"{_f(r['key_share_present'], 2)} | {_f(r['team_effect'])} | {_f(r['shrunk_team_effect'])} | "
+                     f"{_f(r['teammates_effect'])} | {_f(r['adjusted_teammates_effect'])} | "
                      f"{_f(r['xg_for_present'], 2)} | {_f(r['xg_for_absent'], 2)} |")
     lines.append("")
 
-    lines += ["## Teammate movers (xG90+xA90 absent / present; ≥180 min both buckets)", ""]
+    lines += ["## Teammate movers (xGI90 absent / present; ≥180 min both buckets)", ""]
     by_key = {}
     for t in result["teammate_rows"]:
         by_key.setdefault((t["team_short"], t["key_player_name"]), []).append(t)
