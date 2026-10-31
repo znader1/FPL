@@ -805,15 +805,17 @@ def project_elements_next_gws(
         effective_fixtures = effective_fixtures.where(fixture_count > 0, 0.0)
 
         if i == 0:
-            # GW1: ep_next from FPL already bakes in fixture count (DGW-aware).
-            # For players where ep_next is available, treat base_gw0 as a per-GW total
-            # and only apply difficulty/home/form context multipliers, not fixture scaling.
+            # GW1: FPL's ep_next already bakes in fixture count, difficulty,
+            # venue and form, so its share of the blend is taken raw; only the
+            # baseline share is scaled by the fixtures and the context
+            # multipliers. A blank GW is zero for everyone — a blanking player
+            # used to keep the baseline half of his blend.
             has_ep = ep_next.notna()
-            xpts_with_ep = base_gw0 * ctx_mult
-            xpts_no_ep = blended_base * effective_fixtures * ctx_mult
-            xpts = xpts_with_ep.where(has_ep, xpts_no_ep)
-            # Zero out blanks for non-ep players
-            xpts = xpts.where(has_ep | (fixture_count > 0), 0.0)
+            ep_share = pd.Series(float(ep_next_blend_weight), index=df.index).where(
+                has_recent_history, 1.0).where(has_ep, 0.0)
+            baseline_leg = blended_base * effective_fixtures * ctx_mult
+            xpts = ep_share * ep_next.fillna(0.0) + (1.0 - ep_share) * baseline_leg
+            xpts = xpts.where(fixture_count > 0, 0.0)
             if minutes_mult is not None:
                 xpts = xpts * minutes_mult
             else:

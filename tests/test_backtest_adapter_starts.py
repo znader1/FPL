@@ -34,3 +34,54 @@ def test_falls_back_to_proxy_without_starts(monkeypatch):
     starts = dict(zip(out["player_id"], out["gw_starts"]))
     assert starts[1] == 1  # 80 >= 60
     assert starts[2] == 0  # 45 < 60
+
+
+def _two_player_history():
+    return pd.DataFrame({
+        "element": [1, 2], "gw": [1, 1], "total_points": [3, 2],
+        "minutes": [80, 45], "starts": [1, 1], "team": ["Team A", "Team A"],
+        "name": ["One", "Two"], "position": ["MID", "DEF"], "price_m": [5.0, 4.5],
+    })
+
+
+def test_ep_next_comes_from_the_target_gw_xp(monkeypatch):
+    # The target GW's xP was published before its deadline, so it is the one
+    # column the adapter may read past the history cut-off. Player 2 has no
+    # row that GW: missing, never 0 (the engine treats 0 as a real ep_next).
+    _patch_common(monkeypatch, _two_player_history())
+    monkeypatch.setattr(backtest_data, "load_gw", lambda gw, season="2025-26": pd.DataFrame(
+        {"element": [1], "xP": [4.2]}) if gw == 2 else pd.DataFrame())
+    out = backtest_adapter.build_elements_df(target_gw=2).set_index("id")
+    assert float(out.loc[1, "ep_next"]) == 4.2
+    assert pd.isna(out.loc[2, "ep_next"])
+
+
+def test_ep_next_missing_when_target_gw_file_absent(monkeypatch):
+    _patch_common(monkeypatch, _two_player_history())
+
+    def _raise(gw, season="2025-26"):
+        raise FileNotFoundError(gw)
+    monkeypatch.setattr(backtest_data, "load_gw", _raise)
+    out = backtest_adapter.build_elements_df(target_gw=2)
+    assert out["ep_next"].isna().all()
+
+
+def test_ep_next_missing_when_the_gw_file_has_no_xp(monkeypatch):
+    # 27 of the 38 local 2025-26 files carry xP = 0.0 for everyone (scraped
+    # after FPL reset it). Zero everywhere is "not collected", not "FPL
+    # expected nothing": the engine must fall back to its own baseline.
+    _patch_common(monkeypatch, _two_player_history())
+    monkeypatch.setattr(backtest_data, "load_gw", lambda gw, season="2025-26": pd.DataFrame(
+        {"element": [1, 2], "xP": [0.0, 0.0]}))
+    out = backtest_adapter.build_elements_df(target_gw=2)
+    assert out["ep_next"].isna().all()
+
+
+def test_ep_next_dedups_double_gw_rows(monkeypatch):
+    # Vaastav writes one row per fixture in a double GW with the same per-GW xP.
+    _patch_common(monkeypatch, _two_player_history())
+    monkeypatch.setattr(backtest_data, "load_gw", lambda gw, season="2025-26": pd.DataFrame(
+        {"element": [1, 1, 2], "xP": [3.5, 3.5, 0.0]}))
+    out = backtest_adapter.build_elements_df(target_gw=2).set_index("id")
+    assert float(out.loc[1, "ep_next"]) == 3.5
+    assert float(out.loc[2, "ep_next"]) == 0.0

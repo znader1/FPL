@@ -33,6 +33,7 @@ from src.backtest_data import (
     player_actuals_through,
 )
 from src.backtest_adapter import build_engine_inputs
+from src import config
 from src import projections as engine_projections
 from src import transfer_planner
 from src.chip_advisor import plan_chips_smart, recommend_chips
@@ -52,6 +53,13 @@ CAPTAIN_POSITION_MULT = {"FWD": 1.16, "MID": 1.12, "DEF": 0.92, "GKP": 0.70}
 # being unavailable at the Africa Cup of Nations
 CAN_BONUS_GW = 16
 CAN_BONUS_FT = 5
+
+CHIP_MIN_VALUE_FALLBACK = 5.0
+
+
+def chip_min_value(chip: str) -> float:
+    """Production chip floor (config.CHIP_PLAN_MIN_EV); the sim used its own."""
+    return float(config.CHIP_PLAN_MIN_EV.get(chip, CHIP_MIN_VALUE_FALLBACK))
 
 
 # ---------- projection ----------
@@ -556,12 +564,7 @@ def decide_chip_weekly(
         # - best.gw IS this GW
         # - OR forced by phase deadline (very few GWs left in phase)
         # - AND expected_value is above minimum useful threshold per chip
-        min_value = {
-            "wildcard": 25.0,
-            "free_hit": 15.0,
-            "bench_boost": 10.0,
-            "triple_captain": 6.0,
-        }.get(chip, 5.0)
+        min_value = chip_min_value(chip)
 
         forced_by_deadline = gws_to_phase_end <= 1
         is_best_now = best.gw == gw

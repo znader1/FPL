@@ -175,3 +175,12 @@ def test_planner_ft_state_accrues_through_wildcard_gw(monkeypatch, tmp_path):
     assert by_gw.loc[3, "ft"] == 3
     # GW4: back to normal, accrues again from the post-wildcard state.
     assert by_gw.loc[4, "ft"] == 4
+
+
+def test_chip_bar_comes_from_config(monkeypatch):
+    # The season sim used its own chip floors (WC 25 / FH 15 / TC 6), so the
+    # "season points >= baseline" gate never exercised the production bars.
+    from src import config
+    monkeypatch.setattr(config, "CHIP_PLAN_MIN_EV", {"triple_captain": 42.0}, raising=False)
+    assert bts.chip_min_value("triple_captain") == 42.0
+    assert bts.chip_min_value("wildcard") == bts.CHIP_MIN_VALUE_FALLBACK
