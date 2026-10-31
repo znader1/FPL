@@ -120,6 +120,16 @@ def test_select_excludes_gk_and_returns_top_n():
     assert out == {1: [2, 3, 4]}
 
 
+def test_select_excludes_defenders():
+    # A high-ppg centre-back outranked real attackers (Muñoz, Rice-type picks);
+    # key players are the attacking core, so MID/FWD only.
+    sig = pd.DataFrame([
+        _sig(1, 1, etype=2, threat=999, creativity=999, now_cost=99, last_ppg=9, this_ppg=9),
+        _sig(2, 1, threat=300), _sig(3, 1, threat=200), _sig(4, 1, etype=4, threat=100),
+    ])
+    assert key_absence.select_key_players(sig, top=3) == {1: [2, 3, 4]}
+
+
 def test_select_rate_not_total():
     # B has half the minutes and half the threat: same rate, must still rank above C.
     sig = pd.DataFrame([

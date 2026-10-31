@@ -164,11 +164,12 @@ def presence_buckets(df, team_fx, team_id, player_id, departed=None):
 
 SELECTION_MIN_MINUTES = 270.0
 GOALKEEPER = 1
+DEFENDER = 2
 
 
 def select_key_players(signals, top=3, min_minutes=SELECTION_MIN_MINUTES, overrides=None):
     """
-    Top ``top`` outfield players per team by rank-sum of threat/90,
+    Top ``top`` midfielders and forwards per team by rank-sum of threat/90,
     creativity/90, price, last-season ppg and this-season ppg (equal weights,
     higher is better, NaN ranks last). Rates, not totals, so a player's own
     absences cannot push him off the list; under ``min_minutes`` the two
@@ -181,7 +182,7 @@ def select_key_players(signals, top=3, min_minutes=SELECTION_MIN_MINUTES, overri
     s = signals.copy()
     for c in ("minutes", "threat", "creativity", "now_cost", "last_ppg", "this_ppg"):
         s[c] = pd.to_numeric(s.get(c), errors="coerce")
-    s = s[pd.to_numeric(s["element_type"], errors="coerce") != GOALKEEPER]
+    s = s[~pd.to_numeric(s["element_type"], errors="coerce").isin((GOALKEEPER, DEFENDER))]
     mins = s["minutes"].fillna(0.0)
     enough = mins >= float(min_minutes)
     s["threat90"] = (s["threat"] / mins * 90.0).where(enough)
