@@ -94,10 +94,16 @@ def target_gw_ep_next(target_gw: int, season: str = "2025-26") -> pd.Series:
         return pd.Series(dtype="float64")
     if gw_df is None or gw_df.empty or "xP" not in gw_df.columns or "element" not in gw_df.columns:
         return pd.Series(dtype="float64")
-    ids = pd.to_numeric(gw_df["element"], errors="coerce")
     xp = pd.to_numeric(gw_df["xP"], errors="coerce")
+    if not (xp > 0).any():
+        # Scraped after FPL reset the column: 0.0 for everyone means "not
+        # collected", not "FPL expected nothing" (27 of 38 local 2025-26 files).
+        return pd.Series(dtype="float64")
+    ids = pd.to_numeric(gw_df["element"], errors="coerce")
     ok = ids.notna()
-    return pd.Series(xp[ok].values, index=ids[ok].astype(int).values, dtype="float64")
+    # One row per fixture in a double GW, same per-GW xP on each.
+    out = pd.Series(xp[ok].values, index=ids[ok].astype(int).values, dtype="float64")
+    return out[~out.index.duplicated(keep="first")]
 
 
 def build_elements_df(target_gw: int, season: str = "2025-26") -> pd.DataFrame:
@@ -142,7 +148,7 @@ def build_elements_df(target_gw: int, season: str = "2025-26") -> pd.DataFrame:
     df["element_type"] = df["pos"].map(POSITION_TO_ELEMENT_TYPE).fillna(3).astype(int)
     df["now_cost"] = (pd.to_numeric(df["price_m"], errors="coerce").fillna(4.0) * 10).astype(int)
     df["points_per_game"] = df["total_points"] / df["games"].clip(lower=1)
-    df["ep_next"] = target_gw_ep_next(target_gw, season).reindex(df["id"]).values
+    df["ep_next"] = df["id"].map(target_gw_ep_next(target_gw, season)).astype("float64")
     df["ep_this"] = 0.0
     df["status"] = "a"  # assume available (Vaastav doesn't track this historically)
     df["chance_of_playing_next_round"] = 100
