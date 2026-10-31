@@ -78,6 +78,28 @@ def build_history_df(target_gw: int, season: str = "2025-26") -> pd.DataFrame:
     return df[cols].copy()
 
 
+def target_gw_ep_next(target_gw: int, season: str = "2025-26") -> pd.Series:
+    """
+    FPL's expected points for the target GW, indexed by player id.
+
+    Vaastav's per-GW ``xP`` is FPL's own ep for that GW, published before its
+    deadline, so it is the one column read past the ``gw < target_gw`` history
+    cut-off: production blends ep_next at PROJ_EP_NEXT_BLEND_WEIGHT and the
+    harness must see the same input. Players without a row (or no file) are
+    missing, never 0 — the engine treats 0 as a real ep_next.
+    """
+    try:
+        gw_df = backtest_data.load_gw(target_gw, season)
+    except FileNotFoundError:
+        return pd.Series(dtype="float64")
+    if gw_df is None or gw_df.empty or "xP" not in gw_df.columns or "element" not in gw_df.columns:
+        return pd.Series(dtype="float64")
+    ids = pd.to_numeric(gw_df["element"], errors="coerce")
+    xp = pd.to_numeric(gw_df["xP"], errors="coerce")
+    ok = ids.notna()
+    return pd.Series(xp[ok].values, index=ids[ok].astype(int).values, dtype="float64")
+
+
 def build_elements_df(target_gw: int, season: str = "2025-26") -> pd.DataFrame:
     """
     Build the elements DataFrame the engine expects.
@@ -120,7 +142,7 @@ def build_elements_df(target_gw: int, season: str = "2025-26") -> pd.DataFrame:
     df["element_type"] = df["pos"].map(POSITION_TO_ELEMENT_TYPE).fillna(3).astype(int)
     df["now_cost"] = (pd.to_numeric(df["price_m"], errors="coerce").fillna(4.0) * 10).astype(int)
     df["points_per_game"] = df["total_points"] / df["games"].clip(lower=1)
-    df["ep_next"] = 0.0  # not used (we disabled ep_next blending in config)
+    df["ep_next"] = target_gw_ep_next(target_gw, season).reindex(df["id"]).values
     df["ep_this"] = 0.0
     df["status"] = "a"  # assume available (Vaastav doesn't track this historically)
     df["chance_of_playing_next_round"] = 100
