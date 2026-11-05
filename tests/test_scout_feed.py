@@ -173,3 +173,48 @@ def test_two_listed_players_with_one_surname_are_not_guessed_between():
     out = scout_feed.parse_captain("<p>Silva is handed the armband, with Haaland named as vice-captain.</p>",
                                    players)
     assert (out["captain"], out["stated"]) == (None, False)
+
+
+# --- final review: a positional rule can state the wrong captain ----------------------------
+
+REVIEW_PLAYERS = [{"name_raw": n} for n in ("Bukayo Saka", "Erling Haaland", "Cole Palmer", "Reece James")]
+
+
+def _cap(sentence):
+    out = scout_feed.parse_captain(f"<p>{sentence}</p>", REVIEW_PLAYERS)
+    return out["captain"], out["vice"], out["stated"]
+
+
+def test_the_vice_captain_is_the_name_next_to_the_word_not_the_second_name():
+    assert _cap("Saka is handed the vice-captaincy, with Haaland taking the armband.") == (
+        "Erling Haaland", "Bukayo Saka", True)
+    assert _cap("Saka is named vice-captain, while Haaland is captain.") == ("Erling Haaland", "Bukayo Saka", True)
+
+
+def test_a_vice_captain_sentence_without_a_captain_cue_states_nothing():
+    for sentence in ("Saka is the vice-captain, just ahead of Palmer.",
+                     "James Maddison misses out, so Saka is vice-captain.",
+                     "Haaland and Saka were both considered for the vice-captaincy."):
+        out = scout_feed.parse_captain(f"<p>{sentence}</p>", REVIEW_PLAYERS)
+        assert (out["captain"], out["vice"], out["stated"]) == (None, None, False), sentence
+        assert out["unclear"] is True, sentence
+
+
+def test_three_listed_names_in_the_sentence_state_nothing():
+    out = scout_feed.parse_captain(
+        "<p>With Palmer rested, Haaland takes the armband and Saka is vice-captain.</p>", REVIEW_PLAYERS)
+    assert (out["captain"], out["stated"], out["unclear"]) == (None, False, True)
+
+
+def test_no_vice_captain_sentence_is_not_unclear():
+    out = scout_feed.parse_captain("<p>Haaland faces Forest.</p>", REVIEW_PLAYERS)
+    assert (out["stated"], out["unclear"]) == (False, False)
+
+
+def test_an_unreadable_captain_sentence_flags_the_article_for_review():
+    art = load("article_4756626.json")
+    art["body"] = art["body"].replace("are named captain and vice-captain respectively",
+                                      "were both considered for the vice-captaincy")
+    a = scout_feed.parse_article(art, {})
+    assert a["captain"] is None and a["captain_stated"] is False
+    assert a["needs_review"] is True and "captain" in a["review_reason"]

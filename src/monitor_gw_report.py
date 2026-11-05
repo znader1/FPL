@@ -120,6 +120,7 @@ def _app_xi(g):
         "projected": _num(rows["xpts"].sum(), 2),
         "price_m": _num(pd.to_numeric(rows["price_m"], errors="coerce").sum(), 1),
         "points_no_captain": scored["no_captain"], "points_with_captain": scored["with_captain"],
+        "missing_points": list(scored.get("missing") or []),
         "model_version": version,
     }
 
@@ -145,6 +146,10 @@ def _scout_xi(g):
         "captain_stated": stated, "captain_inferred_id": inferred if not stated else None,
         "price_m": _num(sum(prices), 1) if prices else None,
         "points_no_captain": scored["no_captain"], "points_with_captain": scored["with_captain"],
+        "missing_points": list(scored.get("missing") or []),
+        # An eleven with an unmatched name is scored on fewer than eleven players:
+        # shown on its own card, never set beside an eleven-man total.
+        "partial": bool(row.get("unmatched")),
         "needs_review": bool(row.get("needs_review")),
     }
 
@@ -185,7 +190,7 @@ def _best_xi(g):
 def _headline(app, scout, you, best):
     basis = "with_captain" if scout.get("available") and scout.get("captain_stated") else "no_captain"
     key = f"points_{basis}"
-    return {"basis": basis, "app": app.get(key), "scout": scout.get(key),
+    return {"basis": basis, "app": app.get(key), "scout": None if scout.get("partial") else scout.get(key),
             "you": you.get("points"), "best": best.get("points")}
 
 
@@ -288,7 +293,9 @@ def _wildcard(g, you):
                                           g.last_finished)
         g.use(ids)
         return {"ids": [int(i) for i in ids], "points": s["points"], "played": s["played"],
-                "complete": s["complete"], "no_projection_gws": s["no_projection_gws"]}
+                "complete": s["complete"], "no_projection_gws": s["no_projection_gws"],
+                # players with no stored projection that week could not be fielded
+                "absent_by_gw": {str(x): v["absent"] for x, v in s["by_gw"].items() if v["absent"]}}
 
     picks_by_gw = {int(k): [int(p["element"]) for p in sorted(v.get("picks") or [], key=lambda p: int(p["position"]))]
                    for k, v in actuals.items()}
@@ -335,6 +342,7 @@ def _replay(g):
     notes = []
     if any(r.get("origin") == "replay" for r in rows):
         notes.append(REPLAY_NOTE)
+        notes += list(monitor_replay.PRESENT_DAY_NOTES)
     _, wildcard = _advice(g, "wildcard_drafts")
     notes += list((wildcard or {}).get("notes") or [])
     if parity.get("status") == "fail":

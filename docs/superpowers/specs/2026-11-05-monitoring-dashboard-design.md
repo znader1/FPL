@@ -140,7 +140,7 @@ Compute off the API, read straight from the database.
 All scoring is pure Python in `src/` (no network, no FastAPI), unit-tested, called by thin scripts.
 
 ### 7.2 Tables (new migration, applied in the Supabase dashboard before the code that writes them merges)
-- `expert_picks`: key `(season, gw, source, series)`. `source` = `scout`; `series` = `selection`, `transfer_radar`, `wildcard`. Columns: url, title, published_at, fetched_at, captain and vice player ids, `captain_stated` boolean, `players` jsonb (raw name, raw club, price, resolved `fpl_player_id`, reason, stated horizon), `needs_review` boolean.
+- `expert_picks`: key `(season, gw, source, series)`. `source` = `scout`; `series` = `selection`, `transfer_radar`, `wildcard`. Columns: url, title, published_at, fetched_at, captain and vice player ids, `captain_stated` boolean, `players` jsonb (raw name, raw club, price, resolved `fpl_player_id`; no article prose, see 7.4), `needs_review` boolean.
 - `advice_snapshots`: key `(season, gw, entry_id, kind, origin)`. `kind` = `transfer_plan`, `wildcard_drafts`, `buy_targets` (entry_id 0, squad-independent). `origin` = `live` (saved before the deadline from production) or `replay` (rebuilt later). Columns: model_version, payload jsonb, captured_at. A `live` row is never overwritten after its deadline.
 - `entry_gw_actuals`: key `(season, gw, entry_id)`. Picks, transfers, chip, points, points on bench, transfer cost, bank, value.
 - `monitor_reports`: key `(season, gw, entry_id)`. The finished report the page renders (section 5 outputs), plus `built_at` and the code version. Rebuilt whenever inputs or scoring rules change; inputs are the source of truth, reports are disposable.

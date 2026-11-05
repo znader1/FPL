@@ -22,6 +22,16 @@ import pandas as pd
 from . import config, ft_tracker, injury_prior, projections, recommender, season_replay, transfer_planner
 
 FREE_HIT = "freehit"
+NO_SQUAD_REASON = "no squad known before this gameweek"
+# Bootstrap fields that say who takes penalties, free kicks and corners *today*.
+SET_PIECE_FIELDS = ("penalties_order", "direct_freekicks_order", "corners_and_indirect_freekicks_order")
+# What in a rebuild is still present-day, said on every rebuilt report.
+PRESENT_DAY_NOTES = (
+    "set-piece takers are switched off in the rebuild: only today's are known, and today's taker "
+    "would be credited in weeks he was not on penalties",
+    "the fixture list is today's: a match rescheduled since then appears in its new gameweek",
+    "club and position are today's",
+)
 WILDCARD_NOTES = (
     "injury prior rebuilt from stored snapshot statuses before this gameweek",
     "European haircut uses the calendar file as shipped",
@@ -109,6 +119,17 @@ def opponents_by_gw(fixtures, teams_short_map, gws):
     return out
 
 
+def project(gw, horizon, inputs):
+    """The as-of projection every rebuild uses: season_replay.project_as_of with
+    today's set-piece orders blanked, so today's penalty taker gets no uplift in
+    a gameweek where he may not have been the taker. The caller's `inputs` are
+    not modified."""
+    bootstrap = dict(inputs["bootstrap"])
+    bootstrap["elements"] = [{**e, **{f: None for f in SET_PIECE_FIELDS}}
+                             for e in bootstrap.get("elements") or []]
+    return season_replay.project_as_of(int(gw), int(horizon), {**inputs, "bootstrap": bootstrap})
+
+
 def _teams_short_map(bootstrap):
     return {int(t["id"]): t.get("short_name") for t in (bootstrap or {}).get("teams") or []}
 
@@ -118,11 +139,11 @@ def replay_transfer_plan(gw, state, inputs):
     squad, bank and free transfers. Arguments mirror production's call in
     api/main.py (server defaults: 3-gameweek horizon, injured-first on)."""
     if not state:
-        return {"available": False, "reason": "no squad known before this gameweek"}
+        return {"available": False, "reason": NO_SQUAD_REASON}
     try:
         horizon = int(config.MONITOR_ADVICE_HORIZON_GWS)
         gws = [int(gw) + i for i in range(horizon)]
-        proj = season_replay.project_as_of(int(gw), horizon, inputs)
+        proj = project(gw, horizon, inputs)
         known = set(pd.to_numeric(proj["id"], errors="coerce").dropna().astype(int))
         squad = [int(p) for p in state["squad_ids"]]
         plan = transfer_planner.plan_transfers(
@@ -154,7 +175,7 @@ def replay_wildcard_squads(gw, budget_m, inputs, status_path):
         from api import wildcard as wc   # the preset builder lives beside the route
         horizon = int(config.CHIP_WILDCARD_DEFAULT_HORIZON_GWS)
         gws = [int(gw) + i for i in range(horizon)]
-        proj = season_replay.project_as_of(int(gw), horizon, inputs)
+        proj = project(gw, horizon, inputs)
         scoring = projections.attach_wildcard_signals(
             wc.european_haircut(proj, gws, inputs["bootstrap"]), gw_start=int(gw),
             match_df=season_replay.cap_match_history(inputs["match_df"], int(gw)),
@@ -178,7 +199,7 @@ def replay_buy_targets(gw, inputs):
     each outfield position, with no players owned."""
     try:
         horizon = int(config.MONITOR_ADVICE_HORIZON_GWS)
-        proj = season_replay.project_as_of(int(gw), horizon, inputs)
+        proj = project(gw, horizon, inputs)
         market = recommender.prepare_market(proj, score_col="xpts_horizon", horizon_gws=horizon)
         hot = recommender.hot_by_position(market, owned_ids=[],
                                           n=int(config.MONITOR_BUY_LIST_PER_POSITION),

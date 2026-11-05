@@ -80,3 +80,16 @@ The season squad and the wildcard squads are not in the article text at all: the
 - **The feed from a GitHub runner.** Reachable from the laptop; the runner is untested. If it is blocked the run says so, stores no Scout rows and exits non-zero.
 - **GW10.** Its deadline is 2026-11-06 18:30 GMT. Run it after that.
 - **Entry 5645321** produced a report for every gameweek in run A; its numbers were not checked against anything.
+
+## After the whole-branch review (2026-11-06)
+
+A fresh reviewer read the branch: no critical findings, four important ones, all fixed with a test that failed first. Both dry runs were repeated afterwards and give the same numbers as above.
+
+1. **A degraded run could overwrite good reports and exit green.** A rate-limited picks call was logged as "no picks"; a rebuild that raised was stored as "unavailable" without failing the run. Now only a 404 means an entry has no picks, a broken rebuild is a failure, and the report of any gameweek and entry whose inputs failed is not written (`writable`). A feed outage or a failed engine refresh writes no report at all. The run exits non-zero.
+2. **The captain rule could state the wrong captain.** It took the first name in the sentence as captain. "Saka is handed the vice-captaincy, with Haaland taking the armband" would have doubled Saka. Each player now goes with the word he stands nearest ("vice-captain" or a captain cue), and a "vice-captain" sentence that does not settle it flags the article instead of guessing. All nine real sentences still parse to the captains listed above.
+3. **Today's penalty takers reached replayed gameweeks.** The engine adds an uplift for the first-choice taker, read from today's data. Every rebuild now blanks the set-piece orders. Still present-day, and said in every rebuilt report: the fixture list, club and position.
+4. **A ten-man Scout total could sit beside an eleven-man app total.** With an unmatched name the Scout's eleven is marked `partial` and its total is kept off the headline.
+
+Also from the review: players a squad could not field (no stored projection that week) and players with no real points are now named on their cards; the migration can be run twice; the article's prose is no longer stored (picks and facts only, spec 7.4).
+
+Deferred minors are listed in the pull request.

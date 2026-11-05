@@ -5,6 +5,8 @@
 -- Then make yourself the owner, once, by hand (your id is under Authentication > Users):
 --   insert into public.monitor_owners (user_id) values ('<your auth.users id>');
 --
+-- Safe to run twice: tables are created only if missing and each policy is replaced.
+--
 -- Access model: the service role writes (it bypasses row-level security). A signed-in user can
 -- read a row only when their user id is in monitor_owners. No one else gets a policy, so every
 -- other user reads nothing.
@@ -78,17 +80,22 @@ alter table public.advice_snapshots enable row level security;
 alter table public.entry_gw_actuals enable row level security;
 alter table public.monitor_reports enable row level security;
 
+drop policy if exists monitor_owners_read_self on public.monitor_owners;
 create policy monitor_owners_read_self on public.monitor_owners
   for select to authenticated using (user_id = auth.uid());
 
+drop policy if exists expert_picks_owner_read on public.expert_picks;
 create policy expert_picks_owner_read on public.expert_picks
   for select to authenticated using (auth.uid() in (select user_id from public.monitor_owners));
 
+drop policy if exists advice_snapshots_owner_read on public.advice_snapshots;
 create policy advice_snapshots_owner_read on public.advice_snapshots
   for select to authenticated using (auth.uid() in (select user_id from public.monitor_owners));
 
+drop policy if exists entry_gw_actuals_owner_read on public.entry_gw_actuals;
 create policy entry_gw_actuals_owner_read on public.entry_gw_actuals
   for select to authenticated using (auth.uid() in (select user_id from public.monitor_owners));
 
+drop policy if exists monitor_reports_owner_read on public.monitor_reports;
 create policy monitor_reports_owner_read on public.monitor_reports
   for select to authenticated using (auth.uid() in (select user_id from public.monitor_owners));

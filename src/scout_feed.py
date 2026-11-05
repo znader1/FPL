@@ -28,6 +28,7 @@ _HEADING = re.compile(r"<h5[^>]*>(.*?)</h5>", re.S | re.I)
 _PARAGRAPH = re.compile(r"<p[^>]*>(.*?)</p>", re.S | re.I)
 _PLAYER_HEADING = re.compile(r"^(?P<name>.+?)\s*\((?P<club>[^()]+)\)\s*£\s*(?P<price>\d+(?:\.\d+)?)m$")
 _VICE = re.compile(r"vice-captain", re.I)
+_CAPTAIN_CUE = re.compile(r"(?<!vice-)captain|armband", re.I)   # "captain" on its own, not inside "vice-captain"
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 # A section that talks about the decision itself ("the captaincy decision", "captain
 # favourite"), not one that merely calls a player an alternative or a club captain.
@@ -120,30 +121,65 @@ def parse_players(body_html):
 
 
 def _mentions(sentence, names):
-    """Listed players named in a sentence, in order. A player is named by his full
-    name or by his surname alone, the latter only when no other listed player
-    shares it."""
+    """[(start, end, name)] of listed players named in a sentence, in order. A
+    player is named by his full name or by his surname alone, the latter only
+    when no other listed player shares it."""
     surnames = [n.split()[-1] for n in names]
     found = []
     for name, surname in zip(names, surnames):
-        at = sentence.find(name)
+        at, length = sentence.find(name), len(name)
         if at < 0 and surnames.count(surname) == 1:
             m = re.search(rf"(?<![\w-]){re.escape(surname)}(?![\w-])", sentence)
-            at = m.start() if m else -1
+            at, length = (m.start(), len(surname)) if m else (-1, 0)
         if at >= 0:
-            found.append((at, name))
-    return [name for _, name in sorted(found)]
+            found.append((at, at + length, name))
+    return sorted(found)
+
+
+def _gap(a, b):
+    """Characters between two spans (0 when they touch or overlap)."""
+    return max(a[0] - b[1], b[0] - a[1], 0)
+
+
+def _assign_roles(named, vice_span, cue_spans):
+    """(captain, vice) for two named players, or None when the sentence does not
+    settle it. Each player belongs with the word he stands nearest: the pairing
+    with the smaller total distance to "vice-captain" and to a captain cue wins.
+    A dead heat ("X and Y are named captain and vice-captain respectively") is
+    read in order, but only when both names sit on the same side of both words."""
+    first, second = named
+
+    def to_cue(mention):
+        return min(_gap(mention[:2], c) for c in cue_spans)
+
+    first_is_vice = _gap(first[:2], vice_span) + to_cue(second)
+    second_is_vice = _gap(second[:2], vice_span) + to_cue(first)
+    if first_is_vice < second_is_vice:
+        return second[2], first[2]
+    if second_is_vice < first_is_vice:
+        return first[2], second[2]
+    words = sorted([("vice", vice_span)] + [("captain", c) for c in cue_spans], key=lambda w: w[1])
+    before = second[1] <= words[0][1][0]
+    after = first[0] >= words[-1][1][1]
+    if before or after:
+        return (first[2], second[2]) if words[0][0] == "captain" else (second[2], first[2])
+    return None
 
 
 def parse_captain(body_html, players):
-    """→ {"captain", "vice", "stated", "inferred"} (names as written, or None).
+    """→ {"captain", "vice", "stated", "inferred", "unclear"} (names as written, or None).
 
     Stated: the Scout names captain and vice-captain together in one sentence,
     in wording that changes weekly ("X earns the captain's armband, with Y named
     as vice-captain", "X and Y are named captain and vice-captain respectively",
-    "X is named as captain ..., with Y given the vice-captaincy"). The sentence
-    with "vice-captain" that names exactly two listed players is the statement:
-    the first is the captain, the second the vice.
+    "Y is handed the vice-captaincy, with X taking the armband"). A sentence is
+    the statement only when it has "vice-captain", a captain cue of its own
+    ("captain" or "armband") and exactly two listed players. The vice is the one
+    named nearest the word "vice-captain", whichever side; the other is captain.
+
+    A "vice-captain" sentence that does not meet that is `unclear`: nothing is
+    stated and the article is flagged, because a wrong captain doubles the wrong
+    player's points.
 
     Inferred: nothing stated, and exactly one player's own section discusses the
     captaincy decision. Kept apart from a statement, and deliberately narrow: a
@@ -152,29 +188,40 @@ def parse_captain(body_html, players):
     """
     names = [p["name_raw"] for p in players or [] if p.get("name_raw")]
     body = _strip_code(body_html)
+    unclear = False
     for para in _PARAGRAPH.findall(body):
         for sentence in _SENTENCE_END.split(_text(para)):
-            if not _VICE.search(sentence):
+            word = _VICE.search(sentence)
+            if not word:
                 continue
             named = _mentions(sentence, names)
-            if len(named) == 2:
-                return {"captain": named[0], "vice": named[1], "stated": True, "inferred": None}
+            cues = [m.span() for m in _CAPTAIN_CUE.finditer(sentence)]
+            roles = _assign_roles(named, word.span(), cues) if len(named) == 2 and cues else None
+            if roles is None:
+                unclear = True
+                continue
+            captain, vice = roles
+            return {"captain": captain, "vice": vice, "stated": True, "inferred": None, "unclear": False}
+    if unclear:
+        return {"captain": None, "vice": None, "stated": False, "inferred": None, "unclear": True}
     hinted = []
     for heading, section in _sections(body):
         m = _PLAYER_HEADING.match(heading)
         if m and _CAPTAIN_DECISION.search(_section_text(section)):
             hinted.append(m.group("name").strip())
     inferred = hinted[0] if len(hinted) == 1 else None
-    return {"captain": None, "vice": None, "stated": False, "inferred": inferred}
+    return {"captain": None, "vice": None, "stated": False, "inferred": inferred, "unclear": False}
 
 
-def _review(series, players, from_override, confirmed):
+def _review(series, players, from_override, confirmed, captain_unclear=False):
     """→ (needs_review, reason)."""
     n = len(players)
     if series is None:
         return True, "article type not recognised from its title"
     if series == "selection" and n != SELECTION_SIZE:
         return True, f"expected {SELECTION_SIZE} players, found {n}"
+    if series == "selection" and captain_unclear:
+        return True, "the captain sentence could not be read"
     if series == "transfer_radar" and n == 0:
         return True, "no player headings found"
     if series in ("wildcard", "season_squad"):
@@ -204,12 +251,13 @@ def parse_article(article, overrides):
         players = [{"name_raw": str(p["name"]), "club_raw": str(p["club"]), "price_m": None, "reason": ""}
                    for p in ov["players"]]
         cap = {"captain": ov.get("captain"), "vice": ov.get("vice"),
-               "stated": bool(ov.get("captain")), "inferred": None}
+               "stated": bool(ov.get("captain")), "inferred": None, "unclear": False}
     else:
         players = parse_players(article.get("body"))
         cap = parse_captain(article.get("body"), players)
 
-    needs_review, reason = _review(series, players, from_override, bool(ov.get("confirmed_by_owner")))
+    needs_review, reason = _review(series, players, from_override, bool(ov.get("confirmed_by_owner")),
+                                   captain_unclear=cap["unclear"])
     return {
         "series": series,
         "gw": int(gw) if gw is not None else None,

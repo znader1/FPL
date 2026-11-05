@@ -36,3 +36,12 @@ def test_config_headline_preset_is_a_real_preset():
     assert config.MONITOR_WILDCARD_HEADLINE_PRESET in config.CHIP_WILDCARD_PRESET_ORDER
     assert config.MONITOR_TRANSFER_VERDICT_WINDOW_GWS in config.MONITOR_WINDOWS_GWS
     assert config.MONITOR_WILDCARD_WINDOW_GWS in config.MONITOR_WINDOWS_GWS
+
+
+def test_the_migration_can_be_run_twice():
+    # Applied by hand in the dashboard: a second run after a half-finished first one
+    # must not stop on "policy already exists".
+    sql = _sql()
+    for name, table in re.findall(r"create policy (\w+) on public\.(\w+)", sql):
+        assert f"drop policy if exists {name} on public.{table};" in sql
+    assert len(re.findall(r"create policy", sql)) == len(TABLES)

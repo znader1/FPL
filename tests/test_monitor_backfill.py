@@ -157,3 +157,62 @@ def test_no_print_or_log_line_mentions_the_service_key():
 def test_the_script_never_writes_or_deletes_live_advice():
     src = pathlib.Path("scripts/monitor_backfill.py").read_text()
     assert '"origin": "live"' not in src and "requests.delete" not in src
+
+
+# --- final review: a degraded run must not overwrite good rows or exit green -----------------
+
+def test_only_a_404_means_an_entry_has_no_picks():
+    class Resp:
+        def __init__(self, code):
+            self.status_code = code
+
+    import requests
+    assert mb.picks_absent(requests.HTTPError(response=Resp(404))) is True
+    assert mb.picks_absent(requests.HTTPError(response=Resp(429))) is False
+    assert mb.picks_absent(requests.HTTPError(response=Resp(503))) is False
+    assert mb.picks_absent(requests.ConnectionError("down")) is False
+
+
+def test_an_engine_error_is_a_failure_but_a_missing_squad_is_not():
+    assert mb.replay_failed({"available": False, "reason": "ValueError: boom"}) is True
+    assert mb.replay_failed({"available": False, "reason": "no squad known before this gameweek"}) is False
+    assert mb.replay_failed({"available": True}) is False
+    assert mb.replay_failed({"available": True, "presets": {"balanced": None, "gems": [1]}}) is False
+
+
+def test_rows_from_failed_inputs_are_not_written():
+    out = {
+        "expert_picks": [{"gw": 9}],
+        "entry_gw_actuals": [{"entry_id": 1, "gw": 9}],
+        "advice_snapshots": [{"entry_id": 1, "gw": 9, "kind": "transfer_plan", "payload": {"available": True}},
+                             {"entry_id": 1, "gw": 8, "kind": "transfer_plan",
+                              "payload": {"available": False, "reason": "ValueError: boom"}},
+                             {"entry_id": 0, "gw": 9, "kind": "buy_targets", "payload": {"available": True}}],
+        "monitor_reports": [{"entry_id": 1, "gw": 9}, {"entry_id": 1, "gw": 8}, {"entry_id": 2, "gw": 8}],
+    }
+    kept = mb.writable(out, failed={(1, 8)}, shared_failure=False)
+    assert kept["monitor_reports"] == [{"entry_id": 1, "gw": 9}, {"entry_id": 2, "gw": 8}]
+    assert [(r["entry_id"], r["gw"]) for r in kept["advice_snapshots"]] == [(1, 9), (0, 9)]
+    assert kept["expert_picks"] == out["expert_picks"] and kept["entry_gw_actuals"] == out["entry_gw_actuals"]
+
+
+def test_a_gameweek_wide_failure_blocks_every_entrys_report_for_it():
+    out = {"expert_picks": [], "entry_gw_actuals": [], "advice_snapshots": [],
+           "monitor_reports": [{"entry_id": 1, "gw": 9}, {"entry_id": 2, "gw": 9}, {"entry_id": 2, "gw": 8}]}
+    assert mb.writable(out, failed={(None, 9)}, shared_failure=False)["monitor_reports"] == [{"entry_id": 2, "gw": 8}]
+
+
+def test_a_shared_failure_writes_no_report_at_all():
+    out = {"expert_picks": [{"gw": 9}], "entry_gw_actuals": [{"entry_id": 1, "gw": 9}], "advice_snapshots": [],
+           "monitor_reports": [{"entry_id": 1, "gw": 9}]}
+    kept = mb.writable(out, failed=set(), shared_failure=True)
+    assert kept["monitor_reports"] == [] and kept["entry_gw_actuals"] == out["entry_gw_actuals"]
+
+
+def test_article_prose_is_not_stored():
+    parsed = _parsed([("Erling Haaland", "Man City")])
+    parsed["players"][0]["reason"] = "The Norwegian has to be backed with the captain's armband."
+    row = mb.expert_rows([parsed], {9: PLAYERS}, TEAMS, {}, "2026-27", "t")[0]
+    assert "reason" not in row["players"][0]
+    assert row["players"][0] == {"name_raw": "Erling Haaland", "club_raw": "Man City", "price_m": 5.0,
+                                 "fpl_player_id": 411}

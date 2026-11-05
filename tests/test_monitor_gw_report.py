@@ -242,3 +242,33 @@ def test_report_is_json_serialisable_and_has_every_top_level_key():
     json.dumps(r)
     assert set(r) == {"season", "gw", "entry_id", "state", "players", "app_xi", "scout_xi", "you", "best_xi",
                       "headline", "captain", "transfers", "buy_lists", "wildcard", "replay"}
+
+
+# --- final review ---------------------------------------------------------------------------
+
+def test_a_partial_scout_eleven_never_reaches_the_headline():
+    stranger = [{"name_raw": "New Signing", "club_raw": "Chelsea"}]
+    r = build(9, expert={(9, "selection"): _scout_row(unmatched=stranger, ids=E["scout_ids"][:10])})
+    assert r["scout_xi"]["partial"] is True and r["scout_xi"]["points_no_captain"] is not None
+    assert r["headline"]["scout"] is None and r["headline"]["app"] == 70
+    assert build(9)["scout_xi"]["partial"] is False
+
+
+def test_a_player_with_no_real_points_is_named_on_the_eleven():
+    data = _data()
+    del data["points_by_gw"][9][597]                      # Suzuki, in the Scout eleven
+    r = build_gw_report(9, ENTRY, data)
+    assert r["scout_xi"]["missing_points"] == [597] and r["app_xi"]["missing_points"] == []
+
+
+def test_a_squad_player_who_could_not_be_fielded_is_named_on_the_wildcard_card():
+    data = _data()
+    data["snapshots_by_gw"][9] = CSV[CSV.player_id != 423].copy()     # Shaw, on the owner's bench
+    r = build_gw_report(9, ENTRY, data)
+    assert r["wildcard"]["kept"]["absent_by_gw"] == {"9": [423]}
+    assert build(9)["wildcard"]["kept"]["absent_by_gw"] == {}
+
+
+def test_replayed_advice_says_which_inputs_are_present_day():
+    notes = " ".join(build(9)["replay"]["notes"])
+    assert "set-piece" in notes and "fixture list" in notes

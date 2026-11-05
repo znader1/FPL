@@ -219,3 +219,33 @@ def test_project_as_of_lives_in_src_and_the_script_delegates_to_it():
     assert callable(season_replay.project_as_of)
     assert "season_replay.project_as_of" in pathlib.Path("scripts/backtest_live_season.py").read_text()
     assert callable(backtest_live_season.project_gw)
+
+
+# --- final review: today's set-piece takers must not reach a replayed gameweek ---------------
+
+def test_set_piece_orders_are_switched_off_before_the_engine_sees_them(monkeypatch):
+    seen = {}
+
+    def fake(gw, horizon, inputs, overrides=None):
+        seen["elements"] = inputs["bootstrap"]["elements"]
+        return _proj()
+
+    monkeypatch.setattr(season_replay, "project_as_of", fake)
+    inputs = dict(INPUTS, bootstrap=dict(INPUTS["bootstrap"], elements=[
+        {"id": 1, "web_name": "Taker", "penalties_order": 1, "direct_freekicks_order": 2,
+         "corners_and_indirect_freekicks_order": 1, "team": 1}]))
+    monitor_replay.project(9, 3, inputs)
+    el = seen["elements"][0]
+    assert (el["penalties_order"], el["direct_freekicks_order"], el["corners_and_indirect_freekicks_order"]) == (
+        None, None, None)
+    assert el["web_name"] == "Taker" and el["team"] == 1
+    assert inputs["bootstrap"]["elements"][0]["penalties_order"] == 1     # the caller's data is untouched
+
+
+def test_every_replay_goes_through_the_switched_off_projection(monkeypatch):
+    calls = []
+    monkeypatch.setattr(monitor_replay, "project", lambda gw, horizon, inputs: calls.append(horizon) or _proj())
+    monkeypatch.setattr(transfer_planner, "plan_transfers", lambda *a, **k: {"plan": []})
+    monitor_replay.replay_transfer_plan(9, STATE, INPUTS)
+    monitor_replay.replay_buy_targets(9, INPUTS)
+    assert calls == [int(config.MONITOR_ADVICE_HORIZON_GWS)] * 2

@@ -20,9 +20,13 @@ and never from the snapshot table (which has no GW1 rows).
     PYTHONPATH=. python scripts/monitor_backfill.py --gws 1-10 --entries 107342,5645321
 Env for a real run: SUPABASE_URL, SUPABASE_SERVICE_KEY.
 
-Advice saved before a deadline by production carries origin "live". This script
-only ever writes origin "replay" rows; a live row is read and preferred, never
+Advice saved before a deadline by production carries the origin "live". This
+script only ever writes "replay" rows; a live row is read and preferred, never
 replaced.
+
+A run that could not get all of its inputs does not overwrite good rows with
+worse ones: the report of any gameweek and entry whose inputs failed is not
+written, a failed rebuild is not stored, and the run exits non-zero.
 """
 from __future__ import annotations
 
@@ -87,6 +91,36 @@ def live_points_minutes(live):
     return points, minutes
 
 
+def picks_absent(exc):
+    """True only when FPL says the entry has no picks for that gameweek (404: it
+    joined later). A rate limit or an outage is a failure, not an absence."""
+    return isinstance(exc, requests.HTTPError) and getattr(exc.response, "status_code", None) == 404
+
+
+def replay_failed(payload):
+    """True when a rebuild broke (an engine error), as opposed to having nothing
+    to rebuild from (no squad known before the gameweek)."""
+    return (bool(payload) and not payload.get("available")
+            and payload.get("reason") != monitor_replay.NO_SQUAD_REASON)
+
+
+def writable(out, failed, shared_failure):
+    """The rows a run may store. `failed` holds (entry_id, gw) keys whose inputs
+    failed, with (None, gw) for a failure that hits every entry that gameweek;
+    `shared_failure` is a failure of an input every report needs (the Scout
+    feed, the engine data). Reports built on failed inputs and rebuilds that
+    broke are left out, so yesterday's good row is never replaced by a worse one."""
+    def bad(row):
+        return (row["entry_id"], row["gw"]) in failed or (None, row["gw"]) in failed
+
+    return {
+        **out,
+        "monitor_reports": [] if shared_failure else [r for r in out["monitor_reports"] if not bad(r)],
+        "advice_snapshots": [r for r in out["advice_snapshots"]
+                             if not bad(r) and not replay_failed(r.get("payload"))],
+    }
+
+
 def _plain(obj):
     """Make an engine result JSON-safe (numpy scalars, sets, NaN)."""
     def default(o):
@@ -111,7 +145,9 @@ def expert_rows(parsed_articles, players_by_gw, teams, overrides, season, now_is
         by_name, players, unmatched = {}, [], []
         for p in a.get("players") or []:
             hit = scout_names.match_player(p["name_raw"], p["club_raw"], pool, teams, names)
-            players.append({**p, "fpl_player_id": hit["player_id"]})
+            # Picks and facts only: the article's prose is not copied (spec 7.4).
+            players.append({**{k: v for k, v in p.items() if k != "reason"},
+                            "fpl_player_id": hit["player_id"]})
             if hit["player_id"] is None:
                 unmatched.append({"name_raw": p["name_raw"], "club_raw": p["club_raw"]})
             else:
@@ -271,9 +307,10 @@ def load_overrides():
     return json.loads(path.read_text()) if path.exists() else {}
 
 
-def collect_scout(bootstrap, snapshots_by_gw, gws, season, now_iso, failures):
-    """expert_picks rows for the requested gameweeks; an unreachable feed is a
-    recorded failure and an empty result, never a guess."""
+def collect_scout(bootstrap, snapshots_by_gw, gws, season, now_iso, failures, failed):
+    """(expert_picks rows, feed_ok) for the requested gameweeks. An unreachable
+    feed is a recorded failure and an empty result, never a guess; an article
+    that cannot be fetched fails that gameweek for every entry."""
     overrides = load_overrides()
     try:
         listing = feed_listing(season_start(bootstrap))
@@ -283,7 +320,7 @@ def collect_scout(bootstrap, snapshots_by_gw, gws, season, now_iso, failures):
     chosen = scout_feed.pick_articles(listing, season_start(bootstrap), overrides)
     if not chosen:
         failures.append("Scout feed returned no article for this season")
-        return []
+        return [], False
     parsed = []
     for (gw, series), item in sorted(chosen.items()):
         if gw not in gws:
@@ -292,8 +329,9 @@ def collect_scout(bootstrap, snapshots_by_gw, gws, season, now_iso, failures):
             parsed.append(scout_feed.parse_article(feed_article(item["id"]), overrides))
         except Exception as exc:  # noqa: BLE001
             failures.append(f"Scout article {item['id']} (GW{gw} {series}): {exc}")
+            failed.add((None, gw))
     return expert_rows(parsed, players_by_gw(bootstrap, snapshots_by_gw), bootstrap.get("teams") or [],
-                       overrides, season, now_iso)
+                       overrides, season, now_iso), True
 
 
 def engine_inputs(snapshots_df):
@@ -331,7 +369,7 @@ def main(argv=None):
         raise SystemExit("SUPABASE_URL and SUPABASE_SERVICE_KEY are required without --out-dir")
     now_iso = datetime.now(timezone.utc).isoformat()
     code_version = str(config.PROJ_MODEL_VERSION)
-    failures = []
+    failures, failed, shared_failure = [], set(), False
 
     bootstrap = fpl_get("bootstrap-static/")
     from src.season_history import season_label_from_bootstrap
@@ -359,7 +397,8 @@ def main(argv=None):
     for g in range(1, last_finished + 1):
         points_by_gw[g], minutes_by_gw[g] = live_points_minutes(fpl_get(f"event/{g}/live/"))
 
-    expert = collect_scout(bootstrap, snapshots_by_gw, gws, season, now_iso, failures)
+    expert, feed_ok = collect_scout(bootstrap, snapshots_by_gw, gws, season, now_iso, failures, failed)
+    shared_failure = shared_failure or not feed_ok
     expert_by_key = {(r["gw"], r["series"]): r for r in expert}
     logger.info("scout: %s articles, %s need review", len(expert), sum(bool(r["needs_review"]) for r in expert))
 
@@ -370,19 +409,23 @@ def main(argv=None):
             status_dir = tempfile.mkdtemp(prefix="monitor-status-")
         except Exception as exc:  # noqa: BLE001
             failures.append(f"engine data refresh failed, advice not rebuilt: {exc}")
+            shared_failure = True
 
     replayable = [g for g in gws if inputs is not None and g in snapshots_by_gw]
     buy_by_gw, parity_by_gw, status_path = {}, {}, {}
     for g in replayable:
         buy_by_gw[g] = monitor_replay.replay_buy_targets(g, inputs)
+        if replay_failed(buy_by_gw[g]):
+            failures.append(f"GW{g} buy list rebuild: {buy_by_gw[g].get('reason')}")
+            failed.add((None, g))
         try:
-            from src import season_replay
-            parity_by_gw[g] = monitor_replay.parity(season_replay.project_as_of(g, 1, inputs),
+            parity_by_gw[g] = monitor_replay.parity(monitor_replay.project(g, 1, inputs),
                                                     snapshots_df, g, code_version)
             status_path[g] = os.path.join(status_dir, f"status_before_gw{g}.csv")
             monitor_replay.write_status_history_as_of(snapshots_df, season, g, status_path[g])
         except Exception as exc:  # noqa: BLE001
             failures.append(f"GW{g} replay setup: {exc}")
+            failed.add((None, g))
 
     out = {"expert_picks": expert, "entry_gw_actuals": [], "advice_snapshots": [], "monitor_reports": []}
     for g in replayable:
@@ -394,14 +437,21 @@ def main(argv=None):
             transfers = fpl_get(f"entry/{entry}/transfers/")
         except Exception as exc:  # noqa: BLE001
             failures.append(f"entry {entry}: {exc}")
+            failed |= {(entry, g) for g in gws}
             continue
         actuals = {}
         for g in range(1, last_finished + 1):
             try:
                 actuals[g] = actuals_row(entry, season, g, fpl_get(f"entry/{entry}/event/{g}/picks/"),
                                          transfers, history, now_iso)
-            except Exception as exc:  # noqa: BLE001 - an entry that joined late has no early picks
-                logger.info("entry %s GW%s: no picks (%s)", entry, g, exc)
+            except Exception as exc:  # noqa: BLE001
+                if picks_absent(exc):   # the entry joined after this gameweek
+                    logger.info("entry %s GW%s: no picks for this gameweek", entry, g)
+                    continue
+                # One missing gameweek corrupts its neighbours too (squad before the next
+                # gameweek, every window that reaches it): fail the entry for this run.
+                failures.append(f"entry {entry} GW{g} picks: {exc}")
+                failed |= {(entry, x) for x in gws}
         out["entry_gw_actuals"] += list(actuals.values())
         picks_by_gw = {g: [int(p["element"]) for p in sorted(row["picks"], key=lambda p: int(p["position"]))]
                        for g, row in actuals.items()}
@@ -410,10 +460,16 @@ def main(argv=None):
         for g in replayable:
             state = monitor_replay.entry_state_before(g, picks_by_gw, history)
             plan = monitor_replay.replay_transfer_plan(g, state, inputs)
-            if state and g in status_path:
-                wildcard = monitor_replay.replay_wildcard_squads(g, state["value_m"], inputs, status_path[g])
+            if not state:
+                wildcard = {"available": False, "reason": monitor_replay.NO_SQUAD_REASON}
+            elif g not in status_path:
+                wildcard = {"available": False, "reason": "replay setup failed for this gameweek"}
             else:
-                wildcard = {"available": False, "reason": "no squad known before this gameweek"}
+                wildcard = monitor_replay.replay_wildcard_squads(g, state["value_m"], inputs, status_path[g])
+            for label, payload in (("transfer plan", plan), ("wildcard", wildcard)):
+                if replay_failed(payload):
+                    failures.append(f"entry {entry} GW{g} {label} rebuild: {payload.get('reason')}")
+                    failed.add((entry, g))
             rows = advice_rows(entry, season, g, plan, wildcard, None, code_version, now_iso)
             out["advice_snapshots"] += rows
             for r in rows:
@@ -442,6 +498,13 @@ def main(argv=None):
                             entry, g, h["app"], h["scout"], h["you"], h["best"], h["basis"])
             except Exception as exc:  # noqa: BLE001
                 failures.append(f"entry {entry} GW{g} report: {exc}")
+                failed.add((entry, g))
+
+    built = len(out["monitor_reports"])
+    out = writable(out, failed, shared_failure)
+    if len(out["monitor_reports"]) < built:
+        logger.error("%s of %s reports not stored: their inputs failed in this run",
+                     built - len(out["monitor_reports"]), built)
 
     if dry:
         target = Path(args.out_dir)
