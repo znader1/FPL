@@ -65,7 +65,7 @@ The xPts model blends a season PPG baseline with a recency-weighted recent avera
 5. **DGW**: second fixture counts at `DGW_EXTRA_FIXTURE_DISCOUNT` (0.65) of a normal fixture
 6. **Late season** (GW > `LATE_SEASON_GW_THRESHOLD`): window shrinks to 3 GWs so recent form dominates
 7. **ep_next is still in the GW1 number**: `PROJ_EP_NEXT_BLEND_WEIGHT = 0.50` (`[untested]`) — next-GW xPts is half FPL's own ep_next, half the blended model; later GWs use the model only. The backtest adapter sets ep_next to 0.0 (`src/backtest_adapter.py`), so backtests have never exercised this blend (found 2026-10-05, fix planned as a backtest-parity phase).
-8. **Early-season shrinkage** (2026-09): the blended baseline is pulled toward a price×position prior (`PROJ_SHRINKAGE_GAMES`, `PROJ_PRICE_PRIOR_SLOPE`), weighted by finished GWs — a 4.1m defender with two clean sheets no longer projects like a premium. Pre-season (0 finished GWs) untouched. First-choice penalty takers get `PROJ_PENALTY_TAKER_UPLIFT` (+0.45/GW) after shrinkage.
+8. **Early-season shrinkage** (2026-09): the blended baseline is pulled toward a price×position prior (`PROJ_SHRINKAGE_GAMES`, `PROJ_PRICE_PRIOR_SLOPE`), weighted by finished GWs — a 4.1m defender with two clean sheets no longer projects like a premium. `PROJ_SHRINKAGE_GAMES` 2.5 since 2026-10-26 (was 5; live-season replay, see Monitoring below). Pre-season (0 finished GWs) untouched. First-choice penalty takers get `PROJ_PENALTY_TAKER_UPLIFT` (+0.45/GW) after shrinkage.
 9. Known open issue: promoted-team small-sample clusters still inflate (shrinkage+`CHIP_PLAN_XPTS_CLAMP` are stopgaps); root fix + per-player home/away splits are backlogged pending an SP3 backtest.
 
 ### xG expected-points stack (ON at 0.5 blend since 2026-08-24)
@@ -95,6 +95,12 @@ All loaders return empty frames when data is missing → model degrades graceful
 ### Backtest harness (SP3)
 
 `scripts/backtest_*.py` + `src/backtest_adapter.py` / `backtest_data.py` / `backtest_metrics.py`. Pure metrics (MAE, captain hit-rate/regret, top-N precision) and an A/B runner that patches both history loaders with **no future leak** and uses real per-GW starts when present. Used to prove/reject model changes before they ship.
+
+### Monitoring + live-season replay (2026-10-26)
+
+- **Replay** (`scripts/backtest_live_season.py`, `src/season_replay.py`): replays this season's finished GWs through the production projection code from the stored pre-deadline snapshots (export `player_gw_snapshots` to `data/replay/*.csv`), patching the three history loaders per GW. `--parity-gw N` compares the replay with the stored `model_xpts` (GW8: 0.026 mean |diff|). Ranks candidates by price-band bias with a 1% MAE gate. Results: `docs/calibration/`.
+- **Versions + shadow**: bump `PROJ_MODEL_VERSION` on every projection change and put the previous values of the changed keys in `PROJ_SHADOW_OVERRIDES`. The snapshot job writes `model_version`; `scripts/shadow_snapshot.py` (GitHub runner, never the API) writes `runner_xpts` (current model) and `shadow_xpts` (previous) computed on the same data. Migration `supabase/migrations/20261026_snapshot_model_version.sql` must be applied before deploying.
+- **Report** (`scripts/monitor_report.py`, `src/monitoring.py`): per-version MAE / bias / rank correlation / captain hit and the position × price-band table; rollback verdict after 3 GWs (shadow MAE > 1% better, or live band bias worse → roll back).
 
 ### Transfer recommender (`src/recommender.py`)
 

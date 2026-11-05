@@ -562,7 +562,7 @@ def project_elements_next_gws(
     ppg_weight=config.PROJ_DEFAULT_PPG_WEIGHT,
     form_weight=config.PROJ_DEFAULT_FORM_WEIGHT,
     latest_n_matches=config.PROJ_DEFAULT_LATEST_N_MATCHES,
-    fdr_strength=1.0,
+    fdr_strength=None,
     home_away_strength=1.0,
     finished_gw_max=None,
 ):
@@ -575,12 +575,12 @@ def project_elements_next_gws(
     - Applies playing probability (chance_of_playing_next_round) for the immediate GW only.
     - `fdr_strength` scales how hard the fixture-difficulty multiplier swings away from
       1.0 (1.0 = unchanged, 0.0 = fixtures ignored, >1 = amplified). It does NOT touch
-      the home/away or team-form multipliers.
+      the home/away or team-form multipliers. None reads config.PROJ_FDR_STRENGTH.
     """
     gw_start = int(gw_start)
     horizon_gws = int(horizon_gws)
     gws = [gw_start + i for i in range(horizon_gws)]
-    fdr_strength = float(fdr_strength if fdr_strength is not None else 1.0)
+    fdr_strength = float(fdr_strength if fdr_strength is not None else config.PROJ_FDR_STRENGTH)
 
     df = elements.copy()
     df = df.loc[:, ~df.columns.duplicated()]

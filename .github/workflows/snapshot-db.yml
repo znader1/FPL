@@ -7,7 +7,7 @@ on:
 jobs:
   snapshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,3 +30,16 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           CHIP_SNAPSHOT_ENTRY_IDS: ${{ secrets.CHIP_SNAPSHOT_ENTRY_IDS }}
         run: python scripts/chip_snapshot_to_db.py
+      # Shadow model (calibration spec part 6): no-op unless config.PROJ_SHADOW_OVERRIDES
+      # is set. Refreshes FPL data on the runner and projects the next GW with the current
+      # and the previous model; never fails the job.
+      - name: Shadow projection
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 15
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          pip install -r requirements.txt
+          PYTHONPATH=. python scripts/shadow_snapshot.py

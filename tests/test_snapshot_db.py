@@ -37,3 +37,14 @@ def test_actuals_rows_shape():
         "actual_points": 11, "actual_minutes": 90,
         "actuals_captured_at": "2026-08-25T10:00:00Z",
     }]
+
+
+def test_snapshot_rows_carry_model_version():
+    now = datetime(2026, 8, 28, 16, 0, tzinfo=timezone.utc)
+    rows = snapshot_rows({**PAYLOAD, "model_version": "2026-10-26.calib1"}, now)
+    assert rows[0]["model_version"] == "2026-10-26.calib1"
+
+
+def test_snapshot_rows_from_an_older_api_omit_model_version():
+    now = datetime(2026, 8, 28, 16, 0, tzinfo=timezone.utc)
+    assert "model_version" not in snapshot_rows(PAYLOAD, now)[0]
