@@ -59,3 +59,22 @@ Parity note: GW8's stored projections were made with the price pull at 5 (and th
 3. **Ship nothing yet** and let monitoring collect more weeks first.
 
 Blend 0.7 and fixture strength 1.0 stay either way. The premium-midfielder issue needs a player-level answer (for example, weighting a player's recent output gap against his xG), which is a separate design.
+
+## Club form (2026-11-05)
+
+Question: should a team's recent results (conceding every week, a scoring streak) move its players' projections beyond what the season xG ratings already say? Two kinds of club form were tested on the same replay (as-of, knowledge file off, shrinkage 2.5).
+
+**The results-based form multipliers the baseline half already applies** (`PROJ_TEAM_FORM_FACTOR` 0.08, `PROJ_OPP_FORM_FACTOR` 0.12, both from league points over the last 3 finished fixtures):
+
+| Setting | 1-GW tune MAE (GW3–6) | 1-GW band bias | 5-GW MAE (GW3–7, 4–8) | 5-GW band bias |
+|---|---|---|---|---|
+| Current (0.08 / 0.12) | 1.216 | 0.294 | 4.813 | 1.369 |
+| Both zero | 1.214 | 0.301 | 4.786 | 1.328 |
+| Team zero, opponent kept | 1.216 | 0.299 | 4.801 | 1.368 |
+| Opponent zero, team kept | 1.215 | 0.298 | 4.800 | 1.331 |
+
+Every candidate passes the 1% gate; nothing separates them. The multipliers are noise at this strength, in both directions. Config unchanged; they stay tagged `[untested]` with this table as the evidence that they do not matter.
+
+**New position-split club form** (throwaway spike, not shipped): recent goals conceded / scored over the last 4–6 matches applied to defenders and keepers / attackers separately, and a position-split baseline difficulty (DEF and GKP scored on own defence × opponent attack instead of opponent defence). Position-split difficulty changed nothing (DEF 60+-minute rank correlation 0.131 → 0.133; the xG half already uses that structure for clean sheets). Goals-based form hurt slightly at every strength. A faster rating decay (half-life 30 days) was negligible and a lower last-season carryover prior hurt. On 2025-26 (520 team-games) the last-4 goals conceded added nothing over season xGA, and teams that had been conceding above their xG kept more clean sheets next match, not fewer. Streaks are noise the xG ratings already price.
+
+**What actually hid the user's move.** Maguire → Van Hecke at GW9 (+6.05 over GW9–11, clearing the 4.5 defender bar) was never proposed because the transfer planner's "likely XI" was the raw top 11 by xPts with no formation rule: 2 GKP + 1 DEF, Maguire counted as bench, swap credited 0. Fixed in PR #81 (legal line-up). The defender bar itself (×2.25) was backtested on 31 entries, GW3–8, and stays: marginal defender moves it blocks realized −1.9 to −4.1 pts over the window against +6.0 for moves that clear it.
