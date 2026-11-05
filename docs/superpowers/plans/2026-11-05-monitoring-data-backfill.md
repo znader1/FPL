@@ -131,7 +131,7 @@ def test_config_headline_preset_is_a_real_preset():
 
 **Interfaces:**
 - Produces:
-  - `normalise(text: str) -> str`: lower-case, accents stripped (`Petrović` → `petrovic`), HTML entities decoded, punctuation and repeated spaces removed.
+  - `normalise(text: str) -> str`: lower-case, HTML entities decoded, letters that do not decompose transliterated first through a module constant `TRANSLIT` (`đ`→`dj`, `ß`→`ss`, `ø`→`o`, `ł`→`l`, `æ`→`ae`, `þ`→`th`), then accents stripped (`Petrović` → `petrovic`, `Đorđe` → `djordje`, `Groß` → `gross`), punctuation and repeated spaces removed.
   - `club_short(club_raw: str, teams: list[dict]) -> str | None`: `teams` are bootstrap teams (`name`, `short_name`). Resolves official names plus the Scout's variants. Required aliases, as a module constant `CLUB_ALIASES`: `AFC Bournemouth`/`Bournemouth` → `BOU`; `Spurs`/`Tottenham Hotspur` → `TOT`; `Man City`/`Manchester City` → `MCI`; `Man Utd`/`Manchester United` → `MUN`; `Brighton`/`Brighton & Hove Albion` → `BHA`; `Nott'm Forest`/`Nottingham Forest` → `NFO`; `Wolves` → `WOL`; `West Ham` → `WHU`; `Newcastle` → `NEW`. Unknown club → `None`.
   - `match_player(name_raw: str, club_raw: str, players: list[dict], teams: list[dict], overrides: dict | None = None) -> dict` returning `{"player_id": int | None, "status": "matched" | "ambiguous" | "not_found" | "unknown_club" | "override"}`. `players` rows carry `id`, `first_name`, `second_name`, `web_name`, `team_short`. `overrides` maps `"<normalised name>|<SHORT>"` → player id.
 
@@ -151,7 +151,7 @@ PLAYERS = [
 ]
 ```
 
-  Assertions: `("Djordje Petrovic", "AFC Bournemouth")` → 1 matched (the `Dj`/`Đ` spelling must resolve; if the general rule cannot, it resolves through `overrides` and the test passes the override, asserting status `override`); `("Cole Palmer", "Chelsea")` → 154; `("Jan Paul van Hecke", "Spurs")` → 112; `("Nicolas Jackson", "Aston Villa")` → 300; `("Gabriel", "Arsenal")` → 5 (an exact `web_name` match wins over first-name matches); `("Rayan", "AFC Bournemouth")` → 8; `("Luka Vuskovic", "Brighton &amp; Hove Albion")` with a BHA player `Vušković` → matched; `("Palmer", "Arsenal")` → `not_found`; `("John Smith", "Atlantis FC")` → `unknown_club`; two BOU players both named `Smith` and query `("Smith", "Bournemouth")` → `ambiguous`, `player_id` None.
+  Assertions: `normalise("Đorđe Petrović") == "djordje petrovic"` and `normalise("Pascal Groß") == "pascal gross"`; `("Djordje Petrovic", "AFC Bournemouth")` → 1 `matched` with no override; a name present in `overrides` returns status `override`; `("Cole Palmer", "Chelsea")` → 154; `("Jan Paul van Hecke", "Spurs")` → 112; `("Nicolas Jackson", "Aston Villa")` → 300; `("Gabriel", "Arsenal")` → 5 (an exact `web_name` match wins over first-name matches); `("Rayan", "AFC Bournemouth")` → 8; `("Luka Vuskovic", "Brighton &amp; Hove Albion")` with a BHA player `Vušković` → matched; `("Palmer", "Arsenal")` → `not_found`; `("John Smith", "Atlantis FC")` → `unknown_club`; two BOU players both named `Smith` and query `("Smith", "Bournemouth")` → `ambiguous`, `player_id` None.
 
 - [ ] **Step 2: Run, expect FAIL** (module missing).
 - [ ] **Step 3: Implement.** Rule order inside the resolved club: override; exact normalised `web_name`; exact normalised `first_name + second_name`; every token of the Scout name present in the full-name tokens. Exactly one candidate at the first rule that yields any → matched; more than one → ambiguous.
@@ -302,7 +302,7 @@ def test_a_player_without_points_is_reported_not_silently_zero():
 ```
 
 - [ ] **Step 3: Run, expect FAIL.**
-- [ ] **Step 4: Implement.** `best_xi` approach: for each formation in `VALID_FORMATIONS`, a depth-first search over positions that takes players in descending value and prunes on the club cap and on an optimistic bound (the sum of the best remaining values ignoring the cap). No new dependency. If the exact GW9 eleven differs from the hand-built one in the spec, the solver's answer stands; record it in `gw9_expected.json` as `app_xi_ids` for Task 7. The other expectations (69, 71, 64, 115) come from real points: if the real data contradicts one, stop and report it; do not edit the expectation to fit.
+- [ ] **Step 4: Implement.** `best_xi` approach: for each formation in `VALID_FORMATIONS`, a depth-first search over positions that takes players in descending value and prunes on the club cap and on an optimistic bound (the sum of the best remaining values ignoring the cap). No new dependency. If the real GW9 pool (670 players) makes the test slow, first cut the pool to the top 25 per position by value; with a cap of 3 per club that cannot change the answer in practice, and the brute-force test guards exactness on the small pool. If the exact GW9 eleven differs from the hand-built one in the spec, the solver's answer stands; record it in `gw9_expected.json` as `app_xi_ids` for Task 7. The other expectations (69, 71, 64, 115) come from real points: if the real data contradicts one, stop and report it; do not edit the expectation to fit.
 - [ ] **Step 5: Run, expect PASS.**
 - [ ] **Step 6: Commit** (`git add -f` the CSV) `feat(monitor): exact best eleven, line-up and scoring with the GW9 fixture`
 
@@ -458,7 +458,7 @@ def test_replay_modules_do_not_read_the_knowledge_files():
 **Interfaces:**
 - Consumes: everything produced by Tasks 2–6.
 - Produces: `build_gw_report(gw: int, entry_id: int, data: dict) -> dict`. `data` keys, all plain Python or DataFrames, no network:
-  `season`, `last_finished_gw`, `next_gw`, `snapshots_by_gw` (gameweek → DataFrame of that gameweek's snapshot rows), `points_by_gw`, `expert` (dict keyed `(gw, series)` → matched `expert_picks` row), `actuals_by_gw` (gameweek → `entry_gw_actuals` row for this entry), `advice` (dict keyed `(gw, kind)` → `advice_snapshots` row, `live` preferred over `replay`), `parity` (gameweek → parity dict), `code_version`.
+  `season`, `last_finished_gw`, `next_gw`, `snapshots_by_gw` (gameweek → DataFrame of that gameweek's snapshot rows; absent for GW1), `points_by_gw` and `minutes_by_gw` (from FPL's live endpoint, present for every finished gameweek including GW1), `bootstrap_players` (id → name, club, pos; the fallback identity when a gameweek has no snapshot rows), `expert` (dict keyed `(gw, series)` → matched `expert_picks` row), `actuals_by_gw` (gameweek → `entry_gw_actuals` row for this entry), `advice` (dict keyed `(gw, kind)` → `advice_snapshots` row, `live` preferred over `replay`), `parity` (gameweek → parity dict), `code_version`.
 
 **Report shape** (every key always present; a part that cannot be built is `{"available": false, "reason": "..."}`):
 
@@ -516,6 +516,9 @@ def test_gw1_has_no_app_column_but_still_has_the_owner():
     r = build(1)
     assert r["app_xi"] == {"available": False, "reason": "no pre-deadline snapshot"}
     assert r["you"]["available"] is True and r["transfers"]["app"]["available"] is False
+    assert r["you"]["points"] == 56 and r["best_xi"]["available"] is True      # real points exist without a snapshot
+    assert all(r["players"][str(i)]["points"] is not None for i in r["you"]["xi_ids"])
+    assert all(r["players"][str(i)]["xpts"] is None for i in r["you"]["xi_ids"])
 
 def test_before_the_deadline_picks_show_and_points_are_null():
     r = build(10, last_finished_gw=9, next_gw=10)
@@ -565,6 +568,7 @@ def test_report_is_json_serialisable():
   - With `--out-dir`, nothing is written to Supabase: rows and reports are written as JSON files under `DIR` (dry run). With `--snapshots-csv`, snapshots come from that file instead of Supabase (so a dry run needs no service key).
   - Without `--out-dir`: upsert to the four tables through PostgREST with the service key (`on_conflict` = each table's primary key), reading snapshots with an explicit `limit` and paging.
   - First action: list the feed; if the listing fails or returns no article for the season, print one clear line saying the Scout feed is unreachable from this machine, continue without Scout rows, and exit non-zero at the end.
+  - **Real points and minutes come from FPL, not from the snapshot table:** build `points_by_gw` and `minutes_by_gw` from `https://fantasy.premierleague.com/api/event/{gw}/live/` (`elements[].id`, `.stats.total_points`, `.stats.minutes`) for every finished gameweek in range and for every gameweek a window reaches. The snapshot table has no GW1 rows, and GW1 must still show the owner's team, the best possible eleven and window points. For a gameweek with no snapshot rows, player name, club and position come from bootstrap and `price_m` and `xpts` are `null`.
   - Local engine data: call `scripts.shadow_snapshot.refresh_local_data()` before any replay.
   - `advice_snapshots` rows with `origin = "live"` are never written or deleted by this script.
   - One failing gameweek or entry is logged and skipped; the run continues and exits non-zero at the end if anything failed.
@@ -599,9 +603,10 @@ def test_workflow_passes_inputs_through_env_not_the_shell_line():
     run_lines = [l for l in wf.splitlines() if "monitor_backfill.py" in l]
     assert run_lines and all("${{" not in l for l in run_lines)
 
-def test_script_never_prints_the_service_key():
-    src = pathlib.Path("scripts/monitor_backfill.py").read_text()
-    assert "print(sb_key" not in src and "SUPABASE_SERVICE_KEY\"])" not in src.replace("os.environ[\"SUPABASE_SERVICE_KEY\"]", "")
+def test_no_print_or_log_line_mentions_the_service_key():
+    for line in pathlib.Path("scripts/monitor_backfill.py").read_text().splitlines():
+        if "print(" in line or "logger." in line or "logging." in line:
+            assert "sb_key" not in line and "service_key" not in line.lower()
 ```
 
 - [ ] **Step 2: Run, expect FAIL.** **Step 3: Implement.** **Step 4: Run** `pytest tests/test_monitor_backfill.py -q` and `python -m compileall -q api src scripts`, expect PASS.
@@ -616,6 +621,7 @@ def test_script_never_prints_the_service_key():
 - Create: `docs/monitoring/2026-11-backfill-check.md` (what the dry run produced)
 
 - [ ] **Step 1: Export snapshots for the dry run.** `select * from public.player_gw_snapshots where season = '2026-27' order by gw, player_id` → `data/replay/snapshots_2026-27.csv` (untracked; the existing replay uses the same export).
+- [ ] **Step 1b: GW10 timing.** The deadline is Friday 2026-11-06 18:30 GMT. The 09:00 and 16:00 UTC snapshot runs that day are the first made by the engine merged on 2026-11-05 and the first to carry its `model_version`, so GW10 is the first gameweek where the parity check has a same-version baseline. Export the snapshots, and run anything for GW10, only after that deadline; before it, GW10's stored projections are still the old engine's.
 - [ ] **Step 2: Dry run.** `PYTHONPATH=. python scripts/monitor_backfill.py --gws 1-10 --entries 107342,5645321 --snapshots-csv data/replay/snapshots_2026-27.csv --out-dir /tmp/monitor-dryrun`. Expected: exit 0 or a listed set of failures; one report file per gameweek and entry.
 - [ ] **Step 3: Check the output against known facts** and record each in `docs/monitoring/2026-11-backfill-check.md`:
   - GW9, entry 107342: headline scout 69, you 64, best 115; `transfers.you.windows["1"].gain == 15`.
