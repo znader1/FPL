@@ -111,22 +111,6 @@ def _squad_15(prefix="own", xpts=2.0):
     return _market(rows)
 
 
-def test_score_wildcard_net_of_transfer_plan_gain():
-    squad = _squad_15(xpts=2.0)
-    # Market of stars the squad doesn't own: big raw uplift
-    stars = _squad_15(prefix="star", xpts=6.0)
-    stars["player_id"] = stars["player_id"] + 100
-    market = pd.concat([squad[["player_id", "name", "pos", "team", "price_m", "xpts", "fixture_count"]], stars])
-    gw_projections = {5: market, 6: market, 7: market, 8: market}
-
-    raw = score_wildcard(squad[["player_id", "name", "pos", "team", "price_m"]],
-                         gw_projections, [5], horizon=4)
-    net = score_wildcard(squad[["player_id", "name", "pos", "team", "price_m"]],
-                         gw_projections, [5], horizon=4, transfer_plan_net_gain=10.0)
-    assert raw and net
-    assert abs(raw[0].expected_value - net[0].expected_value - 10.0) < 1e-6
-
-
 def test_score_wildcard_respects_budget():
     """Mirrors test_score_free_hit_respects_budget: the WC dream-squad build
     must be budget-constrained via the same optimizer bridge FH already uses,

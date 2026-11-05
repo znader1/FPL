@@ -123,3 +123,51 @@ def test_ownership_term_is_a_preset_weight():
     assert float(legacy.loc[4, "wildcard_ownership_term"]) == 0.0
     # One full template player (55%) is worth about one xPt over the horizon, not more.
     assert w * 55.0 <= 2.0
+
+
+def _market(players, gws):
+    """players: (id, pos, price, [xpts per gw]) → a minimal scored-market frame."""
+    rows = []
+    for pid, pos, price, xs in players:
+        row = {"id": pid, "pos": pos, "price_m": price, "penalties_order": 99.0}
+        for g, x in zip(gws, xs):
+            row[f"xpts_gw{g}"] = x
+            row[f"fixture_count_gw{g}"] = 1.0
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def test_palmer_case_gets_no_captaincy_bonus():
+    gws = [9, 10, 11, 12, 13]
+    market = _market([
+        (411, "FWD", 15.7, [6.64, 6.10, 6.40, 5.20, 6.30]),   # Haaland
+        (154, "MID", 9.8, [4.07, 3.90, 4.20, 3.60, 4.50]),    # Palmer
+        (2, "DEF", 5.0, [4.0, 4.0, 4.0, 4.0, 4.0]),
+    ], gws)
+    out = projections.add_wildcard_scores(market, gw_start=9, horizon_gws=5).set_index("id")
+    assert float(out.loc[154, "wildcard_captaincy_bonus"]) == 0.0
+    assert float(out.loc[154, "wildcard_captain_share"]) == 0.0
+    assert float(out.loc[411, "wildcard_captaincy_bonus"]) > 0.0
+    assert float(out.loc[411, "wildcard_captain_share"]) == 1.0
+
+
+def test_shared_captaincy_is_proportional():
+    gws = [9, 10, 11, 12]
+    market = _market([
+        (1, "MID", 12.0, [8.0, 5.0, 8.0, 5.0]),
+        (2, "FWD", 12.0, [5.0, 8.0, 5.0, 8.0]),
+    ], gws)
+    out = projections.add_wildcard_scores(market, gw_start=9, horizon_gws=4).set_index("id")
+    assert float(out.loc[1, "wildcard_captain_share"]) == 0.5
+    assert float(out.loc[2, "wildcard_captain_share"]) == 0.5
+
+
+def test_blank_market_gw_gives_no_bonus():
+    gws = [9, 10]
+    market = _market([
+        (1, "MID", 12.0, [0.0, 7.0]),
+        (2, "FWD", 12.0, [0.0, 6.9]),
+    ], gws)
+    out = projections.add_wildcard_scores(market, gw_start=9, horizon_gws=2).set_index("id")
+    assert float(out.loc[1, "wildcard_captain_share"]) == 0.5   # GW9 blank counts as not plausible
+    assert float(out.loc[2, "wildcard_captain_share"]) == 0.5

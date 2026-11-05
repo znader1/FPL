@@ -114,6 +114,38 @@ def _captain_pair(xi_ids, proj, play_gw):
     return (ids[0] if ids else None), (ids[1] if len(ids) > 1 else None)
 
 
+def _scoring_frame(proj_all, gws, bootstrap, play_event_id):
+    """European haircut + trend / injury signals: the market every preset scores."""
+    scoring = european_haircut(proj_all, gws, bootstrap)
+    return projections.attach_wildcard_signals(scoring, gw_start=play_event_id)
+
+
+def _build_preset(scoring, play_event_id, horizon, budget_m, preset_name, pinned_ids=None, excluded_ids=None):
+    """Score the market under one preset and draft its squad → (scored, build)."""
+    preset = config.CHIP_WILDCARD_PRESETS[preset_name]
+    scored = projections.add_wildcard_scores(scoring, gw_start=play_event_id, horizon_gws=horizon, preset=preset)
+    build = optimizer.build_chip_squad(
+        elements_all=scored, score_col="wildcard_score", budget_m=float(budget_m),
+        max_per_team=int(preset.get("max_per_team") or config.CHIP_MAX_PER_TEAM or 3),
+        preset=preset, pinned_ids=list(pinned_ids or []), excluded_ids=list(excluded_ids or []),
+    )
+    return scored, build
+
+
+def preset_squad_ids(proj_all, bootstrap, play_event_id, horizon, budget_m, preset_name):
+    """The 15 ids one preset drafts (no pins, no bans), or None when the build fails.
+
+    Shares _scoring_frame/_build_preset with build_wildcard_drafts so the chip
+    planner's wildcard verdict scores the same squad the drafts page shows.
+    """
+    gws = list(range(int(play_event_id), int(play_event_id) + int(horizon)))
+    scoring = _scoring_frame(proj_all, gws, bootstrap, int(play_event_id))
+    _, build = _build_preset(scoring, int(play_event_id), int(horizon), budget_m, preset_name)
+    if not build.get("ok") or build.get("squad_df") is None:
+        return None
+    return {int(i) for i in build["squad_df"]["id"]}
+
+
 def build_wildcard_drafts(payload):
     payload = payload or {}
     entry_id = safe_int(payload.get("entry_id"))
@@ -150,8 +182,7 @@ def build_wildcard_drafts(payload):
         itb_m=safe_float(payload.get("itb_m"), default=None) if itb_explicit else None,
     )
 
-    scoring = european_haircut(proj_all, gws, bootstrap)
-    scoring = projections.attach_wildcard_signals(scoring, gw_start=play_event_id)
+    scoring = _scoring_frame(proj_all, gws, bootstrap, play_event_id)
 
     match_df = fixture_difficulty.load_match_history()
     raw_elements = pd.DataFrame(bootstrap.get("elements") or [])
@@ -164,12 +195,8 @@ def build_wildcard_drafts(payload):
     xi_sets = []
     for name in config.CHIP_WILDCARD_PRESET_ORDER:
         preset = config.CHIP_WILDCARD_PRESETS[name]
-        scored = projections.add_wildcard_scores(scoring, gw_start=play_event_id, horizon_gws=horizon, preset=preset)
-        build = optimizer.build_chip_squad(
-            elements_all=scored, score_col="wildcard_score", budget_m=float(budget["budget_m"]),
-            max_per_team=int(preset.get("max_per_team") or config.CHIP_MAX_PER_TEAM or 3),
-            preset=preset, pinned_ids=pinned_ids, excluded_ids=excluded_ids,
-        )
+        scored, build = _build_preset(scoring, play_event_id, horizon, float(budget["budget_m"]), name,
+                                      pinned_ids=pinned_ids, excluded_ids=excluded_ids)
         if not build.get("ok") or build.get("squad_df") is None:
             presets_out.append({"name": name, "label": preset.get("label", name), "ok": False,
                                 "reason": build.get("reason"), "squad": [], "xi_ids": [], "notes": []})
