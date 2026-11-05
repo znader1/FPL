@@ -364,16 +364,16 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
     plan, total_net = [], 0.0
     runner_ups = []
 
-    # Injury gate: a red-flagged player in the LIKELY first-GW XI (top 11 of
-    # the squad by that GW's projection) gets force-sold ahead of the normal
+    # Injury gate: a red-flagged player in the LIKELY first-GW XI (best legal
+    # line-up by that GW's projection) gets force-sold ahead of the normal
     # greedy decision, bypassing min_gain -- an "i"/"s"/"u" status or a 0%
     # playing chance means the projection itself is close to meaningless, so
     # the usual gain threshold doesn't apply. Bench red flags don't force.
     first_gw = gws[0] if gws else None
     likely_xi = set()
     if first_gw is not None:
-        by_first_gw = sorted(squad, key=lambda pid: info[pid]["xg"].get(first_gw, 0.0), reverse=True)
-        likely_xi = set(by_first_gw[:11])
+        first_gw_xg = {pid: info[pid]["xg"].get(first_gw, 0.0) for pid in squad}
+        likely_xi = _likely_xi(squad, info, first_gw_xg)
     forced_sells = {pid for pid in likely_xi if info[pid].get("red_flag")}
 
     for gi, g in enumerate(gws):

@@ -120,3 +120,18 @@ def test_second_defender_upgrade_is_credited_when_top11_has_one_defender():
     assert first["action"] == "transfer"
     assert first["moves"][0]["buy"]["name"] == "P16"
     assert first["moves"][0]["position"] == "DEF"
+
+
+def test_injury_gate_sees_a_starting_defender_outside_the_raw_top_11():
+    # Defender 4 (3.5/GW, red-flagged) starts in any legal line-up but sits
+    # 12th by raw xPts behind two keepers and three forwards — the gate must
+    # still force him out, even though no swap clears a 50-point bar.
+    players = _squad_15()
+    players[3] = {"id": 4, "pos": "DEF", "xpts": 3.5, "status": "i", "chance": 0}
+    market = players + [{"id": 16, "pos": "DEF", "xpts": 4.0}]
+    plan = tp.plan_transfers(_proj_frame(market), squad_ids=[p["id"] for p in players],
+                             gws=[10, 11], itb_m=0.0, start_ft=1,
+                             allow_hits=False, min_gain=50.0)
+    first = plan["plan"][0]
+    assert first["action"] == "transfer"
+    assert first["moves"][0]["sell"]["name"] == "P4"
