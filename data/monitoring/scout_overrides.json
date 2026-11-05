@@ -1,5 +1,11 @@
 {
-  "articles": {},
-  "names": {},
-  "pins": {}
+ "_readme": "Hand corrections for the Scout feed (src/scout_feed.py, src/scout_names.py). names: '<normalised name>|<FPL club short>' -> FPL player id, for names no rule resolves. pins: '<gw>|<series>' -> article id. articles: '<article id>' -> {players: [{name, club}], confirmed_by_owner} for squads written as prose.",
+ "articles": {},
+ "names": {
+  "bryan mbuemo|MUN": 427
+ },
+ "pins": {},
+ "_names_notes": {
+  "bryan mbuemo|MUN": "GW5 Scout Selection (4720145) misspells Bryan Mbeumo"
+ }
 }

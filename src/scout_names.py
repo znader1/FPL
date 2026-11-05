@@ -53,17 +53,38 @@ def club_short(club_raw, teams):
         lookup[normalise(short)] = str(short)
         if t.get("name"):
             lookup[normalise(t["name"])] = str(short)
-    return lookup.get(normalise(club_raw))
+    wanted = normalise(club_raw)
+    if wanted in lookup:
+        return lookup[wanted]
+    # "Coventry" for "Coventry City", "Leeds United" for "Leeds": accept a whole-word
+    # prefix either way, but only when exactly one club fits ("Man" fits two).
+    fits = {short for name, short in lookup.items()
+            if wanted and (name.startswith(wanted + " ") or wanted.startswith(name + " "))}
+    return fits.pop() if len(fits) == 1 else None
 
 
 def _candidates(name, pool):
     """Players matching `name`, by the first rule that matches anyone."""
     tokens = set(name.split())
+    first, rest = name.split()[:1], set(name.split()[1:])
+
+    def full_tokens(p):
+        return set(normalise(
+            f"{p.get('first_name') or ''} {p.get('second_name') or ''} {p.get('web_name') or ''}").split())
+
+    def short_first_name(p):
+        # "Dan Ballard" for Daniel Ballard: the surname part matches in full and the
+        # first name is a shortening (3+ letters) of his, or the other way round.
+        if not first or not rest or not rest <= full_tokens(p):
+            return False
+        return any(len(first[0]) >= 3 and len(t) >= 3 and (t.startswith(first[0]) or first[0].startswith(t))
+                   for t in normalise(p.get("first_name")).split())
+
     rules = (
         lambda p: normalise(p.get("web_name")) == name,
         lambda p: normalise(f"{p.get('first_name') or ''} {p.get('second_name') or ''}") == name,
-        lambda p: bool(tokens) and tokens <= set(normalise(
-            f"{p.get('first_name') or ''} {p.get('second_name') or ''} {p.get('web_name') or ''}").split()),
+        lambda p: bool(tokens) and tokens <= full_tokens(p),
+        short_first_name,
     )
     for rule in rules:
         hits = [p for p in pool if rule(p)]

@@ -27,7 +27,12 @@ _GW = re.compile(r"\b(?:gameweek|gw)\s*(\d{1,2})\b")
 _HEADING = re.compile(r"<h5[^>]*>(.*?)</h5>", re.S | re.I)
 _PARAGRAPH = re.compile(r"<p[^>]*>(.*?)</p>", re.S | re.I)
 _PLAYER_HEADING = re.compile(r"^(?P<name>.+?)\s*\((?P<club>[^()]+)\)\s*£\s*(?P<price>\d+(?:\.\d+)?)m$")
-_CAPTAINCY_WORDS = re.compile(r"\bcaptaincy\b|\barmband\b", re.I)
+_VICE = re.compile(r"vice-captain", re.I)
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
+# A section that talks about the decision itself ("the captaincy decision", "captain
+# favourite"), not one that merely calls a player an alternative or a club captain.
+_CAPTAIN_DECISION = re.compile(
+    r"captaincy decision|armband decision|captain (?:choice|favourite)|captaincy (?:choice|pick)", re.I)
 
 
 def _text(fragment):
@@ -114,30 +119,50 @@ def parse_players(body_html):
     return players
 
 
+def _mentions(sentence, names):
+    """Listed players named in a sentence, in order. A player is named by his full
+    name or by his surname alone, the latter only when no other listed player
+    shares it."""
+    surnames = [n.split()[-1] for n in names]
+    found = []
+    for name, surname in zip(names, surnames):
+        at = sentence.find(name)
+        if at < 0 and surnames.count(surname) == 1:
+            m = re.search(rf"(?<![\w-]){re.escape(surname)}(?![\w-])", sentence)
+            at = m.start() if m else -1
+        if at >= 0:
+            found.append((at, name))
+    return [name for _, name in sorted(found)]
+
+
 def parse_captain(body_html, players):
     """→ {"captain", "vice", "stated", "inferred"} (names as written, or None).
 
-    Stated: a sentence that says players are "named captain" (and vice-captain).
-    Inferred: nothing stated, and exactly one player's own section talks about
-    the captaincy or the armband. The bare word "captain" does not count: the
-    Scout also writes "the Arsenal captain" about a club captain.
+    Stated: the Scout names captain and vice-captain together in one sentence,
+    in wording that changes weekly ("X earns the captain's armband, with Y named
+    as vice-captain", "X and Y are named captain and vice-captain respectively",
+    "X is named as captain ..., with Y given the vice-captaincy"). The sentence
+    with "vice-captain" that names exactly two listed players is the statement:
+    the first is the captain, the second the vice.
+
+    Inferred: nothing stated, and exactly one player's own section discusses the
+    captaincy decision. Kept apart from a statement, and deliberately narrow: a
+    team-mate called "an alternative for the captaincy" or "the Arsenal captain"
+    is not the pick.
     """
-    names = [p["name_raw"] for p in players or []]
+    names = [p["name_raw"] for p in players or [] if p.get("name_raw")]
     body = _strip_code(body_html)
     for para in _PARAGRAPH.findall(body):
-        text = _text(para)
-        if "named captain" not in text.lower():
-            continue
-        found = sorted((text.find(n), n) for n in names if n and text.find(n) >= 0)
-        if not found:
-            break
-        captain = found[0][1]
-        vice = found[1][1] if len(found) > 1 and "vice-captain" in text.lower() else None
-        return {"captain": captain, "vice": vice, "stated": True, "inferred": None}
+        for sentence in _SENTENCE_END.split(_text(para)):
+            if not _VICE.search(sentence):
+                continue
+            named = _mentions(sentence, names)
+            if len(named) == 2:
+                return {"captain": named[0], "vice": named[1], "stated": True, "inferred": None}
     hinted = []
     for heading, section in _sections(body):
         m = _PLAYER_HEADING.match(heading)
-        if m and _CAPTAINCY_WORDS.search(_section_text(section)):
+        if m and _CAPTAIN_DECISION.search(_section_text(section)):
             hinted.append(m.group("name").strip())
     inferred = hinted[0] if len(hinted) == 1 else None
     return {"captain": None, "vice": None, "stated": False, "inferred": inferred}

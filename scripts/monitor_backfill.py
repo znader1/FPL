@@ -344,6 +344,9 @@ def main(argv=None):
 
     if args.snapshots_csv:
         snapshots_df = pd.read_csv(args.snapshots_csv)
+    elif dry and not (sb_url and sb_key):
+        logger.info("dry run without --snapshots-csv: no stored projections, the app columns will be empty")
+        snapshots_df = pd.DataFrame(columns=["season", "gw", "player_id"])
     else:
         snapshots_df = pd.DataFrame(sb_select(sb_url, sb_key, "player_gw_snapshots",
                                               f"select=*&season=eq.{season}&order=gw,player_id"))

@@ -82,3 +82,33 @@ def test_a_full_name_picks_one_of_two_same_surname_team_mates():
 def test_an_override_wins_and_says_so():
     ov = {"smith|BOU": 21}
     assert _match("Smith", "Bournemouth", ov) == {"player_id": 21, "status": "override"}
+
+
+# --- found by the GW1-GW10 dry run -------------------------------------------------------------
+
+TEAMS_2026 = TEAMS + [{"name": "Coventry City", "short_name": "COV"}, {"name": "Hull City", "short_name": "HUL"},
+                      {"name": "Leeds", "short_name": "LEE"}, {"name": "Sunderland", "short_name": "SUN"},
+                      {"name": "Man Utd", "short_name": "MUN"}]
+
+
+def test_a_shortened_or_lengthened_club_name_resolves_when_only_one_club_fits():
+    assert scout_names.club_short("Coventry", TEAMS_2026) == "COV"
+    assert scout_names.club_short("Hull", TEAMS_2026) == "HUL"
+    assert scout_names.club_short("Leeds United", TEAMS_2026) == "LEE"
+    assert scout_names.club_short("Man", TEAMS_2026) is None          # Man City and Man Utd both fit
+
+
+def test_a_shortened_first_name_matches_the_full_one():
+    players = [{"id": 532, "first_name": "Daniel", "second_name": "Ballard", "web_name": "Ballard", "team_short": "SUN"},
+               {"id": 533, "first_name": "Nordi", "second_name": "Mukiele", "web_name": "Mukiele", "team_short": "SUN"}]
+    assert scout_names.match_player("Dan Ballard", "Sunderland", players, TEAMS_2026) == {
+        "player_id": 532, "status": "matched"}
+    assert scout_names.match_player("Dan Mukiele", "Sunderland", players, TEAMS_2026)["player_id"] is None
+
+
+def test_a_misspelt_surname_is_not_matched_by_guesswork():
+    players = [{"id": 427, "first_name": "Bryan", "second_name": "Mbeumo", "web_name": "Mbeumo", "team_short": "MUN"}]
+    assert scout_names.match_player("Bryan Mbuemo", "Man Utd", players, TEAMS_2026) == {
+        "player_id": None, "status": "not_found"}
+    assert scout_names.match_player("Bryan Mbuemo", "Man Utd", players, TEAMS_2026,
+                                    {"bryan mbuemo|MUN": 427}) == {"player_id": 427, "status": "override"}

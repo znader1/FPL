@@ -119,3 +119,57 @@ def test_an_override_can_pin_the_article_for_a_gameweek():
     ]
     out = scout_feed.pick_articles(listing, season_start="2026-08-01", overrides={"pins": {"5|selection": 1}})
     assert out[(5, "selection")]["id"] == 1
+
+
+# --- captain wording varies week to week (found by the GW1-GW10 dry run) -------------------
+
+def test_gw2_captain_is_stated_with_surnames_and_armband_wording():
+    # "Fernandes earns the captain's armband, with Erling Haaland (£15.5m) named as vice-captain."
+    a = scout_feed.parse_article(load("article_4698605.json"), {})
+    assert len(a["players"]) == 11
+    assert (a["captain"], a["vice"], a["captain_stated"]) == ("Bruno Fernandes", "Erling Haaland", True)
+    assert a["captain_inferred"] is None
+
+
+def test_gw4_captain_is_stated_as_handed_the_armband():
+    # "Palmer is handed the armband, with Joao Pedro named as vice-captain."
+    a = scout_feed.parse_article(load("article_4713402.json"), {})
+    assert (a["captain"], a["vice"], a["captain_stated"]) == ("Cole Palmer", "Joao Pedro", True)
+
+
+def test_gw7_stated_captain_wins_over_a_team_mate_called_a_captaincy_alternative():
+    # "Haaland is named as the captain, with Saka the vice-captain." De Cuyper's own
+    # section calls him "a great alternative for the captaincy": not the pick.
+    a = scout_feed.parse_article(load("article_4737338.json"), {})
+    assert (a["captain"], a["vice"], a["captain_stated"]) == ("Erling Haaland", "Bukayo Saka", True)
+
+
+def test_other_real_captain_sentences():
+    players = [{"name_raw": n} for n in ("Erling Haaland", "Morgan Gibbs-White", "Bukayo Saka", "Cole Palmer",
+                                         "Rayan Cherki")]
+
+    def cap(sentence):
+        out = scout_feed.parse_captain(f"<p>{sentence}</p>", players)
+        return out["captain"], out["vice"], out["stated"]
+
+    assert cap("The side lines up in a 3-5-2 formation, with Haaland getting the armband and Gibbs-White "
+               "named as vice-captain.") == ("Erling Haaland", "Morgan Gibbs-White", True)
+    assert cap("Saka is selected as captain, with Erling Haaland (£15.6m) named vice-captain.") == (
+        "Bukayo Saka", "Erling Haaland", True)
+    assert cap("Erling Haaland (£15.7m) is named as captain for Manchester City's visit to Aston Villa, "
+               "with Palmer given the vice-captaincy.") == ("Erling Haaland", "Cole Palmer", True)
+    assert cap("Haaland gets the captain's armband, with team-mate Cherki named as vice-captain.") == (
+        "Erling Haaland", "Rayan Cherki", True)
+
+
+def test_a_vice_captain_sentence_naming_an_unlisted_player_is_not_a_statement():
+    players = [{"name_raw": "Erling Haaland"}]
+    out = scout_feed.parse_captain("<p>Salah takes the armband, with Isak named as vice-captain.</p>", players)
+    assert (out["captain"], out["stated"]) == (None, False)
+
+
+def test_two_listed_players_with_one_surname_are_not_guessed_between():
+    players = [{"name_raw": "Antonio Silva"}, {"name_raw": "Bernardo Silva"}, {"name_raw": "Erling Haaland"}]
+    out = scout_feed.parse_captain("<p>Silva is handed the armband, with Haaland named as vice-captain.</p>",
+                                   players)
+    assert (out["captain"], out["stated"]) == (None, False)
