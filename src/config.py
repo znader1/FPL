@@ -793,6 +793,25 @@ PROJ_MODEL_VERSION = "2026-10-26.shrink25+avail1"  # [operational]
 PROJ_SHADOW_MODEL_VERSION = "2026-10-22.blend70"  # [operational]
 PROJ_SHADOW_OVERRIDES = {"PROJ_SHRINKAGE_GAMES": 5.0, "AVAIL_ENABLED": False}  # [operational] the pre-calibration model: price pull 5 and no availability adjustment, judged together against both changes
 
+# --- Monitoring dashboard (spec 2026-11-05): app vs The Scout vs the owner vs real points ---
+# Not the model-error monitoring above (src/monitoring.py). These drive the per-gameweek
+# reports built by scripts/monitor_backfill.py; none of them changes what the app advises.
+MONITOR_WINDOWS_GWS = (1, 3, 5)  # [operational] gameweeks over which a transfer or a buy list is scored
+MONITOR_TRANSFER_VERDICT_WINDOW_GWS = 3  # [operational] owner's call 2026-11-05: one week is luck, five is slow
+MONITOR_WILDCARD_WINDOW_GWS = 5  # [operational] a wildcard is judged over the following five gameweeks
+MONITOR_ADVICE_HORIZON_GWS = 3  # [operational] the API's default horizon_gws; capture and replay use it
+MONITOR_BUY_LIST_PER_POSITION = 2  # [untested] app buy list = top N of each position below
+MONITOR_BUY_LIST_POSITIONS = ("DEF", "MID", "FWD")  # [operational]
+MONITOR_WILDCARD_HEADLINE_PRESET = "balanced"  # [operational] must be in CHIP_WILDCARD_PRESET_ORDER
+MONITOR_PARITY_MAX_MEAN_ABS_DIFF = 0.10  # [untested] replay vs stored model_xpts, same model version only
+MONITOR_PARITY_MIN_CORR = 0.99  # [untested]
+MONITOR_ENTRY_IDS = (107342, 5645321)  # [operational] tracked entries, 2026-27 ids (FPL reissues ids each season)
+SCOUT_FEED_BASE_URL = "https://api.premierleague.com/content/premierleague/text/en"  # [operational] unofficial public feed
+SCOUT_FEED_TAGS = ("franchise:fpl-scout-picks", "franchise:transfer-radar", "content-creator:The-Scout")  # [operational]
+SCOUT_FEED_PAGE_SIZE = 30  # [operational] the feed caps a page at 30
+SCOUT_FEED_MAX_PAGES = 4  # [operational]
+SCOUT_OVERRIDES_PATH = "data/monitoring/scout_overrides.json"  # [operational]
+
 # --- LLM specialist agents (api/chat.py) ---
 # Inject the reflection agent's learned strategy rules (src/agent_memory
 # strategy_rules table) into /chat/captain|transfer|chip prompts as "apply
