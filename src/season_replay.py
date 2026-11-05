@@ -17,7 +17,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from src import transforms
+from src import fixture_difficulty, minutes_model, projections, transforms
+from src.config_overrides import config_overrides
 
 FORM_WINDOW_GWS = 4
 PER90_COLUMNS = {
@@ -143,3 +144,39 @@ def actuals_for_gw(snapshots_df, history_df, gw):
                   pd.to_numeric(h["gw_fixture_count"], errors="coerce").fillna(0)))
     out["had_fixture"] = out["player_id"].map(lambda p: fx.get(int(p), 0) > 0)
     return out[out["actual"].notna()].reset_index(drop=True)
+
+
+def project_as_of(target_gw, horizon, inputs, overrides=None):
+    """The production projection for `target_gw` onwards, from as-of inputs only.
+
+    `inputs`: bootstrap, fixtures, history_df, match_df, snapshots_df. The three
+    history loaders the engine reads are patched for the call, so nothing from
+    the target gameweek or later leaks in. The manual team file is today's
+    judgement (signings, injuries learned later), so a replay of an earlier
+    gameweek runs without it: as-of, not hindsight. `overrides` are config
+    overrides (src/config_overrides.py). The frame carries
+    ``attrs["dropped_ids"]``: players with no snapshot row for the gameweek.
+    """
+    elements, fixtures, short, history_capped, dropped_ids = build_live_engine_inputs(
+        target_gw, horizon, inputs["bootstrap"], inputs["fixtures"], inputs["history_df"],
+        inputs["snapshots_df"], match_df=inputs["match_df"],
+    )
+    match_capped = cap_match_history(inputs["match_df"], target_gw)
+    orig = (projections.load_latest_player_gw_history, minutes_model.load_minutes_history,
+            fixture_difficulty.load_match_history, fixture_difficulty.load_knowledge_discount)
+    projections.load_latest_player_gw_history = lambda *a, **k: history_capped
+    minutes_model.load_minutes_history = lambda *a, **k: history_capped
+    fixture_difficulty.load_match_history = lambda *a, **k: match_capped
+    fixture_difficulty.load_knowledge_discount = lambda *a, **k: {}
+    try:
+        with config_overrides(overrides):
+            proj = projections.project_elements_next_gws(
+                elements=elements, fixtures=fixtures, teams_short_map=short,
+                gw_start=int(target_gw), horizon_gws=int(horizon),
+                finished_gw_max=int(target_gw) - 1,
+            )
+    finally:
+        (projections.load_latest_player_gw_history, minutes_model.load_minutes_history,
+         fixture_difficulty.load_match_history, fixture_difficulty.load_knowledge_discount) = orig
+    proj.attrs["dropped_ids"] = list(dropped_ids)
+    return proj

@@ -27,8 +27,7 @@ import warnings
 import pandas as pd
 
 from src import backtest_metrics as bm
-from src import config, fixture_difficulty, minutes_model, projections, season_replay
-from src.config_overrides import config_overrides
+from src import config, fixture_difficulty, projections, season_replay
 
 MAE_TOLERANCE = 0.01
 TOP_K = 3
@@ -69,31 +68,8 @@ def score_window_starts(gws, horizon):
 
 
 def project_gw(target_gw, horizon, overrides, inputs):
-    elements, fixtures, short, history_capped, dropped_ids = season_replay.build_live_engine_inputs(
-        target_gw, horizon, inputs["bootstrap"], inputs["fixtures"], inputs["history_df"],
-        inputs["snapshots_df"], match_df=inputs["match_df"],
-    )
-    match_capped = season_replay.cap_match_history(inputs["match_df"], target_gw)
-    # The manual knowledge file is today's judgement (signings, injuries learned
-    # later), so a replay of an earlier GW runs without it: as-of, not hindsight.
-    orig = (projections.load_latest_player_gw_history, minutes_model.load_minutes_history,
-            fixture_difficulty.load_match_history, fixture_difficulty.load_knowledge_discount)
-    projections.load_latest_player_gw_history = lambda *a, **k: history_capped
-    minutes_model.load_minutes_history = lambda *a, **k: history_capped
-    fixture_difficulty.load_match_history = lambda *a, **k: match_capped
-    fixture_difficulty.load_knowledge_discount = lambda *a, **k: {}
-    try:
-        with config_overrides(overrides):
-            proj = projections.project_elements_next_gws(
-                elements=elements, fixtures=fixtures, teams_short_map=short,
-                gw_start=int(target_gw), horizon_gws=int(horizon),
-                finished_gw_max=int(target_gw) - 1,
-            )
-    finally:
-        (projections.load_latest_player_gw_history, minutes_model.load_minutes_history,
-         fixture_difficulty.load_match_history, fixture_difficulty.load_knowledge_discount) = orig
-    proj.attrs["dropped_ids"] = list(dropped_ids)
-    return proj
+    """As-of projection for one gameweek; the engine patching lives in src/season_replay.py."""
+    return season_replay.project_as_of(target_gw, horizon, inputs, overrides=overrides)
 
 
 def replay_frames(gws, horizon, overrides, inputs):
