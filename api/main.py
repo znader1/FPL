@@ -297,6 +297,21 @@ def get_team_ratings_cached(teams_short_map):
     team_match_xg = fixture_difficulty.build_team_match_xg(match_df)
     ratings = fixture_difficulty.resolve_team_ratings(team_match_xg, teams_short_map=teams_short_map)
     ratings = fixture_difficulty.apply_knowledge_discount(ratings, teams_short_map=teams_short_map)
+    if config.AVAIL_ENABLED:
+        # The ticker and the projections must rate a team the same way: apply the
+        # long-term absences (injured / suspended; doubts are a next-GW question
+        # the projections handle per GW). Fail-soft.
+        try:
+            from src import availability
+            bootstrap = get_bootstrap_cached()
+            elements = pd.DataFrame(bootstrap.get("elements") or [])
+            nxt = next((e for e in bootstrap.get("events", []) if e.get("is_next")), None)
+            if nxt is not None and not elements.empty:
+                shares = availability.team_shares(match_df, int(nxt["id"]))
+                ratings = availability.apply_to_ratings(
+                    ratings, availability.team_missing(shares, elements, first_gw=False))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ticker availability adjustment skipped: %s", exc)
     return _cache_set(_team_ratings_cache, ratings)
 
 

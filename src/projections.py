@@ -674,11 +674,35 @@ def project_elements_next_gws(
     # multiplier (and the published diff_avg_gw{n}) come from our own xG
     # attack/defence ratings instead of FPL's official FDR. Fail-soft: no
     # usable ratings → the legacy FPL-FDR path below runs unchanged.
+    # Availability-adjusted strength (calibration spec part 2): computed once,
+    # fail-soft — any error leaves today's projections untouched.
+    # Per GW: a doubt counts in the first GW only, injuries/suspensions in all.
+    avail_shares, avail_by_gw = None, None
+    if config.AVAIL_ENABLED:
+        try:
+            from . import availability as _av
+            from src import fixture_difficulty as _fd_av
+            avail_shares = _av.team_shares(_fd_av.load_match_history(), gw_start)
+            avail_by_gw = _av.missing_by_gw(avail_shares, df, gws)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("availability adjustment skipped: %s", exc)
+            avail_shares, avail_by_gw = None, None
+
     diff_source = str(config.PROJ_DIFFICULTY_SOURCE)
-    xg_diff_ratings = (
+    xg_base_ratings = (
         resolve_projection_difficulty_ratings(teams_short_map)
         if diff_source == "xg_ratings" else None
     )
+    xg_ratings_by_gw = {}
+    if xg_base_ratings is not None:
+        for gw in gws:
+            miss = (avail_by_gw or {}).get(int(gw))
+            if miss:
+                try:
+                    xg_ratings_by_gw[int(gw)] = _av.apply_to_ratings(xg_base_ratings, miss)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("availability ratings skipped for GW%s: %s", gw, exc)
+    xg_diff_ratings = xg_ratings_by_gw.get(int(gws[0]), xg_base_ratings) if gws else xg_base_ratings
 
     horizon_total = pd.Series(0.0, index=df.index, dtype="float64")
 
@@ -720,8 +744,8 @@ def project_elements_next_gws(
 
     for i, gw in enumerate(gws):
         xg_map = (
-            xg_team_difficulty_for_gw(xg_diff_ratings, fixtures, int(gw))
-            if xg_diff_ratings is not None else None
+            xg_team_difficulty_for_gw(xg_ratings_by_gw.get(int(gw), xg_base_ratings), fixtures, int(gw))
+            if xg_base_ratings is not None else None
         )
         if xg_map is not None and i == 0 and market_diff:
             odds_w = float(config.ODDS_DIFFICULTY_BLEND_WEIGHT)
@@ -850,11 +874,36 @@ def project_elements_next_gws(
             from . import expected_points as _xg_model
 
             model_df = _xg_model.build_expected_points(
-                df, fixtures, teams_short_map, gw_start, horizon_gws
+                df, fixtures, teams_short_map, gw_start, horizon_gws, missing_by_gw=avail_by_gw
             )
             df = _xg_model.blend_into_projections(df, model_df, blend_weight, gws)
         except Exception:
             pass
+
+    # Teammates of a missing attacker lose output his own per-90 rates can't see
+    # (a player's own team attack is baked into them), so scale their final xPts.
+    df["avail_teammate_mult"] = 1.0
+    if avail_by_gw and any(avail_by_gw.values()):
+        try:
+            from . import availability as _av
+            ids = pd.to_numeric(df["id"], errors="coerce")
+            for i, gw in enumerate(gws):
+                miss = avail_by_gw.get(int(gw))
+                col = f"xpts_gw{gw}"
+                if not miss or col not in df.columns:
+                    continue
+                mult = _av.teammate_multiplier(avail_shares, df, miss, first_gw=(i == 0))
+                m = ids.map(mult).fillna(1.0).astype(float)
+                df[col] = pd.to_numeric(df[col], errors="coerce") * m.values
+                if i == 0:
+                    df["avail_teammate_mult"] = m.values
+            df["xpts_horizon"] = sum(
+                pd.to_numeric(df[f"xpts_gw{gw}"], errors="coerce").fillna(0.0)
+                for gw in gws if f"xpts_gw{gw}" in df.columns
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("teammate availability multiplier skipped: %s", exc)
+            df["avail_teammate_mult"] = 1.0
 
     keep_base = [
         "id",
@@ -914,6 +963,7 @@ def project_elements_next_gws(
             ]
         )
     keep.append("xpts_horizon")
+    keep.append("avail_teammate_mult")
     if "xpts_model_horizon" in df.columns:
         keep.append("xpts_model_horizon")
     # Component probabilities and the points distribution from the xG model, for
