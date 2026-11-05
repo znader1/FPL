@@ -17,6 +17,7 @@ is approximated by current price (purchase price isn't tracked here).
 import pandas as pd
 
 from . import config
+from .optimizer import VALID_FORMATIONS
 
 MAX_PER_TEAM = 3
 
@@ -92,11 +93,36 @@ def _horizon(info, pid, remaining):
     return sum(xg.get(g, 0.0) for g in remaining)
 
 
+def _likely_xi(squad, info, hz):
+    """Best legal line-up by remaining-horizon value: 1 GKP plus the best
+    (DEF, MID, FWD) split among VALID_FORMATIONS. A plain top-11 can hold
+    two keepers or a single defender, which parks a real starter on the
+    "bench" and credits his upgrade 0. Falls back to the raw top 11 only
+    when the squad cannot fill any formation (test squads, broken picks)."""
+    by_pos = {}
+    for pid in squad:
+        by_pos.setdefault(info[pid]["pos"], []).append(pid)
+    for pos in by_pos:
+        by_pos[pos].sort(key=lambda p: hz.get(p, 0.0), reverse=True)
+    best, best_val = None, None
+    for d, m, f in VALID_FORMATIONS:
+        need = {"GKP": 1, "DEF": d, "MID": m, "FWD": f}
+        if any(len(by_pos.get(pos, [])) < n for pos, n in need.items()):
+            continue
+        xi = [p for pos, n in need.items() for p in by_pos[pos][:n]]
+        val = sum(hz.get(p, 0.0) for p in xi)
+        if best is None or val > best_val:
+            best, best_val = xi, val
+    if best is None:
+        best = sorted(squad, key=lambda p: hz.get(p, 0.0), reverse=True)[:11]
+    return set(best)
+
+
 def _xi_floors(squad, info, hz):
-    """Likely XI (top 11 by remaining-horizon value) and its weakest member
-    per position / overall — the bar an incoming player must beat to turn a
-    bench slot into real points."""
-    xi_ids = set(sorted(squad, key=lambda p: hz.get(p, 0.0), reverse=True)[:11])
+    """Likely XI (best legal line-up by remaining-horizon value) and its
+    weakest member per position / overall — the bar an incoming player must
+    beat to turn a bench slot into real points."""
+    xi_ids = _likely_xi(squad, info, hz)
     by_pos, overall = {}, None
     for pid in xi_ids:
         v, pos = hz.get(pid, 0.0), info[pid]["pos"]
@@ -338,16 +364,16 @@ def plan_transfers(proj, squad_ids, gws, itb_m=0.0, start_ft=1, ft_cap=5,
     plan, total_net = [], 0.0
     runner_ups = []
 
-    # Injury gate: a red-flagged player in the LIKELY first-GW XI (top 11 of
-    # the squad by that GW's projection) gets force-sold ahead of the normal
+    # Injury gate: a red-flagged player in the LIKELY first-GW XI (best legal
+    # line-up by that GW's projection) gets force-sold ahead of the normal
     # greedy decision, bypassing min_gain -- an "i"/"s"/"u" status or a 0%
     # playing chance means the projection itself is close to meaningless, so
     # the usual gain threshold doesn't apply. Bench red flags don't force.
     first_gw = gws[0] if gws else None
     likely_xi = set()
     if first_gw is not None:
-        by_first_gw = sorted(squad, key=lambda pid: info[pid]["xg"].get(first_gw, 0.0), reverse=True)
-        likely_xi = set(by_first_gw[:11])
+        first_gw_xg = {pid: info[pid]["xg"].get(first_gw, 0.0) for pid in squad}
+        likely_xi = _likely_xi(squad, info, first_gw_xg)
     forced_sells = {pid for pid in likely_xi if info[pid].get("red_flag")}
 
     for gi, g in enumerate(gws):
