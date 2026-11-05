@@ -79,3 +79,44 @@ def test_spend_reasoning_quotes_net_after_hits():
     if first["hits"] > 0:
         assert "net" in plan["reasoning"]
         assert "hit" in plan["reasoning"]
+
+
+def _squad_15(strong_def_xpts=9.0, weak_def_xpts=3.0):
+    """A real 15: 2 strong GKP, one strong DEF + four weak, 5 MID, 3 FWD.
+    Ranked purely by xPts the top 11 is 2 GKP + 1 DEF + 5 MID + 3 FWD —
+    not a legal line-up."""
+    players = [{"id": 1, "pos": "GKP", "xpts": 10.0}, {"id": 2, "pos": "GKP", "xpts": 10.0},
+               {"id": 3, "pos": "DEF", "xpts": strong_def_xpts}]
+    players += [{"id": i, "pos": "DEF", "xpts": weak_def_xpts} for i in range(4, 8)]
+    players += [{"id": i, "pos": "MID", "xpts": 8.0} for i in range(8, 13)]
+    players += [{"id": i, "pos": "FWD", "xpts": 8.0} for i in range(13, 16)]
+    return players
+
+
+def test_xi_floor_uses_a_legal_formation():
+    players = _squad_15()
+    info = tp._build_info(_proj_frame(players), [10, 11])
+    squad = [p["id"] for p in players]
+    hz = {pid: tp._horizon(info, pid, [10, 11]) for pid in squad}
+    xi_ids, by_pos, _ = tp._xi_floors(squad, info, hz)
+    assert len(xi_ids) == 11
+    assert sum(info[p]["pos"] == "GKP" for p in xi_ids) == 1
+    assert sum(info[p]["pos"] == "DEF" for p in xi_ids) >= 3
+    # The defensive floor is the weakest STARTING defender (3.0 x 2 GWs),
+    # not the one strong one.
+    assert by_pos["DEF"] == 6.0
+
+
+def test_second_defender_upgrade_is_credited_when_top11_has_one_defender():
+    # A 6.0/GW defender replacing a 3.0/GW one gains 6.0 over two GWs and
+    # clears the DEF bar (2.0 x 2.25) — he must not be scored against the
+    # 9.0 defender just because the raw top 11 only had room for one DEF.
+    players = _squad_15()
+    market = players + [{"id": 16, "pos": "DEF", "xpts": 6.0}]
+    plan = tp.plan_transfers(_proj_frame(market), squad_ids=[p["id"] for p in players],
+                             gws=[10, 11], itb_m=0.0, start_ft=1,
+                             allow_hits=False, min_gain=2.0)
+    first = plan["plan"][0]
+    assert first["action"] == "transfer"
+    assert first["moves"][0]["buy"]["name"] == "P16"
+    assert first["moves"][0]["position"] == "DEF"
