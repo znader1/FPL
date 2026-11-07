@@ -1,0 +1,352 @@
+{
+ "_readme": "Hand corrections for the Scout feed (src/scout_feed.py, src/scout_names.py). names: '<normalised name>|<FPL club short>' -> FPL player id, for names no rule resolves. pins: '<gw>|<series>' -> article id. articles: '<article id>' -> {players: [{name, club}], confirmed_by_owner} for squads written as prose.",
+ "articles": {
+  "4681112": {
+   "gw": 1,
+   "series": "season_squad",
+   "source": "read from the squad graphic embedded in the article (photo 4688954), 2026-11-05",
+   "confirmed_by_owner": false,
+   "players": [
+    {
+     "name": "Kinsky",
+     "club": "TOT"
+    },
+    {
+     "name": "Dubravka",
+     "club": "TOT"
+    },
+    {
+     "name": "Gabriel",
+     "club": "ARS"
+    },
+    {
+     "name": "Mosquera",
+     "club": "ARS"
+    },
+    {
+     "name": "Maguire",
+     "club": "MUN"
+    },
+    {
+     "name": "Greaves",
+     "club": "IPS"
+    },
+    {
+     "name": "Thomas",
+     "club": "COV"
+    },
+    {
+     "name": "B.Fernandes",
+     "club": "MUN"
+    },
+    {
+     "name": "Mbeumo",
+     "club": "MUN"
+    },
+    {
+     "name": "Tzolis",
+     "club": "ARS"
+    },
+    {
+     "name": "Groß",
+     "club": "BHA"
+    },
+    {
+     "name": "M.Sangaré",
+     "club": "BRE"
+    },
+    {
+     "name": "Haaland",
+     "club": "MCI"
+    },
+    {
+     "name": "João Pedro",
+     "club": "CHE"
+    },
+    {
+     "name": "Kusi-Asare",
+     "club": "FUL"
+    }
+   ]
+  },
+  "4698173": {
+   "gw": 2,
+   "series": "wildcard",
+   "source": "read from the squad graphic embedded in the article (photo 4698260), 2026-11-05",
+   "confirmed_by_owner": false,
+   "players": [
+    {
+     "name": "Raya",
+     "club": "ARS"
+    },
+    {
+     "name": "Dubravka",
+     "club": "TOT"
+    },
+    {
+     "name": "Gabriel",
+     "club": "ARS"
+    },
+    {
+     "name": "Tarkowski",
+     "club": "EVE"
+    },
+    {
+     "name": "Bijol",
+     "club": "LEE"
+    },
+    {
+     "name": "Ajer",
+     "club": "BRE"
+    },
+    {
+     "name": "Konsa",
+     "club": "ARS"
+    },
+    {
+     "name": "Palmer",
+     "club": "CHE"
+    },
+    {
+     "name": "Szoboszlai",
+     "club": "LIV"
+    },
+    {
+     "name": "Dewsbury-Hall",
+     "club": "EVE"
+    },
+    {
+     "name": "Stach",
+     "club": "LEE"
+    },
+    {
+     "name": "M.Sangaré",
+     "club": "BRE"
+    },
+    {
+     "name": "Haaland",
+     "club": "MCI"
+    },
+    {
+     "name": "João Pedro",
+     "club": "CHE"
+    },
+    {
+     "name": "Walle Egeli",
+     "club": "IPS"
+    }
+   ]
+  },
+  "4705463": {
+   "gw": 3,
+   "series": "wildcard",
+   "source": "read from the squad graphic embedded in the article (photo 4705479), 2026-11-05",
+   "confirmed_by_owner": false,
+   "players": [
+    {
+     "name": "Verbruggen",
+     "club": "BHA"
+    },
+    {
+     "name": "Steele",
+     "club": "BHA"
+    },
+    {
+     "name": "Ajer",
+     "club": "BRE"
+    },
+    {
+     "name": "Dedić",
+     "club": "NEW"
+    },
+    {
+     "name": "Konsa",
+     "club": "ARS"
+    },
+    {
+     "name": "Egan",
+     "club": "HUL"
+    },
+    {
+     "name": "Thomas",
+     "club": "COV"
+    },
+    {
+     "name": "B.Fernandes",
+     "club": "MUN"
+    },
+    {
+     "name": "Palmer",
+     "club": "CHE"
+    },
+    {
+     "name": "Cherki",
+     "club": "MCI"
+    },
+    {
+     "name": "Szoboszlai",
+     "club": "LIV"
+    },
+    {
+     "name": "Slater",
+     "club": "HUL"
+    },
+    {
+     "name": "Haaland",
+     "club": "MCI"
+    },
+    {
+     "name": "João Pedro",
+     "club": "CHE"
+    },
+    {
+     "name": "Wissa",
+     "club": "NEW"
+    }
+   ]
+  },
+  "4712921": {
+   "gw": 4,
+   "series": "wildcard",
+   "source": "read from the squad graphic embedded in the article (photo 4712979), 2026-11-05",
+   "confirmed_by_owner": false,
+   "players": [
+    {
+     "name": "Raya",
+     "club": "ARS"
+    },
+    {
+     "name": "Dubravka",
+     "club": "TOT"
+    },
+    {
+     "name": "Gabriel",
+     "club": "ARS"
+    },
+    {
+     "name": "Ajer",
+     "club": "BRE"
+    },
+    {
+     "name": "Elvedi",
+     "club": "LEE"
+    },
+    {
+     "name": "Konsa",
+     "club": "ARS"
+    },
+    {
+     "name": "Thomas",
+     "club": "COV"
+    },
+    {
+     "name": "Palmer",
+     "club": "CHE"
+    },
+    {
+     "name": "Mbeumo",
+     "club": "MUN"
+    },
+    {
+     "name": "Dewsbury-Hall",
+     "club": "EVE"
+    },
+    {
+     "name": "Stach",
+     "club": "LEE"
+    },
+    {
+     "name": "Janelt",
+     "club": "BRE"
+    },
+    {
+     "name": "Haaland",
+     "club": "MCI"
+    },
+    {
+     "name": "João Pedro",
+     "club": "CHE"
+    },
+    {
+     "name": "Wissa",
+     "club": "NEW"
+    }
+   ]
+  },
+  "4726681": {
+   "gw": 6,
+   "series": "wildcard",
+   "source": "read from the squad graphic embedded in the article (photo 4726735), 2026-11-05",
+   "confirmed_by_owner": false,
+   "players": [
+    {
+     "name": "Raya",
+     "club": "ARS"
+    },
+    {
+     "name": "Dubravka",
+     "club": "TOT"
+    },
+    {
+     "name": "Muharemović",
+     "club": "LEE"
+    },
+    {
+     "name": "Vuskovic",
+     "club": "BHA"
+    },
+    {
+     "name": "Konsa",
+     "club": "ARS"
+    },
+    {
+     "name": "Affengruber",
+     "club": "FUL"
+    },
+    {
+     "name": "Thomas",
+     "club": "COV"
+    },
+    {
+     "name": "Palmer",
+     "club": "CHE"
+    },
+    {
+     "name": "Saka",
+     "club": "ARS"
+    },
+    {
+     "name": "Schade",
+     "club": "BRE"
+    },
+    {
+     "name": "Tavernier",
+     "club": "BOU"
+    },
+    {
+     "name": "Groß",
+     "club": "BHA"
+    },
+    {
+     "name": "Haaland",
+     "club": "MCI"
+    },
+    {
+     "name": "João Pedro",
+     "club": "CHE"
+    },
+    {
+     "name": "Gonzalo",
+     "club": "FUL"
+    }
+   ]
+  }
+ },
+ "names": {
+  "bryan mbuemo|MUN": 427
+ },
+ "pins": {},
+ "_names_notes": {
+  "bryan mbuemo|MUN": "GW5 Scout Selection (4720145) misspells Bryan Mbeumo"
+ }
+}

@@ -98,6 +98,7 @@ def test_squad_draft_still_delegates_to_the_shared_helper():
 @pytest.mark.parametrize("module_path", [
     "src/replay_builder.py", "src/backtest_adapter.py",
     "scripts/backtest_season.py", "scripts/backtest_minutes_ab.py",
+    "src/season_replay.py", "src/monitor_replay.py",
 ])
 def test_backtest_paths_do_not_apply_present_day_knowledge(module_path):
     """Applying today's injury file to a historical gameweek leaks the future

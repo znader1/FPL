@@ -1,0 +1,37 @@
+name: Monitor backfill
+# Builds the monitoring dashboard's per-gameweek reports (app vs The Scout vs the
+# owner vs real points) and writes them to Supabase. Manual only. Apply
+# supabase/migrations/20261106_monitoring_tables.sql before the first run.
+on:
+  workflow_dispatch:
+    inputs:
+      gws:
+        description: "Gameweeks to build, e.g. 1-10 or 9,10"
+        required: true
+        default: "1-10"
+      entries:
+        description: "FPL entry ids, comma-separated"
+        required: true
+        default: "107342,5645321"
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Build and store the reports
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          GWS: ${{ inputs.gws }}
+          ENTRIES: ${{ inputs.entries }}
+        # Inputs reach the script through the environment, never the shell line.
+        run: PYTHONPATH=. python scripts/monitor_backfill.py --gws "$GWS" --entries "$ENTRIES"
