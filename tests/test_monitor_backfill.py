@@ -216,3 +216,39 @@ def test_article_prose_is_not_stored():
     assert "reason" not in row["players"][0]
     assert row["players"][0] == {"name_raw": "Erling Haaland", "club_raw": "Man City", "price_m": 5.0,
                                  "fpl_player_id": 411}
+
+
+def _events(last_finished, current, nxt, total=38):
+    return [{"id": i, "finished": i <= last_finished, "is_current": i == current, "is_next": i == nxt}
+            for i in range(1, total + 1)]
+
+
+def test_auto_gws_are_the_seven_gameweeks_up_to_the_next_deadline():
+    # GW10 live (deadline passed, not finished), GW11 next: windows of GW5 (5 gameweeks,
+    # GW5-9) are complete and rebuilt once more; GW11 gets its pre-deadline projections.
+    assert mb.auto_gws(_events(9, 10, 11)) == [5, 6, 7, 8, 9, 10, 11]
+
+
+def test_auto_gws_start_at_one_early_in_the_season():
+    assert mb.auto_gws(_events(2, 2, 3)) == [1, 2, 3]
+
+
+def test_auto_gws_without_a_next_event_use_the_finished_one_plus_one():
+    events = [{"id": i, "finished": i <= 38} for i in range(1, 39)]
+    assert mb.auto_gws(events) == [32, 33, 34, 35, 36, 37, 38]
+
+
+def test_parse_gws_auto_reads_the_events():
+    assert mb.parse_gws("auto", _events(2, 2, 3)) == [1, 2, 3]
+
+
+def test_current_gw_is_the_live_one_or_the_last_finished():
+    assert mb.current_gw(_events(9, 10, 11)) == 10      # live: picks are public
+    assert mb.current_gw(_events(9, 9, 10)) == 9        # before GW10's deadline
+    assert mb.current_gw([{"id": 1, "finished": False}]) == 0
+
+
+def test_workflow_runs_on_a_schedule_with_auto_gameweeks():
+    wf = pathlib.Path(".github/workflows/monitor-backfill.yml").read_text()
+    assert "schedule:" in wf and "cron:" in wf
+    assert "'auto'" in wf or '"auto"' in wf

@@ -1,14 +1,19 @@
 name: Monitor backfill
 # Builds the monitoring dashboard's per-gameweek reports (app vs The Scout vs the
-# owner vs real points) and writes them to Supabase. Manual only. Apply
-# supabase/migrations/20261106_monitoring_tables.sql before the first run.
+# owner vs real points) and writes them to Supabase. Runs every six hours with
+# "auto" (the next deadline's gameweek and the six before it, so a live gameweek
+# fills in once FPL marks it finished and every points window is re-scored), or by
+# hand with an explicit range. Apply supabase/migrations/20261106_monitoring_tables.sql
+# before the first run.
 on:
+  schedule:
+    - cron: "0 */6 * * *"
   workflow_dispatch:
     inputs:
       gws:
-        description: "Gameweeks to build, e.g. 1-10 or 9,10"
+        description: "Gameweeks to build: auto, 1-10 or 9,10"
         required: true
-        default: "1-10"
+        default: "auto"
       entries:
         description: "FPL entry ids, comma-separated"
         required: true
@@ -31,7 +36,8 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          GWS: ${{ inputs.gws }}
-          ENTRIES: ${{ inputs.entries }}
+          # A scheduled run has no inputs: it takes the defaults.
+          GWS: ${{ inputs.gws || 'auto' }}
+          ENTRIES: ${{ inputs.entries || '107342,5645321' }}
         # Inputs reach the script through the environment, never the shell line.
         run: PYTHONPATH=. python scripts/monitor_backfill.py --gws "$GWS" --entries "$ENTRIES"
