@@ -16,9 +16,14 @@ and never from the snapshot table (which has no GW1 rows).
     PYTHONPATH=. python scripts/monitor_backfill.py --gws 1-10 \\
         --snapshots-csv data/replay/snapshots_2026-27.csv --out-dir /tmp/monitor-dryrun
 
-    # real run (GitHub workflow "Monitor backfill")
+    # real run (GitHub workflow "Monitor backfill": every six hours with --gws auto,
+    # or by hand with an explicit range)
     PYTHONPATH=. python scripts/monitor_backfill.py --gws 1-10 --entries 107342,5645321
 Env for a real run: SUPABASE_URL, SUPABASE_SERVICE_KEY.
+
+"auto" rebuilds the next deadline's gameweek and the six before it: the live
+gameweek fills in when FPL marks it finished, every 1/3/5-gameweek window is
+re-scored as its gameweeks finish, and earlier gameweeks are left alone.
 
 Advice saved before a deadline by production carries the origin "live". This
 script only ever writes "replay" rows; a live row is read and preferred, never
@@ -61,8 +66,41 @@ CONFLICT_KEYS = {
 
 # ---------------------------------------------------------------- pure builders
 
-def parse_gws(spec):
-    """"1-10" -> [1..10]; "3,5" -> [3, 5]; "2-3,9" -> [2, 3, 9]."""
+AUTO_SPAN = 7   # "auto" rebuilds this many gameweeks up to the next deadline (see auto_gws)
+
+
+def last_finished_gw(events):
+    return max([int(e["id"]) for e in events or [] if e.get("finished")], default=0)
+
+
+def next_gw(events):
+    """The gameweek whose deadline is next (FPL's is_next), else the one after the
+    last finished, capped at the season's last gameweek."""
+    ids = [int(e["id"]) for e in events or []]
+    n = next((int(e["id"]) for e in events or [] if e.get("is_next")), last_finished_gw(events) + 1)
+    return min(n, max(ids)) if ids else n
+
+
+def current_gw(events):
+    """The last gameweek whose deadline has passed: FPL's is_current once the
+    deadline is gone (its picks are public even while it is live), else the
+    last finished one."""
+    return max([int(e["id"]) for e in events or [] if e.get("is_current")] + [last_finished_gw(events)])
+
+
+def auto_gws(events):
+    """The gameweeks a scheduled run rebuilds: the next deadline's (pre-deadline
+    projections), the live one, and the five before them so that every 1/3/5
+    gameweek window that just completed is scored, plus one spare rebuild once
+    FPL has checked the data (final bonus). Earlier gameweeks are settled."""
+    n = next_gw(events)
+    return list(range(max(1, n - AUTO_SPAN + 1), n + 1))
+
+
+def parse_gws(spec, events=None):
+    """"1-10" -> [1..10]; "3,5" -> [3, 5]; "2-3,9" -> [2, 3, 9]; "auto" -> auto_gws(events)."""
+    if str(spec).strip().lower() == "auto":
+        return auto_gws(events)
     out = []
     for part in str(spec).split(","):
         part = part.strip()
@@ -353,14 +391,13 @@ def engine_inputs(snapshots_df):
 def main(argv=None):
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--gws", default="1-10")
+    ap.add_argument("--gws", default="auto", help='"1-10", "9,10", or "auto" (the next deadline\'s gameweek and the six before it)')
     ap.add_argument("--entries", default=",".join(str(e) for e in config.MONITOR_ENTRY_IDS))
     ap.add_argument("--out-dir", help="dry run: write JSON files here instead of the database")
     ap.add_argument("--snapshots-csv", help="read player_gw_snapshots from this export instead of the database")
     ap.add_argument("--skip-replay", action="store_true", help="do not rebuild the app's advice")
     args = ap.parse_args(argv)
 
-    gws = parse_gws(args.gws)
     entries = [int(e) for e in str(args.entries).split(",") if e.strip()]
     dry = bool(args.out_dir)
     sb_url = os.environ.get("SUPABASE_URL")
@@ -375,10 +412,10 @@ def main(argv=None):
     from src.season_history import season_label_from_bootstrap
     season = str(season_label_from_bootstrap(bootstrap))
     events = bootstrap.get("events") or []
-    last_finished = max([int(e["id"]) for e in events if e.get("finished")], default=0)
-    next_gw = next((int(e["id"]) for e in events if e.get("is_next")), last_finished + 1)
-    gws = [g for g in gws if g <= next_gw]
-    logger.info("season %s: last finished GW%s, next GW%s; building %s", season, last_finished, next_gw, gws)
+    last_finished, current, upcoming = last_finished_gw(events), current_gw(events), next_gw(events)
+    gws = [g for g in parse_gws(args.gws, events) if g <= upcoming]
+    logger.info("season %s: last finished GW%s, current GW%s, next GW%s; building %s",
+                season, last_finished, current, upcoming, gws)
 
     if args.snapshots_csv:
         snapshots_df = pd.read_csv(args.snapshots_csv)
@@ -440,7 +477,7 @@ def main(argv=None):
             failed |= {(entry, g) for g in gws}
             continue
         actuals = {}
-        for g in range(1, last_finished + 1):
+        for g in range(1, current + 1):   # the live gameweek's picks are public, its points are not final
             try:
                 actuals[g] = actuals_row(entry, season, g, fpl_get(f"entry/{entry}/event/{g}/picks/"),
                                          transfers, history, now_iso)
@@ -483,7 +520,7 @@ def main(argv=None):
                 f"&entry_id=in.(0,{entry})"))
 
         data = {
-            "season": season, "last_finished_gw": last_finished, "next_gw": next_gw, "code_version": code_version,
+            "season": season, "last_finished_gw": last_finished, "next_gw": upcoming, "code_version": code_version,
             "snapshots_by_gw": snapshots_by_gw, "points_by_gw": points_by_gw, "minutes_by_gw": minutes_by_gw,
             "bootstrap_players": bootstrap_players(bootstrap), "expert": expert_by_key,
             "actuals_by_gw": actuals, "chips": history.get("chips") or [], "advice": advice,
