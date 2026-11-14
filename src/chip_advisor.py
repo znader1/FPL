@@ -1063,7 +1063,8 @@ def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon, 
     span = ""
     if chip == "wildcard" and window_gws:
         a, b = int(window_gws[0]), int(window_gws[-1])
-        span = f" over GW{a}–{b} vs your planned transfers" if b != a else f" in GW{a} vs your planned transfers"
+        span = (f" over GW{a}–{b} beyond what your planned transfers already get" if b != a
+                else f" in GW{a} beyond what your planned transfers already get")
 
     if status == "play":
         text = f"Play it in GW{event_id}: +{ev_gain:.1f} pts{span + ',' if span else ''} over the bar of {bar:.0f}."
@@ -1097,8 +1098,9 @@ def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon, 
                 f"under the {bar:.0f}-pt bar")
         if distribution and "p_beats_bar" in distribution:
             text += f" ({round(distribution['p_beats_bar'] * 100)}% chance to beat it)"
-        text += (". Your free transfers cover most of that. "
-                 f"Keep it for {prior.split(';')[0]}.")
+        # No "your free transfers cover most of that": ev_gain is already net of the
+        # transfer plan (wc_squads vs plan_squads), so the claim contradicted the number.
+        text += f". Keep it for {prior.split(';')[0]}."
         return text
 
     text = f"Hold for now. GW{event_id} is the best week so far (+{ev_gain:.1f} pts{span}"

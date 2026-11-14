@@ -146,6 +146,6 @@ def test_wildcard_guidance_names_the_window(monkeypatch):
         horizon_gws=4, wc_squads={g: set(range(101, 116)) for g in GWS},
     )
     rec = next(r for r in plan["recommendations"] if r["chip"] == "wildcard")
-    assert "over GW5–8 vs your planned transfers" in rec["guidance"]
+    assert "over GW5–8 beyond what your planned transfers already get" in rec["guidance"]
     row = next(r for r in plan["outlook"] if r["chip"] == "wildcard")
-    assert "over GW5–8 vs your planned transfers" in row["guidance"]
+    assert "over GW5–8 beyond what your planned transfers already get" in row["guidance"]

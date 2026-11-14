@@ -22,3 +22,14 @@ def test_best_week_is_now_says_so():
 def test_best_week_later_keeps_hold_copy():
     text = _hold(event_id=12, current_gw=8)
     assert text.startswith("Hold for now. GW12")
+
+
+def test_now_copy_never_says_free_transfers_cover_the_gain():
+    # The gain is already net of the transfer plan; saying FTs cover it contradicts it.
+    text = chip_advisor._chip_guidance(
+        "wildcard", status="hold", event_id=11, ev_gain=34.7, bar=40.0,
+        distribution=None, horizon=5, half=1, current_gw=11, window_gws=[11, 12, 13, 14, 15],
+    )
+    assert "cover" not in text.lower()
+    assert "beyond what your planned transfers already get" in text
+
