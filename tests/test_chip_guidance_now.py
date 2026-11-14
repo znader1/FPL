@@ -13,7 +13,7 @@ def _hold(event_id, current_gw):
 
 def test_best_week_is_now_says_so():
     text = _hold(event_id=8, current_gw=8)
-    assert text.startswith("This is the week")
+    assert text.startswith("Keep it. This week (GW8)")
     assert "GW8" in text and "7.5" in text and "120" in text
     assert "re-check" not in text.lower()
 
