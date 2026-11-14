@@ -13,8 +13,9 @@ def _hold(event_id, current_gw):
 
 def test_best_week_is_now_says_so():
     text = _hold(event_id=8, current_gw=8)
-    assert text.startswith("Keep it. This week (GW8)")
-    assert "GW8" in text and "7.5" in text and "120" in text
+    assert text.startswith("Not this week. A wildcard now gains +7.5 pts")
+    assert "120" in text and "Keep it for" in text
+    assert "best" not in text.lower().split("keep it for")[0]
     assert "re-check" not in text.lower()
 
 

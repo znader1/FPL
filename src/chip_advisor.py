@@ -1090,14 +1090,15 @@ def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon, 
         # The best wildcard week in the window is the deadline week itself:
         # "re-check later" would be wrong, the decision is now. Say that the gain is
         # real but under the bar, and what would change the call.
-        # Lead with the verdict: "This is the week" read as "play it now" next to
-        # a Save-chips pick (user testing, 2026-11).
-        text = (f"Keep it. This week (GW{event_id}) is the best wildcard week in the window at "
-                f"+{ev_gain:.1f} pts{span}, but that is under the {bar:.0f}-pt bar")
+        # Lead with the verdict and the numbers. "This is the week" and "the best
+        # wildcard week" both read as "play it now" next to a Save-chips pick
+        # (user testing, 2026-11).
+        text = (f"Not this week. A wildcard now gains +{ev_gain:.1f} pts{span}, "
+                f"under the {bar:.0f}-pt bar")
         if distribution and "p_beats_bar" in distribution:
             text += f" ({round(distribution['p_beats_bar'] * 100)}% chance to beat it)"
-        text += ". Your free transfers cover most of that gain; play it only if you want the full rebuild now. Best use: "
-        text += f"{prior.split(';')[0]}."
+        text += (". Your free transfers cover most of that. "
+                 f"Keep it for {prior.split(';')[0]}.")
         return text
 
     text = f"Hold for now. GW{event_id} is the best week so far (+{ev_gain:.1f} pts{span}"
