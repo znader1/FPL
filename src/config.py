@@ -131,7 +131,13 @@ PROJ_RECENT_DROP_UNAVAILABLE_ZEROS = True  # [untested] False = every zero count
 PROJ_RECENT_SANDWICH_MIN_STARTS = 3  # [untested] started GWs needed before a single blank is read as an absence
 PROJ_PLAYER_RECENT_MIN_SAMPLES = 2  # [untested]
 PROJ_PLAYER_RECENT_BLEND_WEIGHT = 0.65  # [untested]
-PROJ_EP_NEXT_BLEND_WEIGHT = 0.50  # [untested]
+# FPL's own ep_next in the next-GW number. 0 = our model only (owner's call
+# 2026-11-14): ep_next is recent-form driven and double-counts fixture/venue/
+# availability the model already applies, so a defender off a big haul jumps
+# (GW11: Konsa ep_next 10.2 vs Calafiori 4.8, same club and fixture). The fixed
+# harness (PR #80) showed no accuracy gain from 0.5 and a worse captain hit-rate.
+# The previous 0.5 runs in shadow; monitor_report decides after 3 GWs.
+PROJ_EP_NEXT_BLEND_WEIGHT = 0.0  # [untested] was 0.50; live shadow comparison from GW12
 PROJ_DGW_EXTRA_FIXTURE_DISCOUNT = 0.65   # [untested] DGW extra fixture counts as 65% of a normal fixture
 PROJ_INJURY_FUTURE_GW_FADE = 0.50        # [untested] Future GW injury discount fades by 50% per GW
 
@@ -789,9 +795,11 @@ PROJ_MODEL_BLEND_WEIGHT = 0.7  # [untested] (directional sweep only) 2026-10-22 
 # model's values of exactly the keys that changed, and scripts/shadow_snapshot.py
 # (GitHub snapshot job) computes that previous model next to the current one so
 # scripts/monitor_report.py can judge both on the same weeks.
-PROJ_MODEL_VERSION = "2026-10-26.shrink25+avail1"  # [operational]
-PROJ_SHADOW_MODEL_VERSION = "2026-10-22.blend70"  # [operational]
-PROJ_SHADOW_OVERRIDES = {"PROJ_SHRINKAGE_GAMES": 5.0, "AVAIL_ENABLED": False}  # [operational] the pre-calibration model: price pull 5 and no availability adjustment, judged together against both changes
+PROJ_MODEL_VERSION = "2026-11-14.epnext0"  # [operational]
+PROJ_SHADOW_MODEL_VERSION = "2026-10-26.shrink25+avail1"  # [operational]
+# The previous live model: ep_next blended at 0.5. The earlier shadow (pre-calibration,
+# 2026-10-22.blend70) keeps its stored rows; monitor_report groups by shadow version.
+PROJ_SHADOW_OVERRIDES = {"PROJ_EP_NEXT_BLEND_WEIGHT": 0.5}  # [operational]
 
 # --- Monitoring dashboard (spec 2026-11-05): app vs The Scout vs the owner vs real points ---
 # Not the model-error monitoring above (src/monitoring.py). These drive the per-gameweek

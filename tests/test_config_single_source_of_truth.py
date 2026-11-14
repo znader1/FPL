@@ -72,7 +72,7 @@ def test_every_config_reference_exists_so_deleting_a_param_fails_loudly():
     ("PROJ_SHRINKAGE_GAMES", 2.5),             # fallback was 0.0 - would disable early-season shrinkage (5.0 until the 2026-10-26 replay)
     ("PROJ_PENALTY_TAKER_UPLIFT", 0.45),       # fallback was 0.0
     ("PROJ_GK_FIXTURE_DAMP", 0.5),             # fallback was 1.0
-    ("PROJ_EP_NEXT_BLEND_WEIGHT", 0.5),        # fallback was 0.45
+    ("PROJ_EP_NEXT_BLEND_WEIGHT", 0.0),        # fallback was 0.45; 0.5 -> 0.0 on 2026-11-14 (owner call, 0.5 in shadow)
     ("TRANSFER_H2H_CONFLICT_PENALTY", 3.0),    # fallback was 0.0
     ("TRANSFER_PLAN_MIN_HORIZON_GWS", 1),      # fallback was 3
     ("TRANSFER_PLAN_MAX_MOVES_PER_GW", 2),     # fallback was 1
