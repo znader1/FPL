@@ -5,15 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Install deps
-pip install -r requirements.txt
-
 # Run dev server (port 8001 to avoid clash with other services)
 uvicorn api.main:app --reload --port 8001
-
-# Run the test suite (pytest is dev-only; runtime deps unchanged)
-python -m pytest -q                 # full suite
-python -m pytest tests/test_ownership_ev.py -q   # a single module
 
 # Deploy to Fly.io (master → production)
 fly deploy
@@ -27,8 +20,6 @@ curl -X POST "$FPL_API_BASE_URL/admin/refresh" \
   -H "X-API-Key: $FPL_ADMIN_KEY" \
   -d '{"run_snapshot": true}'
 ```
-
-CI (`.github/workflows/api-ci.yml`) compiles `api src scripts` and runs `pytest tests/ -q` on every push.
 
 ## Environment
 
@@ -47,7 +38,7 @@ The rulebook lives in `src/rules.py` (re-exported by `config.py`); never tune it
 - **Chips come in two sets.** Each of Wildcard, Free Hit, Bench Boost and Triple Captain can be played once in GW1–19 and once in GW20–38 (`CHIP_PLAN_PHASE_SPLIT_GW = 19`). A first-set chip not played by the GW19 deadline is lost — it does not carry over. `chip_advisor.chip_windows` gives each chip's `half` and `expires_gw`.
 - **Advice must stay inside the chip's own half.** FA Cup blanks (usually GW29–33) and most doubles fall in the second half, so "save it for the blank/double" is only valid for a second-set chip. First-half guidance comes from `CHIP_PLAN_SEASON_PRIORS_FIRST_HALF`; second-half from `CHIP_PLAN_SEASON_PRIORS`.
 - **One chip per gameweek.** A Wildcard or Free Hit week uses no free transfers and grants no +1: the banked count carries through unchanged (FPL rule since 2025-26; `ft_tracker`). GW1 is squad creation; everyone enters GW2 with 1 FT.
-- **Free transfers bank up to 5** (`FT_MAX`, raised from 2 for 2026-27); each extra transfer costs 4 points (`TRANSFER_HIT_POINTS_STEP`).
+- **Free transfers bank up to 5** (`FT_MAX`); each extra transfer costs 4 points (`TRANSFER_HIT_POINTS_STEP`).
 - **Squad:** 15 players (2 GKP, 5 DEF, 5 MID, 3 FWD), £100m, max 3 per club (`CHIP_MAX_PER_TEAM` / `TRANSFER_MAX_PER_TEAM`).
 
 ## Architecture
@@ -58,19 +49,15 @@ All tunable constants live in `src/config.py` — never hardcode numbers in logi
 
 The xPts model blends a season PPG baseline with a recency-weighted recent average, then applies fixture multipliers per GW:
 
-1. **Base score** = `PPG_WEIGHT × ppg + FORM_WEIGHT × form` (season-long signal)
-2. **Recent average** = recency-weighted mean over last N GWs (last-2 GWs get 2× weight). Blank GWs (team had no fixture) are **excluded entirely** — not treated as 0-point games.
-3. **Blended base** = `RECENT_BLEND_WEIGHT × recent_avg + (1 - RECENT_BLEND_WEIGHT) × base_score`
-4. **Per-GW multipliers**: FDR difficulty (`DIFFICULTY_MULTIPLIER` in `src/projections.py` — the table there is the truth; `CHIP_PLAN_TC_DIFF_MULT` and `scripts/backtest_season.py` carry drifted copies, see the 2026-10-05 review), home/away, opponent team form, own team form, play probability (injury/doubt)
-5. **DGW**: second fixture counts at `DGW_EXTRA_FIXTURE_DISCOUNT` (0.65) of a normal fixture
-6. **Late season** (GW > `LATE_SEASON_GW_THRESHOLD`): window shrinks to 3 GWs so recent form dominates
-7. **ep_next is still in the GW1 number**: `PROJ_EP_NEXT_BLEND_WEIGHT = 0.50` (`[untested]`) — next-GW xPts is half FPL's own ep_next, half the blended model; later GWs use the model only. The backtest adapter sets ep_next to 0.0 (`src/backtest_adapter.py`), so backtests have never exercised this blend (found 2026-10-05, fix planned as a backtest-parity phase).
-8. **Early-season shrinkage** (2026-09): the blended baseline is pulled toward a price×position prior (`PROJ_SHRINKAGE_GAMES`, `PROJ_PRICE_PRIOR_SLOPE`), weighted by finished GWs — a 4.1m defender with two clean sheets no longer projects like a premium. `PROJ_SHRINKAGE_GAMES` 2.5 since 2026-10-26 (was 5; live-season replay, see Monitoring below). Pre-season (0 finished GWs) untouched. First-choice penalty takers get `PROJ_PENALTY_TAKER_UPLIFT` (+0.45/GW) after shrinkage.
-9. Known open issue: promoted-team small-sample clusters still inflate (shrinkage+`CHIP_PLAN_XPTS_CLAMP` are stopgaps); root fix + per-player home/away splits are backlogged pending an SP3 backtest.
+1. **Blank GWs** (team had no fixture) are **excluded entirely** from the recent average — not treated as 0-point games.
+2. **Per-GW multipliers**: FDR difficulty (`DIFFICULTY_MULTIPLIER` in `src/projections.py` — the table there is the truth; `CHIP_PLAN_TC_DIFF_MULT` and `scripts/backtest_season.py` carry drifted copies, see the 2026-10-05 review), home/away, opponent team form, own team form, play probability (injury/doubt)
+3. **ep_next is still in the GW1 number**: `PROJ_EP_NEXT_BLEND_WEIGHT = 0.50` (`[untested]`) — next-GW xPts is half FPL's own ep_next, half the blended model; later GWs use the model only. The backtest adapter sets ep_next to 0.0 (`src/backtest_adapter.py`), so backtests have never exercised this blend (found 2026-10-05, fix planned as a backtest-parity phase).
+4. **Early-season shrinkage** (2026-09): the blended baseline is pulled toward a price×position prior (`PROJ_SHRINKAGE_GAMES`, `PROJ_PRICE_PRIOR_SLOPE`), weighted by finished GWs — a 4.1m defender with two clean sheets no longer projects like a premium. `PROJ_SHRINKAGE_GAMES` 2.5 (tuned by the live-season replay, see Monitoring below). Pre-season (0 finished GWs) untouched. First-choice penalty takers get `PROJ_PENALTY_TAKER_UPLIFT` (+0.45/GW) after shrinkage.
+5. Known open issue: promoted-team small-sample clusters still inflate (shrinkage+`CHIP_PLAN_XPTS_CLAMP` are stopgaps); root fix + per-player home/away splits are backlogged pending an SP3 backtest.
 
-### xG expected-points stack (ON at 0.5 blend since 2026-08-24)
+### xG expected-points stack (ON, 0.7 blend)
 
-A parallel, per-player, per-GW expected-points table (`xpts_model_*`) that `projections.project_elements_next_gws` blends into its baseline via `PROJ_MODEL_BLEND_WEIGHT` (**0.5** — displayed xPts is half probability-model, half ppg/form baseline). Backtest evidence: 2025-26 sweep won on every metric; the 2026-09-10 extended sweep (0.5..1.0) confirmed 0.5-0.6 as the interior optimum — do not raise past 0.6 without new evidence (`scripts/backtest_blend_sweep.py`). Three composable modules combined by `src/expected_points.py`:
+A parallel, per-player, per-GW expected-points table (`xpts_model_*`) that `projections.project_elements_next_gws` blends into its baseline via `PROJ_MODEL_BLEND_WEIGHT` (**0.7** — fixture/underlying numbers outweigh recent points). The 1-GW MAE sweep is a tie between 0.5 and 0.7 and degrades past 0.8; don't raise it past 0.8, and revisit with a horizon-aware backtest (`scripts/backtest_blend_sweep.py`; reasoning in the `config.py` comment). Three composable modules combined by `src/expected_points.py`:
 
 - **`src/fixture_difficulty.py`** — turns per-match xG into per-team **attack/defense** ratings (multipliers vs league avg) with exponential time decay (`FDR_XG_HALFLIFE_DAYS`) and shrinkage (`FDR_XG_SHRINKAGE_MATCHES`). A user-maintained `data/models/knowledge_discount.json` nudges teams for info xG can't see yet (signings, injuries, manager change).
 - **`src/minutes_model.py`** — P(start), P(≥60), E[minutes] per player from decayed start/minutes history with a position prior (`MINUTES_*` tunables).
@@ -131,14 +118,8 @@ Greedy per-GW walk across the projection horizon, separate from the single-GW be
 - **XI-aware**: a bench seller's swap only credits points the buyer adds by displacing the weakest same-position XI member — bench churn is worth 0.
 - **Positional bars**: GKP/DEF swaps need `POS_GAIN_MULT` × min_gain (2.0 / 2.25) — shared with the beam search.
 - **Head-to-head hedge nudge**: buys directly opposing an owned GKP/DEF↔attacker pair that GW get `TRANSFER_H2H_CONFLICT_PENALTY` (variance preference, deliberately small) and an `h2h_conflicts` warning on the move record.
-- **Horizon = slider**: `MIN_HORIZON_GWS` is 1 (was a hard floor of 3 until 2026-09-17). "1 GW" ranks moves on this week alone and skips roll-vs-move (needs a next week); 3 GW default unchanged. The gain bar scales with the horizon (`scaled_min_gain`: `TRANSFER_PLAN_MIN_GAIN` 2.0 over `TRANSFER_PLAN_MIN_GAIN_REF_GWS` 3 → 0.67 at 1 GW), so a short horizon is not silently stricter.
+- **Horizon = slider**: `MIN_HORIZON_GWS` is 1. "1 GW" ranks moves on this week alone and skips roll-vs-move (needs a next week); 3 GW default unchanged. The gain bar scales with the horizon (`scaled_min_gain`: `TRANSFER_PLAN_MIN_GAIN` 2.0 over `TRANSFER_PLAN_MIN_GAIN_REF_GWS` 3 → 0.67 at 1 GW), so a short horizon is not silently stricter.
 - **Injury-priority preference (2026-09-18)**: when tied/near-tied swaps land on the same buy, `TRANSFER_PLAN_INJURED_SELL_BONUS` (default 1.0, tie-break only — reported `score_gain` never changes) nudges `_best_swap`'s selection toward selling the availability-risk player first; toggle via `plan_transfers(prioritize_injured=...)` / API `prioritize_injured` (default true), and moves carry `sell_availability` when the seller has risk.
-
-### Chip optimizer (`src/optimizer.py` + chip logic in `api/main.py`)
-
-- `free_hit`: optimize for next GW only, ignore sell prices
-- `wildcard`: blend of next-fixture xPts, multi-GW horizon, DGW upside, premium captaincy coverage. Weights under `CHIP_WILDCARD_*`.
-- `normalize_chip_strategy` also accepts `bench_boost`/`triple_captain` — they mark the chip in the response without changing squad optimization.
 
 ### Chip timing planner (`src/chip_advisor.py`, 2026-09)
 
@@ -156,17 +137,13 @@ Per-player, per-GW history: pre-deadline model/FPL state plus post-GW actuals, u
 - **`scripts/snapshot_to_db.py`** — twice-daily job (`.github/workflows/snapshot-db.yml`, cron 09:00/16:00 UTC). Pure row builders (`snapshot_rows`, `actuals_rows`) are separated from the I/O shell so they're testable without network (`tests/test_snapshot_db.py`). Snapshot leg skips writes at/after the deadline; actuals leg fills finished GWs whose `actual_points` is NULL from FPL's `/event/{gw}/live/`. `finished_gws` is read from the snapshot payload (raw bootstrap fetch only as fallback for an older deployed API). Supabase reads carry an explicit `limit` to lift PostgREST's default 1000-row cap.
 - Extra env (GitHub secrets): `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`.
 
-### Top-10k effective ownership (`src/top10k_eo.py`, 2026-10)
+### Top-10k EO, rank gain, field benchmarks (2026-10)
 
-The FPL API has no top-10k EO, so `POST /admin/refresh-top10k` (admin key) samples it: `TOP10K_EO_SAMPLE_ENTRIES` (1000) entries spread across the first `TOP10K_EO_POOL_RANKS` (10k) ranks of the overall league (`TOP10K_EO_LEAGUE_ID` 314, standings pages via `page_spread`), one `/entry/{id}/event/{gw}/picks/` call each at `TOP10K_EO_CONCURRENCY`, aggregated to `owned_pct` / `captained_pct` / `eo_pct` (= Σ multiplier / N, the sites' definition: 0 bench, 1 start, 2 C, 3 TC). Written to `TOP10K_EO_PATH` (`data/processed/top10k_eo.json`, on each Fly app's own volume). Picks are readable only after the deadline, so the sample is always the **current** GW (`is_current`) and lags the GW being planned by one. Idempotent per season + GW (`is_current(file)`), `{"force": true}` resamples; `refresh-backend.yml` calls it every 6 h on prod and staging, so it is a no-op until a deadline passes. Read side: `/recommendations` loads the file once per request (`load_eo`, mtime-cached, ignores another season's file) and threads it through `pack_lineup_records` / `build_transfer_step` so every lineup record carries `eo_top10k` (0.0 = sampled GW, nobody holds him; `null` = no sample yet) and `eo_top10k_event_id`. Since step 3 the file also keeps every readable entry's picks as compact `[element, multiplier]` pairs (`entries`, with `entry` and `rank`) and a second sample `overall` (`FIELD_OVERALL_SAMPLE_ENTRIES` entries spread uniformly over the whole league's `total_players` ranks; its failure is logged and written as `null`, never costing the top-10k sample; the route answers `overall_n` / `overall_errors`).
+`src/top10k_eo.py` (`POST /admin/refresh-top10k`), `src/rank_model.py`, `src/field_projection.py` — read the modules for shapes and tunables. Gotchas:
 
-### Rank gain if a captain hauls (`src/rank_model.py`, 2026-10)
-
-`rank_gain_if_haul` on every lineup record = `haul × (2 − field_EO/100) × ranks_per_point`, capped at rank 1; `haul` is the player's `xpts_p90` (else `RANK_MODEL_HAUL_POINTS`). `ranks_per_point` is the local slope of the overall league's standings: the page holding the entry's `overall_rank` (from the picks payload's `entry_history`) and the page at `RANK_MODEL_SPAN` (0.5) of it — two standings calls, cached `RANK_MODEL_TTL` per GW and `RANK_MODEL_CACHE_BUCKET`. Field EO: inside `RANK_MODEL_TOP10K_CUTOFF` the sampled top-10k `eo_pct` is the field; outside it, overall `ownership_pct × (1 + captained/owned from the sample)`. `rank_gain_basis` (`top10k|overall`) rides on the record and the response carries the whole `rank_model` (`overall_rank`, `ranks_per_point`, `sampled` points) plus `eo_top10k_event_id`. No rank yet / rank 1 / standings unreadable → `None`, never 0.
-
-### Projected field benchmarks (`src/field_projection.py`, 2026-10)
-
-Step 3 of the handoff's backend numbers, for the rail's "Projected GW" card. `/recommendations` scores the sample file's `entries` and `overall.entries` against **this request's** `xpts_gw{optimize_event_id}` (plain xPts, never the chip objective column — the same axis as `projected_points_with_captain`; hits ignored on both sides): `projected_top10k_avg` = mean Σ multiplier × xPts over the top-10k entries (a file without `entries` falls back to Σ `eo_pct`/100 × xPts, the same mean), `projected_overall_avg` = the same over the uniform sample, `projected_percentile` = "top N%", the share of the overall sample strictly above the user's total, floored at `FIELD_PERCENTILE_FLOOR` (1.0) so the ring never reads 0. `projected_field` carries `event_id`, `top10k_n`, `overall_n` and `overall_quantiles` (101 values, q0…q100) so the client can place a client-side total (captain swap, bench edit) without another request; each `squad_with_transfers` step carries its own `projected_percentile`. No sample / no overall sample → `null`, never 0. Everything is `summarize()`d once per request and `fields()`/`public()` shape the response.
+- FPL picks are readable only after the deadline, so the top-10k sample is always the **current** GW and lags the GW being planned by one.
+- Missing data is `null`/`None`, never 0 (no sample, no rank yet, unreadable standings) — `eo_top10k` 0.0 means sampled and nobody owns him.
+- Field projection scores plain `xpts_gw{N}`, never the chip objective column.
 
 ### Free transfers derivation
 
