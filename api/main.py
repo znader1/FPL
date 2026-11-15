@@ -457,7 +457,7 @@ def next_fixture_labels_by_team(fixtures, teams_short, event_id):
     return {t: ", ".join(v) for t, v in labels.items()}
 
 
-def annotate_moves_next_fixture(preview, elements, fixtures, teams_short, event_id):
+def annotate_moves_next_fixture(preview, elements, fixtures, teams_short, event_id, plan=None):
     """Attach next_fixture to each transfer move's sell/buy and to hot targets.
 
     Cosmetic enrichment: players whose team has no fixture that GW (blank)
@@ -486,6 +486,16 @@ def annotate_moves_next_fixture(preview, elements, fixtures, teams_short, event_
         for p in players or []:
             if isinstance(p, dict):
                 _label(p)
+    # The horizon plan's own moves (verdict, roll alternative, runner-ups) are
+    # separate dicts from preview["moves"]; the frontend draws a picked
+    # runner-up's card from them, so they need the label too.
+    detail = ((plan or {}).get("verdict_detail") or {}) if isinstance(plan, dict) else {}
+    plan_moves = list(detail.get("moves") or []) + list(detail.get("runner_ups") or [])
+    plan_moves += list((detail.get("roll_alternative") or {}).get("moves") or [])
+    for move in plan_moves:
+        if isinstance(move, dict):
+            _label(move.get("sell") or {})
+            _label(move.get("buy") or {})
 
 
 def _event_id(bootstrap, flag):
@@ -1608,7 +1618,8 @@ def build_recommendations(payload):
             logger.warning("plan-move merge failed: %s", e)
         try:
             annotate_moves_next_fixture(
-                transfer_preview, elements, fixtures, teams_short, int(optimize_event_id)
+                transfer_preview, elements, fixtures, teams_short, int(optimize_event_id),
+                plan=out.get("transfer_plan_horizon"),
             )
         except Exception:
             pass  # fixture labels are cosmetic — never block the response

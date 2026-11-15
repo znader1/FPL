@@ -42,3 +42,21 @@ def test_annotate_moves_and_hot_targets():
 def test_annotate_never_raises_on_empty():
     annotate_moves_next_fixture({}, pd.DataFrame(), pd.DataFrame(), TEAMS, 2)
     annotate_moves_next_fixture({"moves": None}, None, None, TEAMS, 2)
+
+
+def test_annotate_horizon_plan_moves():
+    # A picked runner-up's pitch card is drawn from the plan's own move dicts,
+    # which are separate from preview["moves"] — they need the label too.
+    elements = pd.DataFrame([{"id": 10, "team": 1}, {"id": 20, "team": 3}])
+    mv = lambda: {"sell": {"id": 10}, "buy": {"id": 20}}  # noqa: E731
+    plan = {"verdict_detail": {
+        "moves": [mv()], "runner_ups": [mv()], "roll_alternative": {"moves": [mv()]},
+    }}
+    annotate_moves_next_fixture({"moves": []}, elements, _fixtures(), TEAMS, 2, plan=plan)
+    d = plan["verdict_detail"]
+    for move in (d["moves"][0], d["runner_ups"][0], d["roll_alternative"]["moves"][0]):
+        assert move["buy"]["next_fixture"] == "ARS (A)"
+        assert move["sell"]["next_fixture"] == "BOU (H)"
+    # A roll verdict with no alternative must not break.
+    annotate_moves_next_fixture({}, elements, _fixtures(), TEAMS, 2,
+                                plan={"verdict_detail": {"roll_alternative": None}})
