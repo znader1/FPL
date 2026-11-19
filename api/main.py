@@ -457,6 +457,63 @@ def next_fixture_labels_by_team(fixtures, teams_short, event_id):
     return {t: ", ".join(v) for t, v in labels.items()}
 
 
+def _team_by_player(elements):
+    """{player_id: team_id} from the bootstrap elements (frame or list)."""
+    out = {}
+    for e in elements.to_dict("records") if hasattr(elements, "to_dict") else (elements or []):
+        pid, tid = safe_int(e.get("id")), safe_int(e.get("team"))
+        if pid and tid:
+            out[pid] = tid
+    return out
+
+
+def annotate_verdict_moves(plan_horizon, proj, event_id, fixture_labels, team_by_player):
+    """Give every sell/buy in the transfer verdict what a pitch card needs.
+
+    `verdict_detail` moves -- ZN Pick's, the runner-ups and the roll
+    alternative's -- carry only id/name/team/price, so a runner-up buy shown on
+    the pitch had no fixture chip and an estimated xPts. Adds `next_fixtures`
+    (pitch grammar `H-OPP(Dn)`, the column squad players use), `xpts` (the
+    target GW's projection) and `next_fixture` ("OPP (H)", the copy label).
+    Cosmetic: a blank GW or an unknown player just gets fewer fields.
+    Mutates in place.
+    """
+    detail = (plan_horizon or {}).get("verdict_detail") if isinstance(plan_horizon, dict) else None
+    if not isinstance(detail, dict):
+        return
+    by_id = {}
+    if isinstance(proj, pd.DataFrame) and not proj.empty and "id" in proj.columns:
+        fx_col, xp_col = f"fixtures_gw{int(event_id)}", f"xpts_gw{int(event_id)}"
+        for r in proj.to_dict("records"):
+            pid = safe_int(r.get("id"))
+            if pid:
+                by_id[pid] = (r.get(fx_col), r.get(xp_col))
+
+    def _side(side):
+        if not isinstance(side, dict):
+            return
+        pid = safe_int(side.get("id"))
+        if not pid:
+            return
+        fx, xp = by_id.get(pid, (None, None))
+        if isinstance(fx, str) and fx.strip():
+            side["next_fixtures"] = fx.strip()
+        if xp is not None and pd.notna(xp):
+            side["xpts"] = round(float(xp), 2)
+        label = fixture_labels.get(team_by_player.get(pid))
+        if label:
+            side["next_fixture"] = label
+
+    alt = detail.get("roll_alternative")
+    groups = [detail.get("moves"), detail.get("runner_ups"),
+              alt.get("moves") if isinstance(alt, dict) else None]
+    for moves in groups:
+        for m in moves or []:
+            if isinstance(m, dict):
+                _side(m.get("sell"))
+                _side(m.get("buy"))
+
+
 def annotate_moves_next_fixture(preview, elements, fixtures, teams_short, event_id):
     """Attach next_fixture to each transfer move's sell/buy and to hot targets.
 
@@ -468,11 +525,7 @@ def annotate_moves_next_fixture(preview, elements, fixtures, teams_short, event_
     by_team = next_fixture_labels_by_team(fixtures, teams_short, event_id)
     if not by_team:
         return
-    team_by_player = {}
-    for e in elements.to_dict("records") if hasattr(elements, "to_dict") else (elements or []):
-        pid, tid = safe_int(e.get("id")), safe_int(e.get("team"))
-        if pid and tid:
-            team_by_player[pid] = tid
+    team_by_player = _team_by_player(elements)
     def _label(side):
         pid = safe_int(side.get("id")) if isinstance(side, dict) else None
         fixture = by_team.get(team_by_player.get(pid)) if pid else None
@@ -1597,6 +1650,13 @@ def build_recommendations(payload):
                 prioritize_injured=prioritize_injured)
         except Exception as e:  # noqa: BLE001 - planning must never fail the recommendation
             logger.warning("horizon transfer plan failed: %s", e)
+        try:
+            annotate_verdict_moves(
+                out.get("transfer_plan_horizon"), proj_all, int(optimize_event_id),
+                next_fixture_labels_by_team(fixtures, teams_short, int(optimize_event_id)),
+                _team_by_player(elements))
+        except Exception as e:  # noqa: BLE001 - labels are cosmetic
+            logger.warning("verdict move annotation failed: %s", e)
 
     if include_transfers:
         # The plan is the recommendation: its first-GW moves lead the
