@@ -670,6 +670,13 @@ NEWS_AUTO_MAX_RUN_SECONDS = 600  # [operational]
 NEWS_AUTO_MODEL = "claude-haiku-5-5"  # [operational]
 NEWS_AUTO_LLM_TIMEOUT_SECONDS = 60  # [operational] per Anthropic call in news_auto_run
 NEWS_AUTO_DIGEST_MODEL = "claude-haiku-5-5"  # [operational] model for news_fetch.refresh digests
+# Haiku 5.5 thinks by default and thinking counts toward max_tokens, so leave
+# room for it; effort (not a thinking budget) sets how much it thinks.
+NEWS_AUTO_MAX_TOKENS = 8000  # [operational] per club cut call
+NEWS_AUTO_DIGEST_MAX_TOKENS = 4000  # [operational] per article digest call
+NEWS_AUTO_EFFORT = "medium"  # [operational] club cut call (model default)
+NEWS_AUTO_DIGEST_EFFORT = "low"  # [operational] article digest is plain extraction
+NEWS_AUTO_LLM_MAX_RETRIES = 1  # [operational]
 NEWS_MAX_AGE_DAYS = 14   # [untested] digest only items this fresh; prune older md
 NEWS_FEEDS = [           # RSS sources (verified live 2026-07-26)
     {"source": "sportsmole.co.uk", "url": "https://www.sportsmole.co.uk/football/rss.xml"},

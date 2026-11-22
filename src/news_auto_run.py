@@ -172,15 +172,27 @@ def read_status(out_dir=None, auto_path=None):
 
 # ---- default LLM generators --------------------------------------------------
 
-def _anthropic(system, prompt, model, feature, max_tokens):
+def _anthropic(system, prompt, model, feature, max_tokens, effort):
+    """One Messages call. Haiku 5.5 runs adaptive thinking by default, so the
+    reply can open with thinking blocks: read the first *text* block. A reply
+    cut off by max_tokens or refused is an error, never a silent empty result
+    (its URLs would otherwise be marked processed and the news lost)."""
     import anthropic
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"),
-                                 timeout=config.NEWS_AUTO_LLM_TIMEOUT_SECONDS)
+                                 timeout=config.NEWS_AUTO_LLM_TIMEOUT_SECONDS,
+                                 max_retries=config.NEWS_AUTO_LLM_MAX_RETRIES)
     msg = client.messages.create(
         model=model, max_tokens=max_tokens, system=system,
+        output_config={"effort": effort},
         messages=[{"role": "user", "content": prompt}])
-    llm_usage.record_usage(msg, feature=feature, model=model)
-    return msg.content[0].text
+    llm_usage.record_usage(msg, feature=feature, model=model)  # billed even if truncated
+    stop = getattr(msg, "stop_reason", None)
+    if stop in ("max_tokens", "refusal"):
+        raise RuntimeError(f"LLM reply unusable (stop_reason={stop})")
+    for block in getattr(msg, "content", None) or []:
+        if getattr(block, "type", None) == "text":
+            return block.text
+    raise RuntimeError("LLM reply had no text block")
 
 
 def digest_generate(prompt):
@@ -189,12 +201,13 @@ def digest_generate(prompt):
     if prompt.startswith(news_fetch.SYSTEM):
         prompt = prompt[len(news_fetch.SYSTEM):].lstrip()
     return _anthropic(news_fetch.SYSTEM, prompt, config.NEWS_AUTO_DIGEST_MODEL,
-                      "news_auto_digest", 400)
+                      "news_auto_digest", config.NEWS_AUTO_DIGEST_MAX_TOKENS,
+                      config.NEWS_AUTO_DIGEST_EFFORT)
 
 
 def team_generate(prompt):
     return _anthropic(news_auto.SYSTEM_TEAM, prompt, config.NEWS_AUTO_MODEL,
-                      "news_auto", 600)
+                      "news_auto", config.NEWS_AUTO_MAX_TOKENS, config.NEWS_AUTO_EFFORT)
 
 
 # ---- run -------------------------------------------------------------------

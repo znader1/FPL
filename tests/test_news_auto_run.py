@@ -231,3 +231,70 @@ def test_quiet_run_with_one_failed_feed_is_ok(env, monkeypatch):
     assert env.go(fetch=fetch)["ok"]
     r = env.go(fetch=fetch, run_id="r2")
     assert r["ok"] is True and r["errors"]
+
+
+# ---- _anthropic: block types, stop reasons, request params ------------------
+
+class _Blk:
+    def __init__(self, type, text=None):
+        self.type = type
+        if text is not None:
+            self.text = text
+
+
+class _Msg:
+    def __init__(self, content, stop_reason="end_turn"):
+        self.content = content
+        self.stop_reason = stop_reason
+        self.usage = None
+
+
+def _fake_anthropic(monkeypatch, msg):
+    import sys
+    import types
+    seen = {}
+
+    class _Messages:
+        def create(self, **kw):
+            seen["create"] = kw
+            return msg
+
+    class _Client:
+        def __init__(self, **kw):
+            seen["client"] = kw
+            self.messages = _Messages()
+    monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(Anthropic=_Client))
+    return seen
+
+
+def test_anthropic_skips_leading_thinking_block(monkeypatch):
+    seen = _fake_anthropic(monkeypatch, _Msg([_Blk("thinking"), _Blk("text", '{"cuts": []}')]))
+    assert nar._anthropic("sys", "p", "claude-haiku-5-5", "f", 1000, "low") == '{"cuts": []}'
+    assert seen["client"]["max_retries"] == config.NEWS_AUTO_LLM_MAX_RETRIES
+    assert seen["create"]["output_config"] == {"effort": "low"}
+    assert "temperature" not in seen["create"] and "thinking" not in seen["create"]
+
+
+@pytest.mark.parametrize("stop", ["max_tokens", "refusal"])
+def test_anthropic_truncated_or_refused_raises(monkeypatch, stop):
+    _fake_anthropic(monkeypatch, _Msg([_Blk("thinking"), _Blk("text", '{"cu')], stop_reason=stop))
+    with pytest.raises(RuntimeError, match=stop):
+        nar._anthropic("sys", "p", "claude-haiku-5-5", "f", 1000, "low")
+
+
+def test_anthropic_no_text_block_raises(monkeypatch):
+    _fake_anthropic(monkeypatch, _Msg([_Blk("thinking")]))
+    with pytest.raises(RuntimeError):
+        nar._anthropic("sys", "p", "claude-haiku-5-5", "f", 1000, "low")
+
+
+def test_generators_use_configured_budgets(monkeypatch):
+    calls = []
+    monkeypatch.setattr(nar, "_anthropic", lambda *a: calls.append(a) or "{}")
+    nar.digest_generate("x")
+    nar.team_generate("y")
+    assert calls[0][4] == config.NEWS_AUTO_DIGEST_MAX_TOKENS >= 2000
+    assert calls[0][5] == config.NEWS_AUTO_DIGEST_EFFORT
+    assert calls[1][4] == config.NEWS_AUTO_MAX_TOKENS >= 2000
+    assert calls[1][5] == config.NEWS_AUTO_EFFORT
+
