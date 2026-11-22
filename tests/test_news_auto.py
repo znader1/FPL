@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timezone
 
 import pandas as pd
+import pytest
 
 from src import news_auto as na
 
@@ -125,3 +126,44 @@ def test_squad_list_and_prompt():
     assert sq[0]["position"] == "MID" and "(MID)" in p
     assert "Arsenal" in p and "X" in p and "T" in p
     assert "data" in na.SYSTEM_TEAM and "injur" in na.SYSTEM_TEAM
+
+
+FPL_TEAMS = [
+    {"id": 1, "name": "Man Utd", "short_name": "MUN"},
+    {"id": 2, "name": "Spurs", "short_name": "TOT"},
+    {"id": 3, "name": "Man City", "short_name": "MCI"},
+    {"id": 4, "name": "Nott'm Forest", "short_name": "NFO"},
+    {"id": 5, "name": "Newcastle", "short_name": "NEW"},
+    {"id": 6, "name": "Leeds", "short_name": "LEE"},
+    {"id": 7, "name": "Brighton", "short_name": "BHA"},
+    {"id": 8, "name": "Bournemouth", "short_name": "BOU"},
+]
+
+
+@pytest.mark.parametrize("name,tid", [
+    ("Manchester United", 1), ("Tottenham Hotspur", 2), ("Tottenham", 2),
+    ("Manchester City", 3), ("Nottingham Forest", 4), ("Newcastle United", 5),
+    ("Leeds United", 6), ("Brighton & Hove Albion", 7), ("AFC Bournemouth", 8),
+    ("Man Utd", 1), ("SPURS", 2), ("NFO", 4),
+])
+def test_group_by_team_resolves_corpus_long_names(name, tid):
+    a = {"url": "u", "teams": [name]}
+    assert na.group_by_team([a], FPL_TEAMS) == {tid: [a]}
+
+
+def test_aliases_resolve_through_bootstrap_not_fixed_ids():
+    # same clubs, different ids: aliases must follow short_name, never an id
+    teams = [dict(t, id=t["id"] + 100) for t in FPL_TEAMS]
+    a = {"url": "u", "teams": ["Manchester United"]}
+    assert na.group_by_team([a], teams) == {101: [a]}
+    # a club not in the bootstrap (relegated) resolves to nothing
+    assert na.group_by_team([{"url": "v", "teams": ["Aston Villa", "Villa"]}], FPL_TEAMS) == {}
+
+
+def test_alias_table_is_shared_with_relevance_terms():
+    from src import config, news_fetch
+    assert not hasattr(news_fetch, "_PL_EXTRA")
+    terms = news_fetch.pl_terms_from_teams(FPL_TEAMS)
+    for t in ("manchester united", "tottenham hotspur", "afc bournemouth", "leeds united"):
+        assert t in terms
+    assert all(isinstance(v, list) for v in config.NEWS_TEAM_ALIASES.values())

@@ -8,8 +8,7 @@ import math
 import re
 
 from src import config
-from src.news_fetch import _parse_date
-from src.player_knowledge import _norm
+from src.news_fetch import _parse_date, team_aliases, team_key
 
 SYSTEM_TEAM = (
     "You read football news about ONE Premier League club and flag concrete minutes losses for "
@@ -55,21 +54,18 @@ def unprocessed(articles, processed_urls):
 
 def group_by_team(articles, teams):
     by_key = {}
-    short_to_id = {}
     for t in teams or []:
         tid = int(t["id"])
-        by_key[_norm(t.get("name", ""))] = tid
-        by_key[_norm(t.get("short_name", ""))] = tid
-        short_to_id[_norm(t.get("short_name", ""))] = tid
-    for alias, short in (config.NEWS_TEAM_ALIASES or {}).items():
-        tid = short_to_id.get(_norm(short))
-        if tid is not None:
-            by_key[_norm(alias)] = tid
+        short = team_key(t.get("short_name", ""))
+        if short:
+            by_key[short] = tid
+        for alias in team_aliases(t):
+            by_key.setdefault(alias, tid)
     out = {}
     for a in articles or []:
         seen = set()
         for name in a.get("teams") or []:
-            tid = by_key.get(_norm(name))
+            tid = by_key.get(team_key(name))
             if tid is not None and tid not in seen:
                 seen.add(tid)
                 out.setdefault(tid, []).append(a)

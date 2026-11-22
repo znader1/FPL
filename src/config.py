@@ -659,12 +659,28 @@ NEWS_AUTO_DRY_RUN = True  # [operational] flip to False after the first prod dry
 NEWS_AUTO_MIN_MULT = 0.7  # [untested] floor on an auto minutes cut
 NEWS_AUTO_MAX_TEAMS_PER_RUN = 20  # [operational]
 NEWS_AUTO_MAX_ARTICLES_PER_TEAM = 4  # [operational]
-# article club name -> bootstrap short_name
+# Single club-alias table for news: bootstrap short_name -> other spellings
+# articles use (lowercase; "&" is read as "and"). Resolved through the live
+# bootstrap's short_name (or name) only -- never by team id -- so a club absent
+# from this season's bootstrap simply matches nothing. Used by
+# news_auto.group_by_team and news_fetch.pl_terms_from_teams.
 NEWS_TEAM_ALIASES = {
-    "spurs": "TOT", "man utd": "MUN", "man united": "MUN", "man city": "MCI",
-    "wolves": "WOL", "forest": "NFO", "newcastle": "NEW", "brighton": "BHA",
-    "villa": "AVL", "west ham": "WHU", "palace": "CRY", "leeds": "LEE",
+    "AVL": ["aston villa", "villa"],
+    "BHA": ["brighton", "brighton and hove albion", "brighton hove albion"],
+    "BOU": ["bournemouth", "afc bournemouth"],
+    "CRY": ["crystal palace", "palace"],
+    "LEE": ["leeds", "leeds united"],
+    "MCI": ["man city", "manchester city"],
+    "MUN": ["man utd", "man united", "manchester united"],
+    "NEW": ["newcastle", "newcastle united"],
+    "NFO": ["nott'm forest", "nottingham forest", "forest"],
+    "TOT": ["spurs", "tottenham", "tottenham hotspur"],
+    "WHU": ["west ham", "west ham united"],
+    "WOL": ["wolves", "wolverhampton", "wolverhampton wanderers"],
 }  # [operational]
+# Aliases too generic for the pre-LLM substring relevance filter
+# ("villa" hits "Villarreal"); they still resolve clubs in group_by_team.
+NEWS_ALIASES_NOT_FOR_RELEVANCE = ["villa", "palace"]  # [operational]
 NEWS_AUTO_REASON_MAX_CHARS = 200  # [operational]
 NEWS_AUTO_MAX_RUN_SECONDS = 600  # [operational]
 NEWS_AUTO_MODEL = "claude-haiku-5-5"  # [operational]
