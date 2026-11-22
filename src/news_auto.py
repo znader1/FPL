@@ -8,6 +8,7 @@ import math
 import re
 
 from src import config
+from src.news_digest import _extract_json
 from src.news_fetch import _parse_date, team_aliases, team_key
 
 SYSTEM_TEAM = (
@@ -112,7 +113,7 @@ def _flagged(p):
 
 def guard_cuts(raw, squad, min_mult):
     try:
-        data = json.loads(raw)
+        data = json.loads(_extract_json(raw))  # tolerate ```json fences / prose
     except (TypeError, ValueError):
         return []
     cuts = data.get("cuts") if isinstance(data, dict) else None

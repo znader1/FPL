@@ -363,3 +363,47 @@ def test_digest_refreshes_lock(env, monkeypatch):
     monkeypatch.setattr(nar, "touch_lock", lambda d: touched.append("t") or real(d))
     env.go(team=lambda p: CUT, digest_generate=lambda p: touched.append("digest") or DIGEST)
     assert touched[:2] == ["t", "digest"]
+
+
+# ---- end to end: run -> auto file -> live projections ------------------------
+
+def _proj():
+    import pandas as pd
+    return pd.DataFrame({"id": [10, 20], "web_name": ["Saka", "Palmer"],
+                         "xpts_gw12": [6.0, 5.0], "xpts_gw13": [6.0, 5.0]})
+
+
+def test_end_to_end_cut_reaches_projections(env, tmp_path):
+    from src import player_knowledge
+    r = env.go(dry_run=False)
+    assert r["ok"] is True and r["cuts"] == 1
+    proj, _notes = player_knowledge.apply(_proj(), [12, 13], path=str(tmp_path / "none.json"),
+                                          auto_path=env.auto)
+    saka = proj[proj["id"] == 10].iloc[0]
+    assert saka["xpts_gw12"] == pytest.approx(4.8) and saka["xpts_horizon"] == pytest.approx(9.6)
+    assert saka["pk_note"] == "auto (news): rotated"
+    assert proj[proj["id"] == 20].iloc[0]["xpts_gw12"] == 5.0
+    # the cut expires at the next deadline: readers on GW13 do not see it
+    later, _ = player_knowledge.apply(_proj(), [13], path=str(tmp_path / "none.json"),
+                                      auto_path=env.auto)
+    assert later[later["id"] == 10].iloc[0]["xpts_gw13"] == 6.0
+
+
+def test_end_to_end_deadline_edge_writes_nothing(env, tmp_path):
+    from src import player_knowledge
+    late = datetime(2026, 11, 28, 10, 30, tzinfo=timezone.utc)
+    r = env.go(dry_run=False, now=late)
+    assert r["ok"] is False and env.calls == 0
+    assert not os.path.exists(env.auto)
+    assert not os.path.exists(os.path.join(env.out, "processed.json"))
+    proj, _ = player_knowledge.apply(_proj(), [13], path=str(tmp_path / "none.json"),
+                                     auto_path=env.auto)
+    assert proj.equals(_proj())
+    # once FPL flips is_next, runs resume: a post-deadline article is judged for GW13
+    b = bootstrap()
+    b["events"] = [{"id": 12, "deadline_time": "2026-11-28T10:00:00Z", "is_current": True},
+                   {"id": 13, "deadline_time": "2026-12-05T10:00:00Z", "is_next": True}]
+    r2 = nar.run(b, run_id="r3", now=late, fetch=lambda url: RSS.replace("19 Nov", "28 Nov").replace("08:00", "10:15"),
+                 digest_generate=lambda p: DIGEST, team_generate=env.team, kb_dir=env.kb,
+                 out_dir=env.out, auto_path=env.auto, dry_run=False)
+    assert r2["ok"] is True and r2["next_gw"] == 13 and r2["cuts"] == 1

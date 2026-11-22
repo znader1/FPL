@@ -167,3 +167,8 @@ def test_alias_table_is_shared_with_relevance_terms():
     for t in ("manchester united", "tottenham hotspur", "afc bournemouth", "leeds united"):
         assert t in terms
     assert all(isinstance(v, list) for v in config.NEWS_TEAM_ALIASES.values())
+
+
+def test_guard_accepts_fenced_json():
+    raw = '```json\n' + json.dumps({"cuts": [{"player_id": 11, "minutes_mult": 0.8}]}) + '\n```'
+    assert [c["player_id"] for c in na.guard_cuts(raw, SQUAD, 0.7)] == [11]
