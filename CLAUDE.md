@@ -131,7 +131,7 @@ Full reference (EV per chip, FH gates, fixture context, distributions, endpoints
 
 - Volume files: `data/news/articles/` (corpus, `NEWS_KB_DIR`), `data/news/{last_run.json,changes.jsonl,processed.json,run.lock}`, `data/models/player_knowledge_auto.json`.
 - Guardrails: cuts only (never boosts), multiplier floored at `NEWS_AUTO_MIN_MULT`, players with an official flag are skipped, fresh articles only, each change expires at the next deadline, manual `player_knowledge` wins over auto at field level.
-- Env flags `NEWS_AUTO_DRY_RUN` (default true: log only, no writes to the auto file) and `NEWS_AUTO_ENABLED`; strict boolean parsing (junk values fall back to the config default). Set via `fly secrets set NEWS_AUTO_DRY_RUN=false`.
+- Env flags `NEWS_AUTO_DRY_RUN` (default true: log only, no writes to the auto file) and `NEWS_AUTO_ENABLED`; strict boolean parsing (junk values fall back to the config default). Set via `fly secrets set NEWS_AUTO_DRY_RUN=false`. A dry run still advances `processed.json` and writes `changes.jsonl` / `last_run.json`, so articles judged during a dry run are not re-judged after flipping live.
 - Revert (by player or by run):
   ```bash
   curl -X POST "$FPL_API_BASE_URL/admin/news-knowledge/revert" \

@@ -21,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
-_DIGITS = re.compile(r"^[0-9]{1,9}$")
-_RUN_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+_DIGITS = re.compile(r"[0-9]{1,9}")  # always .fullmatch
+_RUN_ID = re.compile(r"[A-Za-z0-9_.:-]{1,64}")  # always .fullmatch
 
 
 def _bootstrap():
@@ -66,7 +66,7 @@ def _parse_selector(body):
                             detail="provide exactly one of player_ids or run_id")
     if has_run:
         rid = body["run_id"]
-        if not isinstance(rid, str) or not _RUN_ID.match(rid):
+        if not isinstance(rid, str) or not _RUN_ID.fullmatch(rid):
             raise HTTPException(status_code=422, detail="invalid run_id")
         return None, rid
     ids = body["player_ids"]
@@ -74,7 +74,7 @@ def _parse_selector(body):
         raise HTTPException(status_code=422, detail="player_ids must be a non-empty list")
     out = []
     for v in ids:
-        if isinstance(v, bool) or not isinstance(v, (int, str)) or not _DIGITS.match(str(v)):
+        if isinstance(v, bool) or not isinstance(v, (int, str)) or not _DIGITS.fullmatch(str(v)):
             raise HTTPException(status_code=422, detail="player_ids must be digits only")
         out.append(str(int(v)))
     return out, None

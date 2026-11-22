@@ -127,6 +127,7 @@ def test_revert_by_run_id(nclient):
     {}, {"player_ids": ["1"], "run_id": "r1"}, {"player_ids": []},
     {"player_ids": ["../x"]}, {"player_ids": [1.5]}, {"player_ids": [True]},
     {"player_ids": "10"}, {"run_id": ""}, {"run_id": 5},
+    {"run_id": "r1\n"}, {"player_ids": ["10\n"]},
 ])
 def test_revert_requires_exactly_one_valid_selector(nclient, body):
     client, _, auto = nclient
