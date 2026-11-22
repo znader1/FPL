@@ -115,12 +115,13 @@ def test_revert_by_player_and_by_run():
 
 
 def test_squad_list_and_prompt():
-    df = pd.DataFrame([{"id": 1, "web_name": "X", "team": 3, "position": "MID", "status": "a",
+    df = pd.DataFrame([{"id": 1, "web_name": "X", "team": 3, "pos": "MID", "status": "a",
                         "chance_of_playing_next_round": None},
-                       {"id": 2, "web_name": "Y", "team": 4, "position": "DEF", "status": "a",
+                       {"id": 2, "web_name": "Y", "team": 4, "pos": "DEF", "status": "a",
                         "chance_of_playing_next_round": 100}])
     sq = na.squad_list(df, 3)
     assert [s["id"] for s in sq] == [1]
     p = na.build_team_prompt("Arsenal", [{"title": "T", "summary": "S", "url": "u"}], sq, 12)
+    assert sq[0]["position"] == "MID" and "(MID)" in p
     assert "Arsenal" in p and "X" in p and "T" in p
     assert "data" in na.SYSTEM_TEAM and "injur" in na.SYSTEM_TEAM

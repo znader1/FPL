@@ -6,13 +6,10 @@ untrusted RSS text, so everything is whitelisted, coerced and clamped here.
 import json
 import math
 import re
-from datetime import datetime, timezone
 
 from src import config
 from src.news_fetch import _parse_date
 from src.player_knowledge import _norm
-
-REASON_MAX_CHARS = 200
 
 SYSTEM_TEAM = (
     "You read football news about ONE Premier League club and flag concrete minutes losses for "
@@ -74,7 +71,7 @@ def squad_list(elements, team_id):
     out = []
     for _, r in rows.iterrows():
         out.append({
-            "id": int(r["id"]), "web_name": r["web_name"], "position": r.get("position"),
+            "id": int(r["id"]), "web_name": r["web_name"], "position": r.get("pos"),
             "status": r.get("status"),
             "chance_of_playing_next_round": r.get("chance_of_playing_next_round"),
         })
@@ -127,7 +124,7 @@ def guard_cuts(raw, squad, min_mult):
         if pid in seen or pid not in allowed or _flagged(allowed[pid]) or mult >= 1.0:
             continue
         seen.add(pid)
-        reason = re.sub(r"\s+", " ", str(c.get("reason") or "")).strip()[:REASON_MAX_CHARS]
+        reason = re.sub(r"\s+", " ", str(c.get("reason") or "")).strip()[:config.NEWS_AUTO_REASON_MAX_CHARS]
         out.append({"player_id": pid, "minutes_mult": max(float(min_mult), mult), "reason": reason})
     return out
 

@@ -665,6 +665,7 @@ NEWS_TEAM_ALIASES = {
     "wolves": "WOL", "forest": "NFO", "newcastle": "NEW", "brighton": "BHA",
     "villa": "AVL", "west ham": "WHU", "palace": "CRY", "leeds": "LEE",
 }  # [operational]
+NEWS_AUTO_REASON_MAX_CHARS = 200  # [operational]
 NEWS_AUTO_MAX_RUN_SECONDS = 600  # [operational]
 NEWS_AUTO_MODEL = "claude-haiku-5-5"  # [operational]
 NEWS_AUTO_DIGEST_MODEL = "claude-haiku-5-5"  # [operational] model for news_fetch.refresh digests
