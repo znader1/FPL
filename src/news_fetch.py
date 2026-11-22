@@ -4,7 +4,7 @@ Fetches the source RSS feeds (verified live: sportsmole / football-talk /
 betfair), keeps only recent items, and asks Claude to digest each NEW article's
 title+summary into the same markdown format the Phase-2 pipeline already reads
 (`# title`, `- Source/URL/Published/Fetched`, `## Summary/Entities/Tags`). The
-digested md drops into `kb/auto/news/<domain>/` so `news_digest` picks it up.
+digested md drops into `<NEWS_KB_DIR>/<domain>/` (default `data/news/articles`) so `news_digest` picks it up.
 
 Network + LLM are dependency-injected (`fetch`, `generate`, `now`) so the whole
 module tests offline. See scripts/refresh_news.py for the runnable routine.

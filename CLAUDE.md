@@ -125,6 +125,21 @@ Greedy per-GW walk across the projection horizon, separate from the single-GW be
 
 Full reference (EV per chip, FH gates, fixture context, distributions, endpoints, snapshots): `docs/chip-planner.md` — read it before touching `src/chip_advisor.py`, `src/chip_distribution.py`, `src/european.py` or `api/chips.py`. Gotcha: the `data/models/european_calendar.json` seed ships with an empty `teams` map — the European signal is off until the qualified sides are filled in on the volume.
 
+### News auto-apply (2026-11)
+
+`.github/workflows/refresh-news.yml` (07:00 + 17:00 UTC daily, Fri 19:00) POSTs `/admin/refresh-news` (202 `{run_id}`, 409 if locked), polls `/admin/news-status` every 30 s (15 min cap) and prints `last_run` incl. `events` (the only place dry-run changes are visible); fails if `run_id` mismatches or `ok != true`. It supersedes the never-loaded local launchd `scripts/com.fpl.refresh-news.plist`. The run fetches RSS, digests articles, has the LLM propose minute cuts and merges them into live projections via `player_knowledge.apply()` (engine: `src/news_auto*.py`, routes: `api/news_router.py`). Official FPL flags are NOT re-applied: projections already price `chance_of_playing`.
+
+- Volume files: `data/news/articles/` (corpus, `NEWS_KB_DIR`), `data/news/{last_run.json,changes.jsonl,processed.json,run.lock}`, `data/models/player_knowledge_auto.json`.
+- Guardrails: cuts only (never boosts), multiplier floored at `NEWS_AUTO_MIN_MULT`, players with an official flag are skipped, fresh articles only, each change expires at the next deadline, manual `player_knowledge` wins over auto at field level.
+- Env flags `NEWS_AUTO_DRY_RUN` (default true: log only, no writes to the auto file) and `NEWS_AUTO_ENABLED`; strict boolean parsing (junk values fall back to the config default). Set via `fly secrets set NEWS_AUTO_DRY_RUN=false`.
+- Revert (by player or by run):
+  ```bash
+  curl -X POST "$FPL_API_BASE_URL/admin/news-knowledge/revert" \
+    -H "X-API-Key: $FPL_ADMIN_KEY" -H "Content-Type: application/json" \
+    -d '{"run_id": "<run_id>"}'   # or {"player_ids": [123, 456]}
+  ```
+- Backtest boundary: backtest/replay/monitor code must never import `player_knowledge` or `news_auto*` (guarded by `test_backtest_paths_do_not_apply_present_day_knowledge`); present-day news must not leak into tuning.
+
 ### Data refresh & snapshots
 
 `/admin/refresh` (POST, key-protected) fetches fresh bootstrap + fixtures, invalidates TTL caches, writes player + history CSVs to `data/processed/fpl/`. GitHub Actions (`refresh-backend.yml`) runs every 6 hours with wake-retry, validation, and failure alerting.

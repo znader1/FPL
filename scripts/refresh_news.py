@@ -2,7 +2,7 @@
 """Refresh the FPL news corpus from live RSS feeds (Approach B routine).
 
 Fetches config.NEWS_FEEDS, Claude-digests each NEW recent article's
-title+summary into kb/auto/news/<domain>/*.md, and prunes md older than
+title+summary into the configured NEWS_KB_DIR (data/news/articles)/<domain>/*.md, and prunes md older than
 config.NEWS_MAX_AGE_DAYS. Idempotent: already-seen URLs are skipped.
 
 Run manually:
@@ -44,7 +44,7 @@ def _load_env():
 def main(argv=None):
     _load_env()
     ap = argparse.ArgumentParser(description="Refresh the FPL news corpus from RSS.")
-    ap.add_argument("--kb-dir", default=None, help="override kb/auto/news dir")
+    ap.add_argument("--kb-dir", default=None, help="override the configured NEWS_KB_DIR (data/news/articles)")
     ap.add_argument("--max-age-days", type=int, default=None, help="freshness window")
     ap.add_argument("--dry-run", action="store_true", help="fetch + report, write nothing")
     ap.add_argument("--all", action="store_true",

@@ -1,6 +1,6 @@
 """Phase 2: semi-auto news digestion for the player-knowledge rail.
 
-Reads the pre-digested kb/auto/news/*.md corpus (title + metadata + Summary /
+Reads the pre-digested NEWS_KB_DIR (`data/news/articles`) *.md corpus (title + metadata + Summary /
 FPL takeaways / Entities / Tags), entity-matches the article Players to
 bootstrap web_names (no embeddings), and asks an LLM to PROPOSE player-knowledge
 entries (availability / return-GW / minutes) with the source article cited.
