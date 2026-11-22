@@ -233,8 +233,16 @@ def run(bootstrap, *, run_id, lock_held=False, now=None, fetch=None,
 
     if not _env_flag("NEWS_AUTO_ENABLED", config.NEWS_AUTO_ENABLED):
         receipt.update(ok=True, skipped="disabled", finished=_iso(now))
-        if lock_held:
-            release_lock(out_dir, run_id)
+        try:
+            # The workflow matches last_run.run_id to the run it started; don't
+            # clobber the receipt of a run that is still in progress.
+            if lock_held or not _lock_active(out_dir):
+                _atomic_write_json(os.path.join(out_dir, "last_run.json"), receipt)
+        except Exception as e:  # noqa: BLE001
+            receipt["errors"].append(f"receipt write failed: {e}")
+        finally:
+            if lock_held:
+                release_lock(out_dir, run_id)
         return receipt
 
     acquired = False
@@ -273,6 +281,15 @@ def _run_locked(receipt, bootstrap, now, fetch, digest_generate_fn, team_generat
 
     gw = _next_gw(bootstrap)
     receipt["next_gw"] = gw
+    # Readers pick the GW by clock; if FPL hasn't flipped is_next yet, a cut
+    # stamped `gw` would be dead on arrival and its URLs lost. Refuse before
+    # anything is fetched, written or marked processed.
+    next_ev = next((e for e in bootstrap.get("events", []) if e.get("id") == gw), None)
+    deadline = news_fetch._parse_date((next_ev or {}).get("deadline_time"))
+    if deadline is not None and deadline <= now:
+        receipt["errors"].append(
+            "bootstrap next GW deadline already passed; retry after FPL updates")
+        return
     elements, _teams_df, _types = tables_from_bootstrap(bootstrap)
     teams = bootstrap.get("teams", [])
     team_names = {int(t["id"]): t.get("name") for t in teams}
@@ -291,6 +308,7 @@ def _run_locked(receipt, bootstrap, now, fetch, digest_generate_fn, team_generat
         return r
 
     def counted_digest(prompt):
+        touch_lock(out_dir)
         try:
             r = digest_generate_fn(prompt)
         except Exception:
@@ -306,7 +324,9 @@ def _run_locked(receipt, bootstrap, now, fetch, digest_generate_fn, team_generat
     receipt["errors"].extend(rr.get("errors", []))
     if stats["feed_fail"] and not stats["feed_ok"]:
         raise RuntimeError("every news feed failed")
-    if stats["dig_fail"] and not stats["dig_ok"]:
+    # A digest only counts once its article is written: a reply that fails to
+    # parse is a per-article error inside refresh, not a success.
+    if (stats["dig_ok"] or stats["dig_fail"]) and not rr.get("written"):
         raise RuntimeError("every article digest failed")
     if over_budget():
         raise TimeoutError("time budget exceeded")
@@ -326,7 +346,8 @@ def _run_locked(receipt, bootstrap, now, fetch, digest_generate_fn, team_generat
         if over_budget():
             raise TimeoutError("time budget exceeded")
         touch_lock(out_dir)
-        arts = grouped[tid][:config.NEWS_AUTO_MAX_ARTICLES_PER_TEAM]
+        arts = sorted(grouped[tid], key=news_auto.article_time, reverse=True)
+        arts = arts[:config.NEWS_AUTO_MAX_ARTICLES_PER_TEAM]
         squad = news_auto.squad_list(elements, tid)
         prompt = news_auto.build_team_prompt(team_names.get(tid), arts, squad, gw)
         raw = team_generate_fn(prompt)

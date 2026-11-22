@@ -298,3 +298,68 @@ def test_generators_use_configured_budgets(monkeypatch):
     assert calls[1][4] == config.NEWS_AUTO_MAX_TOKENS >= 2000
     assert calls[1][5] == config.NEWS_AUTO_EFFORT
 
+
+# ---- digest success is counted on written articles -------------------------
+
+def test_all_digests_unparseable_is_not_ok(env):
+    r = env.go(digest_generate=lambda p: "sorry, no json here")
+    assert r["ok"] is False and env.calls == 0
+    assert not os.path.exists(os.path.join(env.out, "processed.json"))
+
+
+def test_no_new_articles_is_still_ok(env):
+    assert env.go()["ok"]
+    r = env.go(run_id="r2", digest_generate=lambda p: "never called")
+    assert r["ok"] is True
+
+
+# ---- deadline edge: stale bootstrap next GW ---------------------------------
+
+def test_run_refused_when_next_gw_deadline_passed(env):
+    late = datetime(2026, 11, 28, 10, 30, tzinfo=timezone.utc)  # 30 min after GW12 deadline
+    r = env.go(now=late)
+    assert r["ok"] is False
+    assert r["errors"] == ["bootstrap next GW deadline already passed; retry after FPL updates"]
+    assert env.calls == 0
+    assert not os.path.exists(env.auto)
+    assert not os.path.exists(os.path.join(env.out, "processed.json"))
+    assert not os.path.exists(os.path.join(env.out, "changes.jsonl"))
+    assert not os.path.exists(env.kb)
+    assert json.load(open(os.path.join(env.out, "last_run.json")))["run_id"] == "r1"
+
+
+# ---- disabled run still writes its receipt ---------------------------------
+
+def test_disabled_run_writes_receipt_with_run_id(env, monkeypatch):
+    monkeypatch.setattr(config, "NEWS_AUTO_ENABLED", False)
+    assert nar.acquire_lock(env.out, "rd")
+    env.go(lock_held=True, run_id="rd")
+    last = json.load(open(os.path.join(env.out, "last_run.json")))
+    assert last["run_id"] == "rd" and last["ok"] is True and last["skipped"] == "disabled"
+
+
+# ---- per-club article cap keeps the newest ----------------------------------
+
+def test_club_cap_keeps_newest_articles(env, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "NEWS_AUTO_MAX_ARTICLES_PER_TEAM", 1)
+    items = "".join(
+        f"<item><title>Arsenal news day{d}</title><link>https://x.test/a{d}.html</link>"
+        f"<pubDate>{wd}, {d} Nov 2026 08:00:00 +0000</pubDate><description>Arsenal.</description></item>"
+        for wd, d in (("Mon", "16"), ("Thu", "19"), ("Tue", "17")))
+    rss = RSS.split("<item>")[0] + items + "</channel></rss>"
+    prompts = []
+
+    def team(p):
+        prompts.append(p)
+        return CUT
+    assert env.go(rss=rss, team=team)["ok"]
+    assert len(prompts) == 1 and "Arsenal news day19" in prompts[0]
+    assert "day16" not in prompts[0] and "day17" not in prompts[0]
+
+
+def test_digest_refreshes_lock(env, monkeypatch):
+    touched = []
+    real = nar.touch_lock
+    monkeypatch.setattr(nar, "touch_lock", lambda d: touched.append("t") or real(d))
+    env.go(team=lambda p: CUT, digest_generate=lambda p: touched.append("digest") or DIGEST)
+    assert touched[:2] == ["t", "digest"]

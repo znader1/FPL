@@ -32,10 +32,20 @@ def latest_past_deadline(events, now):
     return best
 
 
+def _article_dt(article):
+    return _parse_date(article.get("published")) or _parse_date(article.get("fetched"))
+
+
+def article_time(article):
+    """Sort key: published (fallback fetched); undated articles sort oldest."""
+    dt = _article_dt(article)
+    return dt.timestamp() if dt is not None else float("-inf")
+
+
 def is_fresh(article, since):
     if since is None:
         return True
-    dt = _parse_date(article.get("published")) or _parse_date(article.get("fetched"))
+    dt = _article_dt(article)
     return dt is not None and dt > since
 
 
