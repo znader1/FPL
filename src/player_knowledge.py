@@ -136,16 +136,70 @@ def apply_to_projections(proj, gws, by_id):
     return proj
 
 
-def apply(proj, gws, request_pk=None, path=None, stale_days=None, today=None):
-    """Load the knowledge file, merge per-request overrides, resolve keys to
-    player ids and apply the result to ``proj``. Returns ``(proj, notes)``.
+def load_auto_knowledge(path=None):
+    """Read the auto-written knowledge file. Missing/unreadable/malformed ->
+    empty ``{"as_of", "players", "tombstones"}``."""
+    path = path or config.PLAYER_KNOWLEDGE_AUTO_PATH
+    empty = {"as_of": None, "players": {}, "tombstones": {}}
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (FileNotFoundError, ValueError, OSError):
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    players = data.get("players")
+    tombstones = data.get("tombstones")
+    return {
+        "as_of": data.get("as_of"),
+        "players": players if isinstance(players, dict) else {},
+        "tombstones": tombstones if isinstance(tombstones, dict) else {},
+    }
 
-    The one call every live recommendation path needs. Never raises on a
-    missing or malformed file — ``load_player_knowledge`` degrades to empty,
-    and empty knowledge leaves ``proj`` untouched.
+
+def live_auto_entries(auto, first_gw):
+    """Auto entries alive at ``first_gw``: created_gw <= first_gw <= expires_after_gw.
+    An entry with no (or unreadable) expires_after_gw never applies; a missing
+    created_gw counts as already created."""
+    live = {}
+    for k, entry in ((auto or {}).get("players") or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        try:
+            expires = int(entry["expires_after_gw"])
+            created = int(entry.get("created_gw", 0))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if created <= int(first_gw) <= expires:
+            live[k] = entry
+    return live
+
+
+def field_merge(under, over):
+    """Id-keyed field-level merge: ``over`` wins per field, ``under`` fills the rest."""
+    out = {pid: dict(e) for pid, e in under.items()}
+    for pid, e in over.items():
+        out[pid] = {**out.get(pid, {}), **e}
+    return out
+
+
+def apply(proj, gws, request_pk=None, path=None, stale_days=None, today=None,
+          auto_path=None):
+    """Load the manual and auto knowledge files, merge per-request overrides,
+    resolve keys to player ids and apply the result to ``proj``. Returns
+    ``(proj, notes)``.
+
+    Precedence: request > manual (whole-entry replace, as before) > auto
+    (field-level, live entries only). Never raises on a missing or malformed
+    file; empty knowledge leaves ``proj`` untouched.
     """
     pk = merge_request(load_player_knowledge(path), request_pk)
     by_id, notes = resolve_keys(pk, proj)
+    auto = load_auto_knowledge(auto_path)
+    live = live_auto_entries(auto, min(gws)) if len(gws) else {}
+    auto_by_id, auto_notes = resolve_keys({"players": live}, proj)
+    by_id = field_merge(auto_by_id, by_id)
+    notes = notes + auto_notes
     if stale_days is None:
         stale_days = config.PLAYER_KNOWLEDGE_STALE_DAYS
     stale = staleness_note(pk.get("as_of"), stale_days, today=today)

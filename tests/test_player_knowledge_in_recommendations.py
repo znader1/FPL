@@ -108,3 +108,4 @@ def test_backtest_paths_do_not_apply_present_day_knowledge(module_path):
     if not src.exists():
         pytest.skip(f"{module_path} not present")
     assert "player_knowledge" not in src.read_text()
+    assert "news_auto" not in src.read_text()

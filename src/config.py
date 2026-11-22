@@ -637,6 +637,8 @@ FDR_LEAGUE_AVG_XG_FALLBACK = 1.40    # [untested] per-team per-match league-aver
 FDR_KNOWLEDGE_DISCOUNT_PATH = "data/models/knowledge_discount.json"  # [operational]
 # Player-level knowledge (news/injury) for the squad picker.
 PLAYER_KNOWLEDGE_PATH = "data/models/player_knowledge.json"  # [operational]
+# Auto-written layer (AI-read news -> minute cuts); sits under the manual file.
+PLAYER_KNOWLEDGE_AUTO_PATH = "data/models/player_knowledge_auto.json"  # [operational]
 # Last /admin/refresh receipt (phase 3.1); read by /admin/data-status. Lives on
 # the volume next to the other runtime-written models files, never tracked.
 REFRESH_STATUS_PATH = "data/models/refresh_status.json"  # [operational]
@@ -649,7 +651,17 @@ DATA_STATUS_NEWS_STALE_DAYS = 7  # [operational]
 PLAYER_KNOWLEDGE_STALE_DAYS = 10  # [untested]
 
 # News corpus (Approach B: RSS refresh routine -> news_digest reads this dir).
-NEWS_KB_DIR = "kb/auto/news"  # [operational]
+NEWS_KB_DIR = "data/news/articles"  # [operational]
+# News auto-apply: reads articles, writes player_knowledge_auto.json.
+NEWS_AUTO_DIR = "data/news"  # [operational]
+NEWS_AUTO_ENABLED = True  # [operational]
+NEWS_AUTO_DRY_RUN = True  # [operational] flip to False after the first prod dry run
+NEWS_AUTO_MIN_MULT = 0.7  # [untested] floor on an auto minutes cut
+NEWS_AUTO_MAX_TEAMS_PER_RUN = 20  # [operational]
+NEWS_AUTO_MAX_ARTICLES_PER_TEAM = 4  # [operational]
+NEWS_AUTO_MAX_RUN_SECONDS = 600  # [operational]
+NEWS_AUTO_MODEL = "claude-haiku-5-5"  # [operational]
+NEWS_AUTO_DIGEST_MODEL = "claude-haiku-5-5"  # [operational] model for news_fetch.refresh digests
 NEWS_MAX_AGE_DAYS = 14   # [untested] digest only items this fresh; prune older md
 NEWS_FEEDS = [           # RSS sources (verified live 2026-07-26)
     {"source": "sportsmole.co.uk", "url": "https://www.sportsmole.co.uk/football/rss.xml"},
