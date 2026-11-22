@@ -86,6 +86,9 @@ if os.environ.get("SQUAD_PICKER_MODE") == "1":
 from api.wildcard_router import router as wildcard_router  # noqa: E402
 app.include_router(wildcard_router)
 
+from api.news_router import router as news_router  # noqa: E402
+app.include_router(news_router)
+
 # Mount /chat endpoint (orchestrator agent over HTTP) — LLM calls, login required.
 try:
     from api.chat import router as chat_router
