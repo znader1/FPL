@@ -61,13 +61,17 @@ def _parse_article(text, path):
     pm = re.search(r"^-?\s*Players:\s*(.+)$", sections.get("entities", ""), re.MULTILINE)
     if pm:
         players = [p.strip() for p in pm.group(1).split(",") if p.strip()]
+    teams = []
+    tm = re.search(r"^-?\s*Teams:\s*(.+)$", sections.get("entities", ""), re.MULTILINE)
+    if tm:
+        teams = [t.strip() for t in tm.group(1).split(",") if t.strip()]
     tags = [re.sub(r"^-\s*", "", l).strip() for l in sections.get("tags", "").splitlines() if l.strip()]
     return {
         "path": path, "title": title, "source": meta("Source"), "url": meta("URL"),
         "published": meta("Published"), "fetched": meta("Fetched"),
         "summary": sections.get("summary", ""),
         "fpl_takeaways": sections.get("fpl takeaways", ""),
-        "players": players, "tags": tags,
+        "players": players, "teams": teams, "tags": tags,
     }
 
 

@@ -659,6 +659,12 @@ NEWS_AUTO_DRY_RUN = True  # [operational] flip to False after the first prod dry
 NEWS_AUTO_MIN_MULT = 0.7  # [untested] floor on an auto minutes cut
 NEWS_AUTO_MAX_TEAMS_PER_RUN = 20  # [operational]
 NEWS_AUTO_MAX_ARTICLES_PER_TEAM = 4  # [operational]
+# article club name -> bootstrap short_name
+NEWS_TEAM_ALIASES = {
+    "spurs": "TOT", "man utd": "MUN", "man united": "MUN", "man city": "MCI",
+    "wolves": "WOL", "forest": "NFO", "newcastle": "NEW", "brighton": "BHA",
+    "villa": "AVL", "west ham": "WHU", "palace": "CRY", "leeds": "LEE",
+}  # [operational]
 NEWS_AUTO_MAX_RUN_SECONDS = 600  # [operational]
 NEWS_AUTO_MODEL = "claude-haiku-5-5"  # [operational]
 NEWS_AUTO_DIGEST_MODEL = "claude-haiku-5-5"  # [operational] model for news_fetch.refresh digests
