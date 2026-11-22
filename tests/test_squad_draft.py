@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from src import squad_draft
+from src import config, squad_draft
 
 
 def _synthetic_elements():
@@ -262,3 +262,47 @@ def test_player_knowledge_unknown_key_notes():
               "player_knowledge": {"players": {"NoSuchPlayer": {"availability": 0.0}}}}
     _proj, _g, _h, _gws, notes = squad_draft.project_pool(els, fx, ts, params)
     assert any("NoSuchPlayer" in n for n in notes)
+
+
+def _auto_cut_files(tmp_path, monkeypatch, pid):
+    import json as _json
+    auto = tmp_path / "auto.json"
+    auto.write_text(_json.dumps({"as_of": None, "tombstones": {}, "players": {str(pid): {
+        "availability": 1.0, "available_from_gw": None, "minutes_mult": 0.5,
+        "note": "auto (news): rotated", "source": "news_auto", "created_gw": 1,
+        "expires_after_gw": 1, "run_id": "r1"}}}))
+    monkeypatch.setattr(config, "PLAYER_KNOWLEDGE_AUTO_PATH", str(auto))
+    monkeypatch.setattr(config, "PLAYER_KNOWLEDGE_PATH", str(tmp_path / "none.json"))
+
+
+def test_project_pool_applies_auto_news_cuts(tmp_path, monkeypatch):
+    els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
+    pid = int(els[els["web_name"] == "MID7"].iloc[0]["id"])
+    params = {**squad_draft.DEFAULT_PARAMS, "gw_start": 1, "horizon_gws": 3}
+    base, *_ = squad_draft.project_pool(els, fx, ts, params, apply_knowledge=False)
+    _auto_cut_files(tmp_path, monkeypatch, pid)
+    proj, *_ = squad_draft.project_pool(els, fx, ts, params)
+    b, r = base[base["id"] == pid].iloc[0], proj[proj["id"] == pid].iloc[0]
+    assert r["xpts_gw1"] == pytest.approx(b["xpts_gw1"] * 0.5)
+    assert r["pk_note"] == "auto (news): rotated"
+    # off switch: the same files present, projection untouched
+    off, *_ = squad_draft.project_pool(els, fx, ts, params, apply_knowledge=False)
+    assert off[off["id"] == pid].iloc[0]["xpts_gw1"] == b["xpts_gw1"]
+    # a request override still wins over the auto cut
+    req = {**params, "player_knowledge": {"players": {str(pid): {"minutes_mult": 1.0}}}}
+    over, *_ = squad_draft.project_pool(els, fx, ts, req)
+    assert over[over["id"] == pid].iloc[0]["xpts_gw1"] == pytest.approx(b["xpts_gw1"])
+
+
+def test_build_squad_off_switch_reaches_project_pool(tmp_path, monkeypatch):
+    seen = []
+    real = squad_draft.project_pool
+
+    def spy(*a, **kw):
+        seen.append(kw.get("apply_knowledge", True))
+        return real(*a, **kw)
+    monkeypatch.setattr(squad_draft, "project_pool", spy)
+    els, fx, ts = _synthetic_elements(), _synthetic_fixtures(), _teams_short()
+    squad_draft.build_squad_from_frames(els, fx, ts, {"gw_start": 1, "horizon_gws": 3},
+                                        apply_knowledge=False)
+    assert seen == [False]

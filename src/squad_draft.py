@@ -230,10 +230,14 @@ def _projected_points(lineup, proj, gws, gw_start):
     return {"per_gw": per_gw, "horizon_total": round(sum(r["total"] for r in per_gw), 2)}
 
 
-def project_pool(elements, fixtures, teams_short, params):
+def project_pool(elements, fixtures, teams_short, params, *, apply_knowledge=True):
     """Shared projection pipeline for /build, /players, /lineup. Returns the
     fully projected pool DataFrame plus the resolved gw window and notes.
-    No optimizer / squad-building -- pure per-player projection."""
+    No optimizer / squad-building -- pure per-player projection.
+
+    ``apply_knowledge`` (keyword-only, deliberately not a request param) turns
+    the player-knowledge layer -- manual file, auto news cuts and per-request
+    overrides -- off for diagnostic/backtest callers."""
     p = {**DEFAULT_PARAMS, **(params or {})}
     notes = _notable_exclusion_notes(elements)
     gw_start = int(p["gw_start"])
@@ -281,22 +285,21 @@ def project_pool(elements, fixtures, teams_short, params):
             proj[col] = proj["id"].map(src).fillna(0)
 
     # Player-level knowledge (news/injury): availability + return-GW + minutes.
-    # Picker-scoped; file entries merged with any per-request override.
-    pk_file = player_knowledge.load_player_knowledge()
-    pk = player_knowledge.merge_request(pk_file, p.get("player_knowledge"))
-    by_id, pk_notes = player_knowledge.resolve_keys(pk, proj)
-    notes.extend(pk_notes)
-    stale = player_knowledge.staleness_note(
-        pk.get("as_of"), config.PLAYER_KNOWLEDGE_STALE_DAYS)
-    if stale:
-        notes.append(stale)
-    proj = _apply_player_knowledge(proj, gws, by_id)
+    # Same path as the transfer card: request > manual file > live auto news
+    # cuts (player_knowledge.apply reads paths from config).
+    if apply_knowledge:
+        proj, pk_notes = player_knowledge.apply(
+            proj, gws, request_pk=p.get("player_knowledge"),
+            path=config.PLAYER_KNOWLEDGE_PATH,
+            auto_path=config.PLAYER_KNOWLEDGE_AUTO_PATH)
+        notes.extend(pk_notes)
     return proj, gw_start, horizon, gws, notes
 
 
-def build_squad_from_frames(elements, fixtures, teams_short, params):
+def build_squad_from_frames(elements, fixtures, teams_short, params, *, apply_knowledge=True):
     p = {**DEFAULT_PARAMS, **(params or {})}
-    proj, gw_start, horizon, gws, notes = project_pool(elements, fixtures, teams_short, p)
+    proj, gw_start, horizon, gws, notes = project_pool(
+        elements, fixtures, teams_short, p, apply_knowledge=apply_knowledge)
 
     objective = str(p["objective"])
     budget_m = float(p["budget_m"])
@@ -461,16 +464,18 @@ def _next_gw(bootstrap):
     return 1
 
 
-def build_squad(bootstrap, fixtures_raw, params=None):
+def build_squad(bootstrap, fixtures_raw, params=None, *, apply_knowledge=True):
     """Live wrapper: runs transforms on raw bootstrap/fixtures, defaults gw_start
-    from the bootstrap's next event, then delegates to build_squad_from_frames."""
+    from the bootstrap's next event, then delegates to build_squad_from_frames.
+    ``apply_knowledge=False`` is for diagnostics (scripts/backtest_xg_basis.py)."""
     p = {**DEFAULT_PARAMS, **(params or {})}
     if params is None or params.get("gw_start") is None:
         p["gw_start"] = _next_gw(bootstrap)
     elements, teams, _etypes = transforms.tables_from_bootstrap(bootstrap)
     fixtures = transforms.fixtures_df(fixtures_raw)
     teams_short = teams.set_index("id")["short_name"].to_dict()
-    return build_squad_from_frames(elements, fixtures, teams_short, p)
+    return build_squad_from_frames(elements, fixtures, teams_short, p,
+                                   apply_knowledge=apply_knowledge)
 
 
 def _pool_num(v, d=0.0):

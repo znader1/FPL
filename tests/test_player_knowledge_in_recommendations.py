@@ -109,3 +109,15 @@ def test_backtest_paths_do_not_apply_present_day_knowledge(module_path):
         pytest.skip(f"{module_path} not present")
     assert "player_knowledge" not in src.read_text()
     assert "news_auto" not in src.read_text()
+
+
+def test_xg_basis_diagnostic_builds_with_knowledge_off():
+    """scripts/backtest_xg_basis.py reaches squad_draft.project_pool via
+    build_squad; it must switch the knowledge layer (manual + auto news cuts)
+    off explicitly on every build so the diagnostic compares bare bases."""
+    import pathlib
+    import re
+    src = pathlib.Path("scripts/backtest_xg_basis.py").read_text()
+    calls = re.findall(r"squad_draft\.build_squad\((.*?)\)\n", src, re.S)
+    assert calls and all("apply_knowledge=False" in c for c in calls)
+    assert "build_squad_from_frames(" not in src and "project_pool(" not in src
