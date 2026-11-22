@@ -168,7 +168,7 @@ def live_auto_entries(auto, first_gw):
         try:
             expires = int(entry["expires_after_gw"])
             created = int(entry.get("created_gw", 0))
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
             continue
         if created <= int(first_gw) <= expires:
             live[k] = entry

@@ -84,3 +84,26 @@ def test_auto_note_passes_through(tmp_path):
     man = _write(tmp_path, "manual.json", {})
     out, _ = player_knowledge.apply(_proj(), [5, 6, 7], path=man, auto_path=auto_path)
     assert out.iloc[0]["pk_note"] == "knock"
+
+
+def test_auto_entry_without_expiry_never_applies(tmp_path):
+    assert _run(tmp_path, {"1": {"minutes_mult": 0.8}}) == 6.0
+
+
+def test_missing_created_gw_counts_as_already_created(tmp_path):
+    h = _run(tmp_path, {"1": {"minutes_mult": 0.8, "expires_after_gw": 7}})
+    assert h == pytest.approx(4.8)
+
+
+def test_request_entry_still_gets_auto_fields_it_does_not_set(tmp_path):
+    h = _run(tmp_path, {"1": {"minutes_mult": 0.8, "expires_after_gw": 5}},
+             request={"players": {"1": {"availability": 1.0}}})
+    assert h == pytest.approx(4.8)
+
+
+def test_infinite_expiry_in_file_is_ignored_without_raising(tmp_path):
+    f = tmp_path / "auto.json"
+    f.write_text('{"players": {"1": {"minutes_mult": 0.8, "expires_after_gw": Infinity}}}')
+    man = _write(tmp_path, "manual.json", {})
+    out, _ = player_knowledge.apply(_proj(), [5, 6, 7], path=man, auto_path=str(f))
+    assert out.iloc[0]["xpts_horizon"] == 6.0
