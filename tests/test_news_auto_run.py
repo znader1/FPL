@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 from datetime import datetime, timezone
 
 import pytest
@@ -106,13 +107,13 @@ def test_run_failure_keeps_previous_file_and_releases_lock(env):
 
 
 def test_second_run_refused_while_locked(env):
-    assert nar.acquire_lock(env.out) is True
-    assert nar.acquire_lock(env.out) is False
+    assert nar.acquire_lock(env.out, "t") is True
+    assert nar.acquire_lock(env.out, "t") is False
     assert nar.read_status(env.out, env.auto)["running"] is True
     r = env.go()
     assert r["ok"] is False
-    nar.release_lock(env.out)
-    assert nar.acquire_lock(env.out) is True
+    nar.release_lock(env.out, "t")
+    assert nar.acquire_lock(env.out, "t") is True
 
 
 def test_time_budget_stops_and_writes_nothing(env):
@@ -156,4 +157,77 @@ def test_stale_lock_is_free(env):
     p = os.path.join(env.out, "run.lock")
     open(p, "w").write("x")
     os.utime(p, (1, 1))
-    assert nar.acquire_lock(env.out) is True
+    assert nar.acquire_lock(env.out, "t") is True
+
+
+def test_lock_held_true_releases_on_success_and_disabled(env, monkeypatch):
+    lock = os.path.join(env.out, "run.lock")
+    assert nar.acquire_lock(env.out, "r1")
+    assert env.go(lock_held=True)["ok"] and not os.path.exists(lock)
+    assert nar.acquire_lock(env.out, "r2")
+    monkeypatch.setattr(config, "NEWS_AUTO_ENABLED", False)
+    assert env.go(lock_held=True, run_id="r2")["skipped"] == "disabled"
+    assert not os.path.exists(lock)
+
+
+def test_second_club_failure_leaves_auto_file_unchanged(env, monkeypatch):
+    rss2 = RSS.replace("Arsenal rotate", "Chelsea rotate").replace("arsenal-rotate", "chelsea-rotate")
+    both = RSS.replace("</channel>", rss2.split("<item>", 1)[1].rsplit("</channel>", 1)[0].join(["<item>", ""]) + "</channel>")
+    digests = iter([DIGEST, DIGEST.replace("Arsenal", "Chelsea")])
+    open(env.auto, "w").write('{"as_of": null, "players": {}, "tombstones": {}}')
+    before = open(env.auto, "rb").read()
+    n = {"c": 0}
+
+    def team(p):
+        n["c"] += 1
+        if n["c"] == 2:
+            raise RuntimeError("second club down")
+        return CUT
+    r = env.go(rss=both, team=team, digest_generate=lambda p: next(digests))
+    assert n["c"] == 2 and r["ok"] is False
+    assert open(env.auto, "rb").read() == before
+
+
+def test_stale_lock_takeover_has_one_winner(env):
+    os.makedirs(env.out)
+    p = os.path.join(env.out, "run.lock")
+    open(p, "w").write("old")
+    os.utime(p, (1, 1))
+    results, barrier = [], threading.Barrier(2)
+
+    def contend(tok):
+        barrier.wait()
+        results.append(nar.acquire_lock(env.out, tok))
+    ts = [threading.Thread(target=contend, args=(t,)) for t in ("a", "b")]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert sorted(results) == [False, True]
+
+
+def test_release_with_wrong_token_leaves_lock(env):
+    assert nar.acquire_lock(env.out, "mine")
+    nar.release_lock(env.out, "other")
+    assert os.path.exists(os.path.join(env.out, "run.lock"))
+    nar.release_lock(env.out, "mine")
+    assert not os.path.exists(os.path.join(env.out, "run.lock"))
+
+
+def test_flag_typo_keeps_config_default(env, monkeypatch):
+    monkeypatch.setenv("NEWS_AUTO_ENABLED", "ture")
+    monkeypatch.setenv("NEWS_AUTO_DRY_RUN", " Off ")
+    assert nar._env_flag("NEWS_AUTO_ENABLED", True) is True
+    assert nar._env_flag("NEWS_AUTO_ENABLED", False) is False
+    assert nar._env_flag("NEWS_AUTO_DRY_RUN", True) is False
+
+
+def test_quiet_run_with_one_failed_feed_is_ok(env, monkeypatch):
+    monkeypatch.setattr(config, "NEWS_FEEDS", [{"url": "http://f", "source": "x.test"},
+                                               {"url": "http://g", "source": "y.test"}])
+
+    def fetch(url):
+        if url == "http://g":
+            raise OSError("down")
+        return RSS
+    assert env.go(fetch=fetch)["ok"]
+    r = env.go(fetch=fetch, run_id="r2")
+    assert r["ok"] is True and r["errors"]

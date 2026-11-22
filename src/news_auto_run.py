@@ -10,6 +10,7 @@ import json
 import os
 import tempfile
 import time
+import uuid
 from datetime import datetime, timezone
 
 from src import config, llm_usage, news_auto, news_fetch
@@ -19,27 +20,21 @@ from src.squad_draft import _next_gw
 from src.transforms import tables_from_bootstrap
 
 
+_TRUE = {"1", "true", "yes", "on"}
+_FALSE = {"0", "false", "no", "off"}
+
+
 def _env_flag(name, default):
-    v = os.environ.get(name)
-    if v is None or v.strip() == "":
-        return bool(default)
-    return v.strip().lower() in ("1", "true", "yes", "on")
+    v = (os.environ.get(name) or "").strip().lower()
+    if v in _TRUE:
+        return True
+    if v in _FALSE:
+        return False
+    return bool(default)
 
 
 def _iso(dt):
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _out_dir(out_dir):
-    return out_dir or os.environ.get("NEWS_AUTO_DIR") or config.NEWS_AUTO_DIR
-
-
-def _auto_path(auto_path):
-    return auto_path or os.environ.get("PLAYER_KNOWLEDGE_AUTO_PATH") or config.PLAYER_KNOWLEDGE_AUTO_PATH
-
-
-def _kb_dir(kb_dir):
-    return kb_dir or os.environ.get("NEWS_KB_DIR") or config.NEWS_KB_DIR
 
 
 # ---- files -----------------------------------------------------------------
@@ -99,39 +94,79 @@ def _lock_active(out_dir):
     return age <= config.NEWS_AUTO_MAX_RUN_SECONDS * 2
 
 
-def acquire_lock(out_dir):
+def _read_token(p):
+    try:
+        with open(p) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def _create_lock(p, token):
+    try:
+        fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w") as f:
+        f.write(str(token))
+    return True
+
+
+def acquire_lock(out_dir, token):
+    """Take the run lock, recording `token` (the run_id) in it. A stale lock is
+    taken over by renaming it to a unique name first (only one contender's
+    rename can succeed), then O_EXCL-creating a fresh one."""
     os.makedirs(out_dir, exist_ok=True)
     p = _lock_path(out_dir)
-    for _ in range(2):
-        try:
-            fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            if _lock_active(out_dir):
-                return False
-            try:  # stale: treat as free
-                os.remove(p)
+    if _create_lock(p, token):
+        return True
+    if _lock_active(out_dir):
+        return False
+    grave = f"{p}.stale.{uuid.uuid4().hex}"
+    try:
+        os.rename(p, grave)
+    except OSError:
+        return False  # lost the takeover race (or lock vanished)
+    try:
+        age = time.time() - os.path.getmtime(grave)
+        if age <= config.NEWS_AUTO_MAX_RUN_SECONDS * 2:
+            # we grabbed a lock that was refreshed meanwhile: put it back
+            try:
+                os.link(grave, p)
             except OSError:
                 pass
-            continue
-        with os.fdopen(fd, "w") as f:
-            f.write(_iso(datetime.now(timezone.utc)))
-        return True
-    return False
+            return False
+    finally:
+        try:
+            os.remove(grave)
+        except OSError:
+            pass
+    return _create_lock(p, token)
 
 
-def release_lock(out_dir):
+def touch_lock(out_dir):
     try:
-        os.remove(_lock_path(out_dir))
+        os.utime(_lock_path(out_dir))
     except OSError:
         pass
 
 
+def release_lock(out_dir, token):
+    """Remove the lock only if it still carries `token`."""
+    p = _lock_path(out_dir)
+    if _read_token(p) == str(token):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
 def read_status(out_dir=None, auto_path=None):
-    out_dir = _out_dir(out_dir)
+    out_dir = out_dir or config.NEWS_AUTO_DIR
     return {
         "running": _lock_active(out_dir),
         "last_run": _read_json(os.path.join(out_dir, "last_run.json")),
-        "active": load_auto_knowledge(_auto_path(auto_path)).get("players", {}),
+        "active": load_auto_knowledge(auto_path or config.PLAYER_KNOWLEDGE_AUTO_PATH).get("players", {}),
     }
 
 
@@ -139,7 +174,8 @@ def read_status(out_dir=None, auto_path=None):
 
 def _anthropic(system, prompt, model, feature, max_tokens):
     import anthropic
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"),
+                                 timeout=config.NEWS_AUTO_LLM_TIMEOUT_SECONDS)
     msg = client.messages.create(
         model=model, max_tokens=max_tokens, system=system,
         messages=[{"role": "user", "content": prompt}])
@@ -171,9 +207,9 @@ def run(bootstrap, *, run_id, lock_held=False, now=None, fetch=None,
         digest_generate=None, team_generate=None, kb_dir=None, out_dir=None,
         auto_path=None, dry_run=None, max_seconds=None):
     now = now or datetime.now(timezone.utc)
-    out_dir = _out_dir(out_dir)
-    auto_path = _auto_path(auto_path)
-    kb_dir = _kb_dir(kb_dir)
+    out_dir = out_dir or config.NEWS_AUTO_DIR
+    auto_path = auto_path or config.PLAYER_KNOWLEDGE_AUTO_PATH
+    kb_dir = kb_dir or config.NEWS_KB_DIR
     if dry_run is None:
         dry_run = _env_flag("NEWS_AUTO_DRY_RUN", config.NEWS_AUTO_DRY_RUN)
     max_seconds = config.NEWS_AUTO_MAX_RUN_SECONDS if max_seconds is None else max_seconds
@@ -185,12 +221,12 @@ def run(bootstrap, *, run_id, lock_held=False, now=None, fetch=None,
     if not _env_flag("NEWS_AUTO_ENABLED", config.NEWS_AUTO_ENABLED):
         receipt.update(ok=True, skipped="disabled", finished=_iso(now))
         if lock_held:
-            release_lock(out_dir)
+            release_lock(out_dir, run_id)
         return receipt
 
     acquired = False
     if not lock_held:
-        if not acquire_lock(out_dir):
+        if not acquire_lock(out_dir, run_id):
             receipt.update(finished=_iso(now), errors=["another run is in progress"])
             return receipt
         acquired = True
@@ -201,13 +237,15 @@ def run(bootstrap, *, run_id, lock_held=False, now=None, fetch=None,
         receipt["ok"] = False
         receipt["errors"].append(f"{type(e).__name__}: {e}")
     finally:
-        receipt["finished"] = _iso(datetime.now(timezone.utc))
         try:
-            _atomic_write_json(os.path.join(out_dir, "last_run.json"), receipt)
-        except OSError as e:
-            receipt["errors"].append(f"receipt write failed: {e}")
-        if acquired or lock_held:
-            release_lock(out_dir)
+            receipt["finished"] = _iso(datetime.now(timezone.utc))
+            try:
+                _atomic_write_json(os.path.join(out_dir, "last_run.json"), receipt)
+            except Exception as e:  # noqa: BLE001
+                receipt["errors"].append(f"receipt write failed: {e}")
+        finally:
+            if acquired or lock_held:
+                release_lock(out_dir, run_id)
     return receipt
 
 
@@ -227,14 +265,36 @@ def _run_locked(receipt, bootstrap, now, fetch, digest_generate_fn, team_generat
     team_names = {int(t["id"]): t.get("name") for t in teams}
     team_short = {int(t["id"]): t.get("short_name") for t in teams}
 
-    kw = {"fetch": fetch} if fetch is not None else {}
-    rr = news_fetch.refresh(kb_dir=kb_dir, now=now, generate=digest_generate_fn,
-                            pl_terms=news_fetch.pl_terms_from_teams(teams), **kw)
+    stats = {"feed_ok": 0, "feed_fail": 0, "dig_ok": 0, "dig_fail": 0}
+    raw_fetch = fetch or news_fetch._http_get
+
+    def counted_fetch(url):
+        try:
+            r = raw_fetch(url)
+        except Exception:
+            stats["feed_fail"] += 1
+            raise
+        stats["feed_ok"] += 1
+        return r
+
+    def counted_digest(prompt):
+        try:
+            r = digest_generate_fn(prompt)
+        except Exception:
+            stats["dig_fail"] += 1
+            raise
+        stats["dig_ok"] += 1
+        return r
+
+    rr = news_fetch.refresh(kb_dir=kb_dir, now=now, generate=counted_digest,
+                            pl_terms=news_fetch.pl_terms_from_teams(teams),
+                            fetch=counted_fetch)
     receipt["fetched"] = len(rr.get("written", []))
-    if rr.get("errors"):
-        receipt["errors"].extend(rr["errors"])
-        if not rr.get("written"):
-            raise RuntimeError("news refresh failed and wrote nothing")
+    receipt["errors"].extend(rr.get("errors", []))
+    if stats["feed_fail"] and not stats["feed_ok"]:
+        raise RuntimeError("every news feed failed")
+    if stats["dig_fail"] and not stats["dig_ok"]:
+        raise RuntimeError("every article digest failed")
     if over_budget():
         raise TimeoutError("time budget exceeded")
 
@@ -252,6 +312,7 @@ def _run_locked(receipt, bootstrap, now, fetch, digest_generate_fn, team_generat
     for tid in tids:
         if over_budget():
             raise TimeoutError("time budget exceeded")
+        touch_lock(out_dir)
         arts = grouped[tid][:config.NEWS_AUTO_MAX_ARTICLES_PER_TEAM]
         squad = news_auto.squad_list(elements, tid)
         prompt = news_auto.build_team_prompt(team_names.get(tid), arts, squad, gw)

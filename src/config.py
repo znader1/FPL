@@ -668,6 +668,7 @@ NEWS_TEAM_ALIASES = {
 NEWS_AUTO_REASON_MAX_CHARS = 200  # [operational]
 NEWS_AUTO_MAX_RUN_SECONDS = 600  # [operational]
 NEWS_AUTO_MODEL = "claude-haiku-5-5"  # [operational]
+NEWS_AUTO_LLM_TIMEOUT_SECONDS = 60  # [operational] per Anthropic call in news_auto_run
 NEWS_AUTO_DIGEST_MODEL = "claude-haiku-5-5"  # [operational] model for news_fetch.refresh digests
 NEWS_MAX_AGE_DAYS = 14   # [untested] digest only items this fresh; prune older md
 NEWS_FEEDS = [           # RSS sources (verified live 2026-07-26)
