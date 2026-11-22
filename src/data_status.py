@@ -159,7 +159,7 @@ def _news_latest_at():
     if not base.is_dir():
         return None
     try:
-        files = [p for p in base.iterdir() if p.is_file()]
+        files = [p for p in base.rglob("*.md") if p.is_file()]
         if not files:
             return None
         newest = max(p.stat().st_mtime for p in files)

@@ -182,7 +182,7 @@ def test_collect_reads_files_under_base_dir(tmp_path, monkeypatch):
         {"ok": True, "cache_refreshed_at_utc": _iso(NOW)}))
     (models / "knowledge_discount.json").write_text(json.dumps({"as_of": "2026-10-01", "teams": {}}))
     (models / "european_calendar.json").write_text(json.dumps({"as_of": "2026-09-17", "teams": {}}))
-    news = tmp_path / "kb" / "auto" / "news"
+    news = tmp_path / "data" / "news" / "articles"
     news.mkdir(parents=True)
     (news / "2026-10-05.md").write_text("x")
 

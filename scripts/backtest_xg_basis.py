@@ -126,8 +126,12 @@ def run(bootstrap, fixtures_raw, horizon, budget):
     print("=" * 78)
 
     base_params = {"horizon_gws": horizon, "budget_m": budget}
-    res_ppg = squad_draft.build_squad(bootstrap, fixtures_raw, {**base_params, "projection_basis": "ppg"})
-    res_xg = squad_draft.build_squad(bootstrap, fixtures_raw, {**base_params, "projection_basis": "xg"})
+    # Knowledge layer off: the diagnostic compares bare projection bases (and
+    # its own pool prep below never applies knowledge either).
+    res_ppg = squad_draft.build_squad(bootstrap, fixtures_raw, {**base_params, "projection_basis": "ppg"},
+                                      apply_knowledge=False)
+    res_xg = squad_draft.build_squad(bootstrap, fixtures_raw, {**base_params, "projection_basis": "xg"},
+                                     apply_knowledge=False)
 
     if not res_ppg["ok"] or not res_xg["ok"]:
         print(f"\nBUILD FAILED: ppg ok={res_ppg['ok']} reason={res_ppg.get('reason')} | "

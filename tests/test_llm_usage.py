@@ -104,3 +104,8 @@ def test_explainer_records_usage_for_its_call(monkeypatch):
 
     explainer.explain({"event_id": 6, "transfers": [], "unique": "no-cache-hit-please"})
     assert seen and seen[0][0] == "explain" and seen[0][1]["gw"] == 6
+
+
+def test_haiku_5_5_is_priced():
+    assert llm_usage.estimate_usd("claude-haiku-5-5", 1_000_000, 0) == 0.10
+    assert llm_usage.estimate_usd("claude-haiku-5-5", 0, 1_000_000) == 0.50

@@ -1,0 +1,103 @@
+name: Refresh News (auto-apply)
+
+# Replaces the local launchd job (scripts/com.fpl.refresh-news.plist).
+on:
+  schedule:
+    - cron: "0 7 * * *"
+    - cron: "0 17 * * *"
+    - cron: "0 19 * * 5"
+  workflow_dispatch:
+
+jobs:
+  refresh-news:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check required secrets
+        env:
+          FPL_API_BASE_URL: ${{ secrets.FPL_API_BASE_URL }}
+          FPL_ADMIN_KEY: ${{ secrets.FPL_ADMIN_KEY }}
+        run: |
+          if [ -z "$FPL_API_BASE_URL" ]; then
+            echo "Missing secret: FPL_API_BASE_URL"
+            exit 1
+          fi
+          if [ -z "$FPL_ADMIN_KEY" ]; then
+            echo "Missing secret: FPL_ADMIN_KEY"
+            exit 1
+          fi
+
+      - name: Run news auto-apply and wait for the receipt
+        env:
+          FPL_API_BASE_URL: ${{ secrets.FPL_API_BASE_URL }}
+          FPL_ADMIN_KEY: ${{ secrets.FPL_ADMIN_KEY }}
+        run: |
+          BASE="${FPL_API_BASE_URL%/}"
+
+          # Start the run; retry while the Fly machine wakes (expected 202 or 409).
+          code=000
+          for attempt in 1 2 3 4 5 6; do
+            code=$(curl -sS -m 60 -o start.json -w '%{http_code}' -X POST "$BASE/admin/refresh-news" \
+              -H "Content-Type: application/json" -H "X-API-Key: ${FPL_ADMIN_KEY}" -d '{}' || echo 000)
+            echo "attempt $attempt: HTTP $code"
+            if [ "$code" = "202" ] || [ "$code" = "409" ]; then break; fi
+            sleep 20
+          done
+          cat start.json || true; echo
+
+          if [ "$code" = "409" ]; then
+            echo "A news run is already in progress; nothing to do."
+            exit 0
+          fi
+          if [ "$code" != "202" ]; then
+            echo "Unexpected HTTP $code from /admin/refresh-news"
+            exit 1
+          fi
+
+          RUN_ID=$(jq -r '.run_id' start.json)
+          echo "Started run $RUN_ID"
+
+          # Poll every 30 s, up to 15 min, until the run finishes.
+          running=true
+          for i in $(seq 1 30); do
+            sleep 30
+            if curl -fsS -m 60 "$BASE/admin/news-status" -H "X-API-Key: ${FPL_ADMIN_KEY}" -o status.json; then
+              running=$(jq -r '.running' status.json)
+              echo "poll $i: running=$running"
+              if [ "$running" = "false" ]; then break; fi
+            else
+              echo "poll $i: status request failed, retrying"
+            fi
+          done
+
+          if [ "$running" != "false" ]; then
+            echo "Timed out after 15 minutes waiting for the run to finish"
+            exit 1
+          fi
+
+          echo "--- last_run (events show what changed; dry-run changes are only visible here) ---"
+          jq '.last_run' status.json
+
+          LAST_ID=$(jq -r '.last_run.run_id // empty' status.json)
+          OK=$(jq -r '.last_run.ok // false' status.json)
+          if [ "$LAST_ID" != "$RUN_ID" ]; then
+            echo "last_run.run_id ($LAST_ID) does not match started run ($RUN_ID)"
+            exit 1
+          fi
+          if [ "$OK" != "true" ]; then
+            echo "Run $RUN_ID finished with ok=$OK"
+            exit 1
+          fi
+          echo "Run $RUN_ID ok"
+
+      - name: Run news auto-apply on staging
+        continue-on-error: true
+        env:
+          FPL_DEV_API_BASE_URL: ${{ secrets.FPL_DEV_API_BASE_URL }}
+          FPL_DEV_ADMIN_KEY: ${{ secrets.FPL_DEV_ADMIN_KEY }}
+        run: |
+          if [ -z "$FPL_DEV_API_BASE_URL" ] || [ -z "$FPL_DEV_ADMIN_KEY" ]; then
+            echo "Staging news run skipped: FPL_DEV_* secrets not set"; exit 0
+          fi
+          curl -sS -m 120 -X POST "${FPL_DEV_API_BASE_URL%/}/admin/refresh-news" \
+            -H "Content-Type: application/json" -H "X-API-Key: ${FPL_DEV_ADMIN_KEY}" -d '{}'

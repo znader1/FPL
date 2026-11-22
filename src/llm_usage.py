@@ -68,6 +68,8 @@ _current_user: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 # so dated snapshots (``claude-haiku-4-5-20251001``) price correctly.
 PRICES_USD_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-haiku-4-5": (1.00, 5.00),
+    # Haiku 5.5 bills (0.50, 2.50) above a 100K-token prompt; news prompts stay far below.
+    "claude-haiku-5-5": (0.10, 0.50),
     "claude-sonnet-4-6": (3.00, 15.00),
     "claude-sonnet-5": (2.00, 10.00),
     "claude-opus-5": (5.00, 25.00),

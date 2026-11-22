@@ -1,6 +1,6 @@
 """Phase 2: semi-auto news digestion for the player-knowledge rail.
 
-Reads the pre-digested kb/auto/news/*.md corpus (title + metadata + Summary /
+Reads the pre-digested NEWS_KB_DIR (`data/news/articles`) *.md corpus (title + metadata + Summary /
 FPL takeaways / Entities / Tags), entity-matches the article Players to
 bootstrap web_names (no embeddings), and asks an LLM to PROPOSE player-knowledge
 entries (availability / return-GW / minutes) with the source article cited.
@@ -61,13 +61,17 @@ def _parse_article(text, path):
     pm = re.search(r"^-?\s*Players:\s*(.+)$", sections.get("entities", ""), re.MULTILINE)
     if pm:
         players = [p.strip() for p in pm.group(1).split(",") if p.strip()]
+    teams = []
+    tm = re.search(r"^-?\s*Teams:\s*(.+)$", sections.get("entities", ""), re.MULTILINE)
+    if tm:
+        teams = [t.strip() for t in tm.group(1).split(",") if t.strip()]
     tags = [re.sub(r"^-\s*", "", l).strip() for l in sections.get("tags", "").splitlines() if l.strip()]
     return {
         "path": path, "title": title, "source": meta("Source"), "url": meta("URL"),
         "published": meta("Published"), "fetched": meta("Fetched"),
         "summary": sections.get("summary", ""),
         "fpl_takeaways": sections.get("fpl takeaways", ""),
-        "players": players, "tags": tags,
+        "players": players, "teams": teams, "tags": tags,
     }
 
 

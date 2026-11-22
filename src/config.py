@@ -637,6 +637,8 @@ FDR_LEAGUE_AVG_XG_FALLBACK = 1.40    # [untested] per-team per-match league-aver
 FDR_KNOWLEDGE_DISCOUNT_PATH = "data/models/knowledge_discount.json"  # [operational]
 # Player-level knowledge (news/injury) for the squad picker.
 PLAYER_KNOWLEDGE_PATH = "data/models/player_knowledge.json"  # [operational]
+# Auto-written layer (AI-read news -> minute cuts); sits under the manual file.
+PLAYER_KNOWLEDGE_AUTO_PATH = "data/models/player_knowledge_auto.json"  # [operational]
 # Last /admin/refresh receipt (phase 3.1); read by /admin/data-status. Lives on
 # the volume next to the other runtime-written models files, never tracked.
 REFRESH_STATUS_PATH = "data/models/refresh_status.json"  # [operational]
@@ -649,7 +651,48 @@ DATA_STATUS_NEWS_STALE_DAYS = 7  # [operational]
 PLAYER_KNOWLEDGE_STALE_DAYS = 10  # [untested]
 
 # News corpus (Approach B: RSS refresh routine -> news_digest reads this dir).
-NEWS_KB_DIR = "kb/auto/news"  # [operational]
+NEWS_KB_DIR = "data/news/articles"  # [operational]
+# News auto-apply: reads articles, writes player_knowledge_auto.json.
+NEWS_AUTO_DIR = "data/news"  # [operational]
+NEWS_AUTO_ENABLED = True  # [operational]
+NEWS_AUTO_DRY_RUN = True  # [operational] flip to False after the first prod dry run
+NEWS_AUTO_MIN_MULT = 0.7  # [untested] floor on an auto minutes cut
+NEWS_AUTO_MAX_TEAMS_PER_RUN = 20  # [operational]
+NEWS_AUTO_MAX_ARTICLES_PER_TEAM = 4  # [operational]
+# Single club-alias table for news: bootstrap short_name -> other spellings
+# articles use (lowercase; "&" is read as "and"). Resolved through the live
+# bootstrap's short_name (or name) only -- never by team id -- so a club absent
+# from this season's bootstrap simply matches nothing. Used by
+# news_auto.group_by_team and news_fetch.pl_terms_from_teams.
+NEWS_TEAM_ALIASES = {
+    "AVL": ["aston villa", "villa"],
+    "BHA": ["brighton", "brighton and hove albion", "brighton hove albion"],
+    "BOU": ["bournemouth", "afc bournemouth"],
+    "CRY": ["crystal palace", "palace"],
+    "LEE": ["leeds", "leeds united"],
+    "MCI": ["man city", "manchester city"],
+    "MUN": ["man utd", "man united", "manchester united"],
+    "NEW": ["newcastle", "newcastle united"],
+    "NFO": ["nott'm forest", "nottingham forest", "forest"],
+    "TOT": ["spurs", "tottenham", "tottenham hotspur"],
+    "WHU": ["west ham", "west ham united"],
+    "WOL": ["wolves", "wolverhampton", "wolverhampton wanderers"],
+}  # [operational]
+# Aliases too generic for the pre-LLM substring relevance filter
+# ("villa" hits "Villarreal"); they still resolve clubs in group_by_team.
+NEWS_ALIASES_NOT_FOR_RELEVANCE = ["villa", "palace"]  # [operational]
+NEWS_AUTO_REASON_MAX_CHARS = 200  # [operational]
+NEWS_AUTO_MAX_RUN_SECONDS = 600  # [operational]
+NEWS_AUTO_MODEL = "claude-haiku-5-5"  # [operational]
+NEWS_AUTO_LLM_TIMEOUT_SECONDS = 60  # [operational] per Anthropic call in news_auto_run
+NEWS_AUTO_DIGEST_MODEL = "claude-haiku-5-5"  # [operational] model for news_fetch.refresh digests
+# Haiku 5.5 thinks by default and thinking counts toward max_tokens, so leave
+# room for it; effort (not a thinking budget) sets how much it thinks.
+NEWS_AUTO_MAX_TOKENS = 8000  # [operational] per club cut call
+NEWS_AUTO_DIGEST_MAX_TOKENS = 4000  # [operational] per article digest call
+NEWS_AUTO_EFFORT = "medium"  # [operational] club cut call (model default)
+NEWS_AUTO_DIGEST_EFFORT = "low"  # [operational] article digest is plain extraction
+NEWS_AUTO_LLM_MAX_RETRIES = 1  # [operational]
 NEWS_MAX_AGE_DAYS = 14   # [untested] digest only items this fresh; prune older md
 NEWS_FEEDS = [           # RSS sources (verified live 2026-07-26)
     {"source": "sportsmole.co.uk", "url": "https://www.sportsmole.co.uk/football/rss.xml"},

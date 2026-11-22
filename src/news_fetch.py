@@ -4,7 +4,7 @@ Fetches the source RSS feeds (verified live: sportsmole / football-talk /
 betfair), keeps only recent items, and asks Claude to digest each NEW article's
 title+summary into the same markdown format the Phase-2 pipeline already reads
 (`# title`, `- Source/URL/Published/Fetched`, `## Summary/Entities/Tags`). The
-digested md drops into `kb/auto/news/<domain>/` so `news_digest` picks it up.
+digested md drops into `<NEWS_KB_DIR>/<domain>/` (default `data/news/articles`) so `news_digest` picks it up.
 
 Network + LLM are dependency-injected (`fetch`, `generate`, `now`) so the whole
 module tests offline. See scripts/refresh_news.py for the runnable routine.
@@ -14,6 +14,7 @@ import html
 import json
 import os
 import re
+import unicodedata
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -102,30 +103,36 @@ def recent(entries, max_age_days, now):
     return [e for e in entries if e["published"] and e["published"] >= cutoff]
 
 
-# Long-form aliases for FPL team `name`s that articles spell out differently.
-_PL_EXTRA = {
-    "man utd": ["manchester united", "man united"],
-    "man city": ["manchester city"],
-    "spurs": ["tottenham"],
-    "nott'm forest": ["nottingham forest", "forest"],
-    "newcastle": ["newcastle united"],
-    "wolves": ["wolverhampton"],
-    "brighton": ["brighton and hove albion"],
-    "west ham": ["west ham united"],
-    "leeds": ["leeds united"],
-}
+def team_key(s):
+    """Normalise a club name for matching: accents/case folded, "&" read as
+    "and", whitespace collapsed."""
+    s = unicodedata.normalize("NFKD", str(s or ""))
+    s = "".join(c for c in s if not unicodedata.combining(c)).lower().replace("&", " and ")
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def team_aliases(team):
+    """All normalised spellings of one bootstrap team: its name plus the
+    config.NEWS_TEAM_ALIASES group matched by short_name (or, when the team
+    carries no short_name, by its name appearing in a group)."""
+    short = str(team.get("short_name") or "").strip().upper()
+    name = team_key(team.get("name", ""))
+    out = {name} if name else set()
+    for key, aliases in (config.NEWS_TEAM_ALIASES or {}).items():
+        group = {team_key(a) for a in aliases}
+        if (short and key.upper() == short) or (not short and name in group):
+            out |= group
+    return out
 
 
 def pl_terms_from_teams(teams):
     """Lowercased match terms for the current Premier League clubs, derived from
     the bootstrap `teams` (so promotion/relegation is handled automatically),
     plus the long-form aliases articles tend to use."""
+    skip = {team_key(a) for a in (config.NEWS_ALIASES_NOT_FOR_RELEVANCE or [])}
     terms = set()
     for t in teams or []:
-        nm = str(t.get("name", "")).strip().lower()
-        if nm:
-            terms.add(nm)
-            terms.update(_PL_EXTRA.get(nm, []))
+        terms |= team_aliases(t) - skip
     return terms
 
 
