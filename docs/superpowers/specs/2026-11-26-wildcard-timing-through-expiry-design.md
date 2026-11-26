@@ -25,12 +25,15 @@ squad's best week is GW15–16, so the rule does not simply favour "now".
 2. **Through-expiry scoring.** Each candidate week g is scored over g..expiry
    (same both-sides scoring as today: best XI per GW, plan squads net of hits,
    preset draft for the wildcard side).
-3. **Rule.** Let `now` = gain if played this week, `later` = best gain of any
-   later week up to expiry. Play now iff `now >= later + margin` (and
-   `now > 0`); otherwise the plan is the best later week. With no later week
-   (the expiry week itself) the margin does not apply: play if `now > 0`.
-   `margin = CHIP_PLAN_WC_HOLD_MARGIN = 3.0` pts `[untested]`: projection
-   noise plus the value of keeping the chip for an injury crisis.
+3. **Rule (revised 2026-11-26, owner approved).** Let `now` = gain if played
+   this week, `later` = best gain of any later week up to expiry. Wait for
+   that later week iff `later > now + margin`; otherwise play now if
+   `now > 0`. `margin = CHIP_PLAN_WC_HOLD_MARGIN = 3.0` pts `[untested]`:
+   further-out projections are less certain, so a slightly better later week
+   is not worth waiting for. The first version (play now iff
+   `now >= later + margin`) was rejected after a roll-forward: through-expiry
+   gains shrink each week, so it deferred an ordinary squad from GW15 (+6.3)
+   to GW19 (+0.6) and a flat 1-pt/GW curve from GW12 (+8) to GW19 (+1).
 4. **Bar.** `CHIP_PLAN_MIN_EV["wildcard"]` 40 → 25 (above every ordinary squad
    sampled on fixed numbers, max +23; catches ~10/16 synthetic broken squads).
    The expiry ramp no longer affects the wildcard (its last 5 GWs are always
@@ -38,7 +41,7 @@ squad's best week is GW15–16, so the rule does not simply favour "now".
 5. **Payload.** The wildcard outlook row gains a `timing` object (only in
    through-expiry mode): `{end_gw, now_gw, now_gain, next_best_gw,
    next_best_gain, margin}`. `bar` in that mode is the gain this week must
-   reach (`next_best_gain + margin`, or 0 with no later week). Existing fields
+   reach (`max(0, next_best_gain - margin)`, 0 in the expiry week). Existing fields
    keep their meaning, so an older frontend still renders.
 6. **Card copy (frontend).** Replace "needs N pts to play" with the timing
    comparison when `timing` is present, e.g. "through GW19 · next best GW13

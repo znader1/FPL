@@ -43,7 +43,7 @@ def test_owner_shape_plays_now():
     p = pick_wildcard_week(OWNER, now_gw=12, margin=3.0)
     assert p["event_id"] == 12 and p["play_now"] is True
     assert p["next_best_gw"] == 13 and p["next_best_gain"] == pytest.approx(10.2)
-    assert p["bar"] == pytest.approx(13.2)
+    assert p["bar"] == pytest.approx(7.2)
     assert p["now_gain"] == pytest.approx(17.4)
 
 
@@ -52,9 +52,25 @@ def test_ordinary_shape_waits_for_best_later_week():
     assert p["event_id"] == 15 and p["play_now"] is False
 
 
-def test_now_within_margin_plans_the_later_week():
-    p = pick_wildcard_week({12: 10.0, 13: 8.0}, now_gw=12, margin=3.0)
+def test_slightly_better_later_week_is_not_worth_waiting_for():
+    p = pick_wildcard_week({12: 10.0, 13: 12.0}, now_gw=12, margin=3.0)
+    assert p["event_id"] == 12 and p["play_now"] is True
+    p = pick_wildcard_week({12: 10.0, 13: 13.5}, now_gw=12, margin=3.0)
     assert p["event_id"] == 13 and p["play_now"] is False
+
+
+@pytest.mark.parametrize("curve,expected", [
+    (ORDINARY, 15),
+    (OWNER, 12),
+    ({g: float(20 - g) for g in range(12, 20)}, 12),  # flat 1 pt a GW: decays by construction
+])
+def test_rolled_forward_the_plan_plays_the_best_week_not_the_expiry_week(curve, expected):
+    for gw in range(12, 20):
+        remaining = {g: v for g, v in curve.items() if g >= gw}
+        if pick_wildcard_week(remaining, now_gw=gw, margin=3.0, end_gw=19)["play_now"]:
+            assert gw == expected
+            return
+    pytest.fail("never played")
 
 
 def test_expiry_week_plays_any_positive_gain():
@@ -63,11 +79,10 @@ def test_expiry_week_plays_any_positive_gain():
     assert p["bar"] == 0.0 and p["next_best_gw"] is None
 
 
-def test_small_gain_with_nothing_later_holds_until_expiry_week():
-    # Weeks after now exist in the window but score 0: the margin still applies.
+def test_small_gain_with_nothing_later_plays_now():
     p = pick_wildcard_week({12: 2.0}, now_gw=12, margin=3.0, end_gw=19)
-    assert p["event_id"] == 12 and p["play_now"] is False
-    assert p["next_best_gain"] == 0.0 and p["next_best_gw"] is None
+    assert p["event_id"] == 12 and p["play_now"] is True
+    assert p["next_best_gain"] == 0.0 and p["next_best_gw"] is None and p["bar"] == 0.0
 
 
 def test_missing_now_week_plans_later():
@@ -91,12 +106,27 @@ def test_plan_times_wildcard_through_expiry_when_in_view():
                            chips_played=FIRST_HALF_OTHERS, horizon_gws=8,
                            wc_squads={g: STARS for g in gws})
     row = _wc_outlook(plan)
-    # 1 pt a GW: now gets 8 through GW19, GW13 gets 7 — inside the 3-pt margin.
+    # 1 pt a GW: now gets 8 through GW19, GW13 gets 7 — no reason to wait.
     assert row["timing"]["end_gw"] == 19
     assert row["timing"]["now_gain"] == pytest.approx(8.0)
     assert row["timing"]["next_best_gw"] == 13
-    assert row["status"] == "play" and row["event_id"] == 13
-    assert plan["nudge"] is None or plan["nudge"]["chip"] != "wildcard"
+    assert row["status"] == "play" and row["event_id"] == 12
+    assert plan["nudge"]["chip"] == "wildcard"
+
+
+def test_plan_waits_for_a_clearly_better_later_week():
+    gws = list(range(12, 20))
+    # Stars level with the squad until GW15, then +6 a GW for GW15-19: playing in
+    # GW15 gets the whole swing; playing now gets the same 30 — so it plays now.
+    # Make the early weeks negative for the stars instead: now loses 3 a GW first.
+    squad, proj = _market(gws, star_xpts={g: (2.0 - 3.0 / 11 if g < 15 else 2.0 + 6.0 / 11) for g in gws})
+    plan = build_chip_plan(squad=squad, current_gw=12, gw_projections=proj,
+                           chips_played=FIRST_HALF_OTHERS, horizon_gws=8,
+                           wc_squads={g: STARS for g in gws})
+    row = _wc_outlook(plan)
+    assert row["event_id"] == 15 and row["status"] == "play"
+    assert plan["nudge"] is None
+    assert row["guidance"].startswith("Hold this week. GW15")
 
 
 def test_plan_plays_now_when_now_beats_later_by_margin():

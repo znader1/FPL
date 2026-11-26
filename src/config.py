@@ -384,9 +384,11 @@ CHIP_PLAN_MIN_EV = {            # below this, "hold" beats playing the chip
 }  # [untested]
 CHIP_PLAN_EXPIRY_RAMP_GWS = 5   # [untested] threshold decays linearly to 0 over the last N GWs
 # Wildcard timing once its expiry week is inside the model horizon: every candidate
-# week is scored through expiry, and the chip is played this week only if this week
-# beats the best later week by this many points (projection noise + the value of
-# keeping it for an injury crisis). No later week left → any positive gain plays.
+# week is scored through expiry, and the plan waits for a later week only if that
+# week beats this one by more than this many points (later weeks are projected
+# further out). Not the other way round: through-expiry gains shrink each week, so
+# making this week clear a margin deferred ordinary squads to GW19 (+0.6 vs +6.3 at
+# GW15 when the GW12 curves were rolled forward).
 CHIP_PLAN_WC_HOLD_MARGIN = 3.0  # [untested]
 CHIP_PLAN_NUDGE_MIN_EV = 4.0    # [untested] floor for the next-GW nudge surface
 CHIP_PLAN_FH_MIN_BLANKING = 3   # [untested] FH model-zone rec suppressed below this many squad blanks

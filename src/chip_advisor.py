@@ -1120,9 +1120,11 @@ def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon, 
 
 def pick_wildcard_week(curve, now_gw, margin, end_gw=None):
     """Wildcard week once its expiry is in view: `curve` maps candidate GW ->
-    gain through expiry. Play this week only if it beats the best later week
-    by `margin`; otherwise the plan is that later week. In the expiry week
-    (no later week left) any positive gain plays.
+    gain through expiry. Wait only when a later week beats this week by more
+    than `margin` (later weeks are projected further out, so a slightly
+    better one is not worth waiting for); then the plan is that later week.
+    Through-expiry gains shrink week by week by construction, so a rule that
+    made *this* week clear a margin would defer every week down to expiry.
 
     Returns {event_id, now_gain, next_best_gw, next_best_gain, bar, play_now};
     `bar` is the gain this week must reach. event_id None = nothing positive.
@@ -1134,12 +1136,9 @@ def pick_wildcard_week(curve, now_gw, margin, end_gw=None):
     next_best_gw = min(later, key=lambda g: (-later[g], g)) if later else None
     next_best_gain = later[next_best_gw] if later else 0.0
     last_week = now_gw >= int(end_gw) if end_gw is not None else not later
-    bar = 0.0 if last_week else next_best_gain + float(margin)
+    bar = 0.0 if last_week else max(0.0, next_best_gain - float(margin))
     play_now = now_gain > 0 and now_gain >= bar
-    if play_now or (not later and now_gain > 0):
-        event_id = now_gw
-    else:
-        event_id = next_best_gw
+    event_id = now_gw if play_now else next_best_gw
     return {"event_id": event_id, "now_gain": now_gain, "next_best_gw": next_best_gw,
             "next_best_gain": next_best_gain, "bar": bar, "play_now": play_now}
 
@@ -1154,14 +1153,9 @@ def _wildcard_timing_guidance(status, event_id, ev_gain, bar, timing):
             return text + f". The next best week, GW{nb_gw}, gets +{nb:.1f}."
         return text + (". It expires after this week." if now >= end else ". No later week gains more.")
     if status == "play":
-        if now_gain >= float(ev_gain):
-            return (f"Hold this week. Playing now gains +{now_gain:.1f} pts through GW{end}, only "
-                    f"{now_gain - float(ev_gain):.1f} more than GW{event_id} (+{float(ev_gain):.1f}): not "
-                    f"enough to give up the chip as injury cover. Plan it for GW{event_id}.")
         return (f"Hold this week. GW{event_id} is the best wildcard week: +{float(ev_gain):.1f} pts "
                 f"through GW{end} {beyond}, against +{now_gain:.1f} if played now.")
-    return (f"Hold this week. A wildcard now gains +{now_gain:.1f} pts through GW{end}, under the "
-            f"{bar:.0f} pts it needs to play early. Any week up to GW{end} can still use it.")
+    return f"Hold. No week up to GW{end} gains anything over your planned transfers."
 
 
 def _safe_chip_guidance(chip, **kwargs):
