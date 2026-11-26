@@ -786,9 +786,12 @@ def score_wildcard(
     wc_squads: dict[int, set[int]] | None = None,
     plan_squads: dict[int, set[int]] | None = None,
     plan_hits_by_gw: dict[int, float] | None = None,
+    end_gw: int | None = None,
 ) -> list[ChipRecommendation]:
     """
-    WC value = cumulative xPts gain over next `horizon` GWs from replacing the
+    WC value = cumulative xPts gain over next `horizon` GWs (or, with
+    `end_gw`, from each candidate GW through `end_gw` — the chip's expiry —
+    so every week is scored to the same end) from replacing the
     current squad with the optimal squad, respecting budget + team caps.
 
     Builds one draft squad per candidate GW: an `xpts_horizon` score (each
@@ -806,8 +809,9 @@ def score_wildcard(
     from src import optimizer as _optimizer
     recs = []
     for gw in candidate_gws:
+        last = int(end_gw) if end_gw is not None else gw + horizon - 1
         future_gws = [
-            g for g in range(gw, gw + horizon)
+            g for g in range(gw, last + 1)
             if gw_projections.get(g) is not None and not gw_projections[g].empty
         ]
         if not future_gws:
@@ -958,6 +962,7 @@ def recommend_chips(
     wc_squads: dict[int, set[int]] | None = None,
     plan_squads: dict[int, set[int]] | None = None,
     plan_hits_by_gw: dict[int, float] | None = None,
+    wc_end_gw: int | None = None,
 ) -> list[ChipRecommendation]:
     """
     Main entry point. Returns ranked list of (chip, gw, value, reasoning) for
@@ -998,6 +1003,7 @@ def recommend_chips(
             wc_squads=wc_squads,
             plan_squads=plan_squads,
             plan_hits_by_gw=plan_hits_by_gw,
+            end_gw=wc_end_gw,
         ))
 
     if breaks:
@@ -1054,10 +1060,12 @@ def _season_prior(chip, half):
 
 def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon, half,
                     transfer_plan_net_gain=0.0, structural_gw=None, stress=None, current_gw=None,
-                    window_gws=None):
+                    window_gws=None, timing=None):
     """Plain-language "why is this chip on hold" sentence for one outlook or
     recommendation row. Raises on a missing/unexpected field — callers use
     `_safe_chip_guidance` so a gap never breaks the payload."""
+    if chip == "wildcard" and timing:
+        return _wildcard_timing_guidance(status, event_id, ev_gain, bar, timing)
     prior = _season_prior(chip, half)
     # Wildcard gains are scored over a window against the planned transfers: say so.
     span = ""
@@ -1108,6 +1116,52 @@ def _chip_guidance(chip, status, event_id, ev_gain, bar, distribution, horizon, 
         text += f", {round(distribution['p_beats_bar'] * 100)}% chance to beat the {bar:.0f}-pt bar"
     text += f"). Best use: {prior}."
     return text
+
+
+def pick_wildcard_week(curve, now_gw, margin, end_gw=None):
+    """Wildcard week once its expiry is in view: `curve` maps candidate GW ->
+    gain through expiry. Play this week only if it beats the best later week
+    by `margin`; otherwise the plan is that later week. In the expiry week
+    (no later week left) any positive gain plays.
+
+    Returns {event_id, now_gain, next_best_gw, next_best_gain, bar, play_now};
+    `bar` is the gain this week must reach. event_id None = nothing positive.
+    """
+    now_gw = int(now_gw)
+    pos = {int(g): float(v) for g, v in (curve or {}).items() if float(v) > 0}
+    now_gain = pos.get(now_gw, 0.0)
+    later = {g: v for g, v in pos.items() if g > now_gw}
+    next_best_gw = min(later, key=lambda g: (-later[g], g)) if later else None
+    next_best_gain = later[next_best_gw] if later else 0.0
+    last_week = now_gw >= int(end_gw) if end_gw is not None else not later
+    bar = 0.0 if last_week else next_best_gain + float(margin)
+    play_now = now_gain > 0 and now_gain >= bar
+    if play_now or (not later and now_gain > 0):
+        event_id = now_gw
+    else:
+        event_id = next_best_gw
+    return {"event_id": event_id, "now_gain": now_gain, "next_best_gw": next_best_gw,
+            "next_best_gain": next_best_gain, "bar": bar, "play_now": play_now}
+
+
+def _wildcard_timing_guidance(status, event_id, ev_gain, bar, timing):
+    end, now = int(timing["end_gw"]), int(timing["now_gw"])
+    now_gain, nb_gw, nb = float(timing["now_gain"]), timing["next_best_gw"], float(timing["next_best_gain"])
+    beyond = "beyond what your planned transfers already get"
+    if status == "play" and int(event_id) == now:
+        text = f"Play it now: +{now_gain:.1f} pts through GW{end} {beyond}"
+        if nb_gw is not None:
+            return text + f". The next best week, GW{nb_gw}, gets +{nb:.1f}."
+        return text + (". It expires after this week." if now >= end else ". No later week gains more.")
+    if status == "play":
+        if now_gain >= float(ev_gain):
+            return (f"Hold this week. Playing now gains +{now_gain:.1f} pts through GW{end}, only "
+                    f"{now_gain - float(ev_gain):.1f} more than GW{event_id} (+{float(ev_gain):.1f}): not "
+                    f"enough to give up the chip as injury cover. Plan it for GW{event_id}.")
+        return (f"Hold this week. GW{event_id} is the best wildcard week: +{float(ev_gain):.1f} pts "
+                f"through GW{end} {beyond}, against +{now_gain:.1f} if played now.")
+    return (f"Hold this week. A wildcard now gains +{now_gain:.1f} pts through GW{end}, under the "
+            f"{bar:.0f} pts it needs to play early. Any week up to GW{end} can still use it.")
 
 
 def _safe_chip_guidance(chip, **kwargs):
@@ -1176,6 +1230,12 @@ def build_chip_plan(
     if euro_by_gw:
         gw_projections = european.discount_projections(gw_projections, euro_by_gw, euro_mult)
 
+    # Once the wildcard's expiry week is inside the model horizon, every candidate
+    # week is scored through expiry and the week is picked by pick_wildcard_week.
+    wc_expires = int(windows["wildcard"]["expires_gw"])
+    wc_timing = "wildcard" in remaining and wc_expires <= current_gw + horizon - 1
+    wc_margin = float(config.CHIP_PLAN_WC_HOLD_MARGIN)
+
     all_recs = recommend_chips(
         squad=squad,
         current_gw=current_gw,
@@ -1188,6 +1248,7 @@ def build_chip_plan(
         wc_squads=wc_squads,
         plan_squads=plan_squads,
         plan_hits_by_gw=plan_hits_by_gw,
+        wc_end_gw=wc_expires if wc_timing else None,
         xgi_per90=xgi_per90,
         team_difficulty_by_gw=team_difficulty_by_gw,
         player_priors=player_priors,
@@ -1253,7 +1314,21 @@ def build_chip_plan(
                 row["stress"] = stress_row
             outlook.append(row)
             continue
-        best = max(in_window, key=lambda r: r.expected_value)
+        timing = None
+        if chip == "wildcard" and wc_timing:
+            pick = pick_wildcard_week({r.gw: r.expected_value for r in in_window},
+                                      current_gw, wc_margin, end_gw=expires_gw)
+            best = next(r for r in in_window if r.gw == pick["event_id"])
+            timing = {
+                "end_gw": int(expires_gw), "now_gw": current_gw,
+                "now_gain": round(pick["now_gain"], 2),
+                "next_best_gw": pick["next_best_gw"],
+                "next_best_gain": round(pick["next_best_gain"], 2),
+                "margin": wc_margin,
+            }
+            timing_play = pick["play_now"] or int(best.gw) > current_gw
+        else:
+            best = max(in_window, key=lambda r: r.expected_value)
         curve = []
         for r in sorted(in_window, key=lambda r: r.gw):
             point = {"gw": r.gw, "ev": round(float(r.expected_value), 2)}
@@ -1269,7 +1344,7 @@ def build_chip_plan(
             if breaks and r.gw in breaks:
                 point["post_break"] = True
             curve.append(point)
-        bar = effective_min_ev(chip, best.gw, expires_gw)
+        bar = pick["bar"] if timing else effective_min_ev(chip, best.gw, expires_gw)
         distribution = chip_distribution.summarize(
             best.pmf, bar=bar, continuous_share=best.pmf_share,
             player_thresholds=best.pmf_thresholds) if best.pmf is not None else None
@@ -1281,6 +1356,8 @@ def build_chip_plan(
             "status": "hold",
             "reasons": list(best.reasoning)[:3],
         }
+        if timing:
+            outlook_row["timing"] = timing
         if distribution is not None:
             outlook_row["distribution"] = distribution
         outlook_row["guidance"] = _safe_chip_guidance(
@@ -1289,16 +1366,16 @@ def build_chip_plan(
             distribution=distribution, horizon=horizon, half=windows[chip]["half"],
             transfer_plan_net_gain=plan_net_gain,
             current_gw=(min(gw_projections) if gw_projections else None),
-            window_gws=best.window_gws)
+            window_gws=best.window_gws, timing=timing)
         outlook.append(outlook_row)
-        if best.expected_value < bar:
+        if not (timing_play if timing else best.expected_value >= bar):
             continue  # hold — nothing in the model zone clears the bar
         outlook_row["status"] = "play"
         outlook_row["guidance"] = _safe_chip_guidance(
             chip, status="play", event_id=outlook_row["event_id"],
             ev_gain=outlook_row["ev_gain"], bar=outlook_row["bar"],
             distribution=distribution, horizon=horizon, half=windows[chip]["half"],
-            window_gws=best.window_gws)
+            window_gws=best.window_gws, timing=timing)
         rec = {
             "chip": chip,
             "event_id": int(best.gw),
@@ -1330,7 +1407,8 @@ def build_chip_plan(
                 rec["reasons"].append(
                     f"Fixture swing: {names} turn easier around GW{rec['event_id']}")
         recommendations.append(rec)
-        if rec["event_id"] == current_gw and rec["ev_gain"] >= nudge_floor:
+        # A wildcard timed through expiry plays on its own rule, not the nudge floor.
+        if rec["event_id"] == current_gw and (rec["ev_gain"] >= nudge_floor or timing is not None):
             if nudge is None or rec["ev_gain"] > nudge["ev_gain"]:
                 nudge = {"chip": chip, "event_id": current_gw, "ev_gain": rec["ev_gain"],
                          "wait_for_team_news": bool(breaks and current_gw in breaks)}
