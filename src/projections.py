@@ -109,6 +109,7 @@ def resolve_projection_difficulty_ratings(teams_short_map):
         ratings = _fd.resolve_team_ratings(team_xg, teams_short_map=teams_short_map)
         return _fd.apply_knowledge_discount(ratings, teams_short_map=teams_short_map)
     except Exception:
+        logger.warning("xG difficulty ratings unavailable; falling back to FPL FDR", exc_info=True)
         return None
 
 
@@ -878,7 +879,9 @@ def project_elements_next_gws(
             )
             df = _xg_model.blend_into_projections(df, model_df, blend_weight, gws)
         except Exception:
-            pass
+            # Still fail soft, but never silently: a swallowed error here once
+            # ran the chip planner without the xG model for six months.
+            logger.warning("xG expected-points blend skipped", exc_info=True)
 
     # Teammates of a missing attacker lose output his own per-90 rates can't see
     # (a player's own team attack is baked into them), so scale their final xPts.
