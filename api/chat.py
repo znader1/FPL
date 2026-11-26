@@ -114,7 +114,10 @@ def _build_context_for_entry(entry_id: int, current_gw: int, horizon: int = 5):
     # Reuses the bootstrap already fetched above — no extra network call.
     breaks = international_break_gws(bootstrap.get("events", []))
     fixtures = transforms.fixtures_df(fpl_client.get_fixtures())
-    elements, teams, teams_short_map = transforms.tables_from_bootstrap(bootstrap)
+    elements, teams, _ = transforms.tables_from_bootstrap(bootstrap)
+    # team id -> short name. The third value above is the element_types frame,
+    # not this map; passing it made the xG blend fail silently (2026-05 to 2026-11).
+    teams_short_map = teams.set_index("id")["short_name"].to_dict()
 
     # Pull entry's picks for current_gw, falling back to the previous GW if it
     # hasn't happened yet (FPL only serves picks for in-progress / past GWs)
