@@ -372,9 +372,24 @@ CHIP_PLAN_MIN_EV = {            # below this, "hold" beats playing the chip
     # GW over the window: above ordinary weeks, well below a broken squad. The expiry
     # ramp still lowers it towards GW19 (32/24/16/8/0 over GW15-19) — revisit against
     # chip_plan_snapshots after 2-3 GWs.
-    "wildcard": 40.0,  # [tuned] was 120.0
+    # 2026-11-26 recalibration: the 40 above was measured while the chip planner ran
+    # without the xG blend (api/chat.py passed the wrong team map, fixed in #91). On the
+    # fixed numbers (GW12 live data, 42 sampled squads across overall ranks, 16 with
+    # the wildcard left) ordinary squads peak at +6 to +23 over 5 GWs, median ~+10;
+    # the same squads with their 5 best players ruled out median ~+24. 25 sits above
+    # every ordinary squad. It is now only the early-season trigger: once the expiry
+    # week is inside the model horizon the wildcard is timed through expiry instead
+    # (CHIP_PLAN_WC_HOLD_MARGIN), so the expiry ramp no longer reaches it.
+    "wildcard": 25.0,  # [tuned] was 40.0
 }  # [untested]
 CHIP_PLAN_EXPIRY_RAMP_GWS = 5   # [untested] threshold decays linearly to 0 over the last N GWs
+# Wildcard timing once its expiry week is inside the model horizon: every candidate
+# week is scored through expiry, and the plan waits for a later week only if that
+# week beats this one by more than this many points (later weeks are projected
+# further out). Not the other way round: through-expiry gains shrink each week, so
+# making this week clear a margin deferred ordinary squads to GW19 (+0.6 vs +6.3 at
+# GW15 when the GW12 curves were rolled forward).
+CHIP_PLAN_WC_HOLD_MARGIN = 3.0  # [untested]
 CHIP_PLAN_NUDGE_MIN_EV = 4.0    # [untested] floor for the next-GW nudge surface
 CHIP_PLAN_FH_MIN_BLANKING = 3   # [untested] FH model-zone rec suppressed below this many squad blanks
 CHIP_PLAN_XPTS_CLAMP = 9.0      # [untested] stopgap clip on WC/FH dream-squad market xPts (outlier projections bug)
